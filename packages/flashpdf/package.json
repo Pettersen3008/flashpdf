@@ -42,6 +42,7 @@
 		"./package.json": "./package.json"
 	},
 	"publishConfig": {
+		"@pettersen3008:registry": "https://npm.pkg.github.com",
 		"access": "public"
 	},
 	"scripts": {

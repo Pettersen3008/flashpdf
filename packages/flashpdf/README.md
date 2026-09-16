@@ -24,6 +24,17 @@ function Invoice({ total }: { total: string }) {
 const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', margin: 36 });
 ```
 
+## Install from GitHub Packages
+
+Configure npm to use GitHub Packages for this scope:
+
+```ini
+@pettersen3008:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+GitHub Packages requires a GitHub token with `read:packages` when installing. Public package visibility is configured on the package page after the first release.
+
 This is standard React JSX. FlashPDF resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
 
 `render` returns a `Uint8Array`. FlashPDF ships no viewer, download, or upload helper, so you own what happens next:
