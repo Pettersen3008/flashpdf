@@ -1,18 +1,32 @@
 {
-  "name": "flashpdf-workspace",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "fmt": "oxfmt 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' package.json",
-    "fmt:check": "oxfmt --check 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' package.json",
-    "lint": "oxlint --deny-warnings .",
-    "test": "pnpm --filter @flashpdf/core test",
-    "typecheck": "pnpm --filter @flashpdf/core typecheck"
-  },
-  "devDependencies": {
-    "@types/node": "24.10.1",
-    "oxfmt": "0.68.0",
-    "oxlint": "1.83.0",
-    "typescript": "5.9.3"
-  }
+	"name": "flashpdf-workspace",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "pnpm --filter @flashpdf/core build",
+		"fmt": "oxfmt 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
+		"fmt:check": "oxfmt --check 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
+		"lint": "oxlint --deny-warnings .",
+		"test": "pnpm build && vitest run",
+		"test:unit": "pnpm build && vitest run --project unit",
+		"test:integration": "pnpm build && vitest run --project integration",
+		"test:e2e": "pnpm build && node tests/e2e.mjs",
+		"typecheck": "pnpm --filter @flashpdf/core typecheck"
+	},
+	"devDependencies": {
+		"@types/node": "26.6.1",
+		"@types/react": "19.3.0",
+		"binaryen": "132.0.0",
+		"oxfmt": "0.68.0",
+		"oxlint": "1.83.0",
+		"playwright": "1.63.0",
+		"react": "19.3.0",
+		"typescript": "7.0.2",
+		"vite": "8.3.0",
+		"vitest": "5.0.1"
+	},
+	"engines": {
+		"node": ">=22.12"
+	},
+	"packageManager": "pnpm@12.4.2"
 }

@@ -20,7 +20,7 @@ fn main() {
         .iter()
         .map(|(page, id)| {
             if operators {
-                let content = pdf.get_page_content(*id).expect("page content");
+                let content = pdf.get_page_content(*id);
                 String::from_utf8_lossy(&content).trim().to_owned()
             } else {
                 pdf.extract_text(&[*page])

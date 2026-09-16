@@ -59,7 +59,7 @@ pub(crate) fn finish_pdf(
 
     for refs in &font_refs {
         match &fonts[usize::from(refs.slot)] {
-            Font::Helvetica => {
+            Font::Helvetica { .. } => {
                 pdf.type1_font(refs.font)
                     .base_font(Name(if refs.slot == HELVETICA_BOLD {
                         b"Helvetica-Bold"

@@ -16,6 +16,21 @@ const HELVETICA_WIDTHS: [u16; 224] = [
     556, 556, 556, 556, 556, 584, 611, 556, 556, 556, 556, 500, 556, 500,
 ];
 
+const HELVETICA_BOLD_WIDTHS: [u16; 224] = [
+    278, 333, 474, 556, 556, 889, 722, 238, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556,
+    556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611, 975, 722, 722, 722, 722, 667,
+    611, 778, 722, 278, 556, 722, 611, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667,
+    667, 611, 333, 278, 333, 584, 556, 333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556,
+    278, 889, 611, 611, 611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584,
+    0, 556, 0, 278, 556, 500, 1000, 556, 556, 333, 1000, 667, 333, 1000, 0, 611, 0, 0, 278, 278,
+    500, 500, 350, 556, 1000, 333, 1000, 556, 333, 944, 0, 500, 667, 278, 333, 556, 556, 556, 556,
+    280, 556, 333, 737, 370, 556, 584, 333, 737, 333, 400, 584, 333, 333, 333, 611, 556, 278, 333,
+    333, 365, 556, 834, 834, 834, 611, 722, 722, 722, 722, 722, 722, 1000, 722, 667, 667, 667, 667,
+    278, 278, 278, 278, 722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667,
+    611, 556, 556, 556, 556, 556, 556, 889, 556, 556, 556, 556, 556, 278, 278, 278, 278, 611, 611,
+    611, 611, 611, 611, 611, 584, 611, 611, 611, 611, 611, 556, 611, 556,
+];
+
 pub(crate) struct EmbeddedFont {
     pub(crate) bytes: Vec<u8>,
     pub(crate) widths: [Option<u16>; 224],
@@ -50,7 +65,7 @@ impl EmbeddedFont {
             let Some(character) = decode_win_ansi((index + 32) as u8) else {
                 continue;
             };
-            let Some(glyph) = cmap_glyph(cmap, character)? else {
+            let Some(glyph) = cmap_glyph(cmap, character, glyphs)? else {
                 continue;
             };
             let metric = usize::from(glyph).min(metrics - 1);
@@ -64,6 +79,11 @@ impl EmbeddedFont {
         );
         let ascent = f32::from(be_i16(hhea, 4)?) * scale;
         let descent = f32::from(be_i16(hhea, 6)?) * scale;
+        // Line height is ascent - descent, so a font claiming ascent <= descent
+        // would stack every line on one baseline and give blocks zero height.
+        if ascent <= 0.0 || ascent <= descent {
+            return Err("invalid TrueType font".into());
+        }
         Ok(Self {
             bytes,
             widths,
@@ -123,7 +143,7 @@ fn ttf_table<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Result<&'a [u8], String> 
     Err("invalid TrueType font".into())
 }
 
-fn cmap_glyph(cmap: &[u8], character: char) -> Result<Option<u16>, String> {
+fn cmap_glyph(cmap: &[u8], character: char, glyphs: usize) -> Result<Option<u16>, String> {
     let count = usize::from(be_u16(cmap, 2)?);
     let mut selected = None;
     for index in 0..count {
@@ -164,30 +184,52 @@ fn cmap_glyph(cmap: &[u8], character: char) -> Result<Option<u16>, String> {
         }
         let delta = be_i16(cmap, deltas + index * 2)? as u16;
         let range = usize::from(be_u16(cmap, offsets + index * 2)?);
-        if range == 0 {
-            return Ok(Some(code.wrapping_add(delta)));
+        let glyph = if range == 0 {
+            code.wrapping_add(delta)
+        } else {
+            let glyph = be_u16(
+                cmap,
+                offsets + index * 2 + range + usize::from(code - start) * 2,
+            )?;
+            if glyph == 0 {
+                return Ok(None);
+            }
+            glyph.wrapping_add(delta)
+        };
+        if glyph == 0 {
+            return Ok(None);
         }
-        let glyph = be_u16(
-            cmap,
-            offsets + index * 2 + range + usize::from(code - start) * 2,
-        )?;
-        return Ok((glyph != 0).then_some(glyph.wrapping_add(delta)));
+        if usize::from(glyph) >= glyphs {
+            return Err("invalid TrueType font".into());
+        }
+        return Ok(Some(glyph));
     }
     Ok(None)
 }
 
 pub(crate) enum Font {
-    Helvetica,
+    Helvetica { bold: bool },
     Embedded(Box<EmbeddedFont>),
 }
 
 impl Font {
     pub(crate) fn width(&self, byte: u8) -> Result<u16, RenderError> {
         match self {
-            Self::Helvetica => Ok(HELVETICA_WIDTHS[usize::from(byte) - 32]),
+            Self::Helvetica { bold } => Ok((if *bold {
+                &HELVETICA_BOLD_WIDTHS
+            } else {
+                &HELVETICA_WIDTHS
+            })[usize::from(byte) - 32]),
             Self::Embedded(font) => {
                 font.widths[usize::from(byte) - 32].ok_or(RenderError::MissingGlyph)
             }
+        }
+    }
+
+    pub(crate) fn metrics(&self) -> (f32, f32) {
+        match self {
+            Self::Helvetica { .. } => (718.0, -207.0),
+            Self::Embedded(font) => (font.ascent, font.descent),
         }
     }
 }
@@ -273,4 +315,74 @@ pub(crate) fn decode_win_ansi(byte: u8) -> Option<char> {
         159 => '\u{0178}',
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cmap_glyph, EmbeddedFont};
+
+    #[test]
+    fn given_hhea_claiming_no_ascent_when_parsing_a_font_then_rejects_it() {
+        let mut bytes =
+            include_bytes!("../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf").to_vec();
+        assert!(EmbeddedFont::parse(bytes.clone()).is_ok());
+        let count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
+        let record = (0..count)
+            .map(|index| 12 + index * 16)
+            .find(|record| &bytes[*record..record + 4] == b"hhea")
+            .unwrap();
+        let hhea = u32::from_be_bytes(bytes[record + 8..record + 12].try_into().unwrap()) as usize;
+        bytes[hhea + 4..hhea + 8].fill(0);
+        assert!(EmbeddedFont::parse(bytes).is_err());
+    }
+
+    fn cmap(delta: u16) -> Vec<u8> {
+        [
+            &[0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 12][..],
+            &[
+                0,
+                4,
+                0,
+                32,
+                0,
+                0,
+                0,
+                4,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                65,
+                255,
+                255,
+                0,
+                0,
+                0,
+                65,
+                255,
+                255,
+                (delta >> 8) as u8,
+                delta as u8,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+            ],
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn given_a_zero_or_out_of_range_cmap_glyph_when_parsing_then_rejects_it() {
+        assert_eq!(cmap_glyph(&cmap(0xffbf), 'A', 100).unwrap(), None);
+        assert_eq!(
+            cmap_glyph(&cmap(35), 'A', 100),
+            Err("invalid TrueType font".into())
+        );
+    }
 }

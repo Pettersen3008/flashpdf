@@ -81,9 +81,9 @@ mod tests {
             "First \u{20ac}\nAfter spacer"
         );
         assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "Second page");
-        assert!(String::from_utf8(pdf.get_page_content((4, 0)).unwrap())
+        assert!(String::from_utf8(pdf.get_page_content((4, 0)))
             .unwrap()
-            .contains("36 780 Td"));
+            .contains("36 795.948 Td"));
         let fonts = pdf.get_page_fonts((4, 0)).unwrap();
         assert_eq!(fonts.len(), 1);
         assert_eq!(
@@ -115,9 +115,9 @@ mod tests {
     fn given_exact_bottom_text_when_placed_then_stays_on_page() {
         let pdf = parsed(&[Command::Spacer(Pt(30.0)), text("bottom")]);
         assert_eq!(pdf.get_pages().len(), 1);
-        assert!(String::from_utf8(pdf.get_page_content((4, 0)).unwrap())
+        assert!(String::from_utf8(pdf.get_page_content((4, 0)))
             .unwrap()
-            .contains("10 20 Td"));
+            .contains("10 12.82 Td"));
     }
 
     #[test]
@@ -164,7 +164,7 @@ mod tests {
     fn given_empty_text_when_at_bottom_then_consumes_no_height() {
         let pdf = parsed(&[Command::Spacer(Pt(40.0)), text(""), text(" \t\n")]);
         assert_eq!(pdf.get_pages().len(), 1);
-        assert!(pdf.get_page_content((4, 0)).unwrap().is_empty());
+        assert!(pdf.get_page_content((4, 0)).is_empty());
     }
 
     #[test]
@@ -173,7 +173,7 @@ mod tests {
             super::render(
                 page(),
                 &[
-                    Command::StackStart { gap: Pt(21.0) },
+                    Command::StackStart { gap: Pt(22.0) },
                     text("a"),
                     text("b"),
                     Command::StackEnd
@@ -209,12 +209,68 @@ mod tests {
             pdf.extract_text(&[1]).unwrap().trim(),
             "aa\naa\nbb\nbb\nlast\nafter"
         );
-        let content = String::from_utf8(pdf.get_page_content((4, 0)).unwrap()).unwrap();
+        let content = String::from_utf8(pdf.get_page_content((4, 0))).unwrap();
         for position in [
-            "10 50 Td", "10 40 Td", "30 50 Td", "30 40 Td", "50 50 Td", "10 30 Td",
+            "10 42.82 Td",
+            "10 33.57 Td",
+            "30 42.82 Td",
+            "30 33.57 Td",
+            "50 42.82 Td",
+            "10 24.32 Td",
         ] {
             assert!(content.contains(position), "{position}: {content}");
         }
+    }
+
+    #[test]
+    fn given_percent_and_fraction_columns_when_measured_then_percent_uses_row_width() {
+        use super::ColumnWidth::{Fraction, Percent};
+        let columns = [Percent(Pt(50.0)), Fraction(Pt(1.0))];
+        let pdf = parsed(&[
+            Command::RowStart { columns: &columns },
+            text("left"),
+            text("right"),
+            Command::RowEnd,
+        ]);
+        let content = String::from_utf8(pdf.get_page_content((4, 0))).unwrap();
+        assert!(content.contains("10 42.82 Td"));
+        assert!(content.contains("60 42.82 Td"));
+    }
+
+    #[test]
+    fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint() {
+        let red = super::BoxStyle {
+            margin: [Pt(0.0); 4],
+            padding: [Pt(1.0); 4],
+            border: Pt(0.0),
+            background: Some([255, 0, 0]),
+            border_color: [0, 0, 0],
+        };
+        let blue = super::BoxStyle {
+            background: Some([0, 0, 255]),
+            ..red
+        };
+        let pdf = parsed(&[
+            Command::BoxStart { style: red },
+            Command::BoxStart { style: blue },
+            text("x"),
+            Command::BoxEnd,
+            Command::BoxEnd,
+        ]);
+        let content = String::from_utf8(pdf.get_page_content((4, 0))).unwrap();
+        assert!(content.find("1 0 0 rg").unwrap() < content.find("0 0 1 rg").unwrap());
+    }
+
+    #[test]
+    fn given_bold_helvetica_when_measuring_then_uses_bold_widths() {
+        assert_ne!(
+            super::font::Font::Helvetica { bold: false }
+                .width(b'A')
+                .unwrap(),
+            super::font::Font::Helvetica { bold: true }
+                .width(b'A')
+                .unwrap(),
+        );
     }
 
     /// The renderer keeps one scratch buffer across blocks, so a long document

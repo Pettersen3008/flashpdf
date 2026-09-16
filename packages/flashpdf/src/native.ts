@@ -1,15 +1,16 @@
 import { createRequire } from "node:module";
+
 import type { InputWindow } from "./binary.js";
 
 interface Native {
-  addFont(bytes: Buffer): number;
-  inputCapacity(): number;
-  push(chunk: Buffer): void;
-  finish(): Uint8Array;
+	addFont(bytes: Buffer): number;
+	inputCapacity(): number;
+	push(chunk: Buffer): void;
+	finish(): Uint8Array;
 }
 
 const addon = createRequire(import.meta.url)("../../../dist/napi/flashpdf.node") as {
-  PdfRenderer: new () => Native;
+	PdfRenderer: new () => Native;
 };
 
 /**
@@ -18,19 +19,19 @@ const addon = createRequire(import.meta.url)("../../../dist/napi/flashpdf.node")
  * copies during each synchronous push.
  */
 export function createNativeRenderer(): {
-  renderer: InputWindow & { add_font(bytes: Buffer): number };
-  memory: { buffer: ArrayBufferLike };
+	renderer: InputWindow & { add_font(bytes: Buffer): number };
+	memory: { buffer: ArrayBufferLike };
 } {
-  const native = new addon.PdfRenderer();
-  const input = Buffer.from(new ArrayBuffer(native.inputCapacity()));
-  return {
-    renderer: {
-      add_font: (bytes: Buffer) => native.addFont(bytes),
-      input_ptr: () => 0,
-      input_capacity: () => input.length,
-      push: (length: number) => native.push(input.subarray(0, length)),
-      finish: () => native.finish(),
-    },
-    memory: { buffer: input.buffer },
-  };
+	const native = new addon.PdfRenderer();
+	const input = Buffer.from(new ArrayBuffer(native.inputCapacity()));
+	return {
+		renderer: {
+			add_font: (bytes: Buffer) => native.addFont(bytes),
+			input_ptr: () => 0,
+			input_capacity: () => input.length,
+			push: (length: number) => native.push(input.subarray(0, length)),
+			finish: () => native.finish(),
+		},
+		memory: { buffer: input.buffer },
+	};
 }

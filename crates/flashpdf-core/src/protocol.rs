@@ -356,6 +356,7 @@ impl<'a> Cursor<'a> {
             columns.push(match kind {
                 0 => crate::ColumnWidth::Fixed(value),
                 1 => crate::ColumnWidth::Fraction(value),
+                2 => crate::ColumnWidth::Percent(value),
                 _ => return Err("invalid column kind".into()),
             });
         }

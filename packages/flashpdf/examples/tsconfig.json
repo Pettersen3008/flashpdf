@@ -1,10 +1,10 @@
 {
-  "extends": "../tsconfig.json",
-  "compilerOptions": {
-    "rootDir": ".",
-    "outDir": "../dist-examples",
-    "jsx": "react-jsx",
-    "jsxImportSource": "@flashpdf/core"
-  },
-  "include": ["*.tsx", "*.d.ts"]
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": "../dist-examples",
+		"jsx": "react-jsx",
+		"jsxImportSource": "react"
+	},
+	"include": ["*.tsx", "*.d.ts"]
 }

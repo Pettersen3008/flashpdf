@@ -28,7 +28,10 @@ impl Renderer {
     }
 
     pub(crate) fn with_fonts(page: Page, embedded: Vec<EmbeddedFont>) -> Self {
-        let mut fonts = vec![Font::Helvetica, Font::Helvetica];
+        let mut fonts = vec![
+            Font::Helvetica { bold: false },
+            Font::Helvetica { bold: true },
+        ];
         fonts.extend(
             embedded
                 .into_iter()
@@ -272,6 +275,9 @@ fn measure_text_styled(
     let selected_font = fonts
         .get(usize::from(font))
         .ok_or(RenderError::InvalidLayout)?;
+    let (ascent, descent) = selected_font.metrics();
+    let ascent = ascent * size.0 / 1000.0;
+    let line_height = (ascent - descent * size.0 / 1000.0).max(0.0);
     let mut height = 0.0;
     let mut used = 0.0;
     let mut line_start = scratch.text.len();
@@ -297,14 +303,14 @@ fn measure_text_styled(
                 text: line_start..scratch.text.len(),
                 size: size.0,
                 x,
-                y: y + height,
+                y: y + height + ascent,
                 width,
                 text_width: used,
                 align,
                 color,
                 font,
             });
-            height += size.0;
+            height += line_height;
             used = 0.0;
             line_start = scratch.text.len();
             has_word = false;
@@ -324,14 +330,14 @@ fn measure_text_styled(
             text: line_start..scratch.text.len(),
             size: size.0,
             x,
-            y: y + height,
+            y: y + height + ascent,
             width,
             text_width: used,
             align,
             color,
             font,
         });
-        height += size.0;
+        height += line_height;
     }
     Ok(height)
 }
@@ -389,6 +395,17 @@ fn measure(
             let inset_y = style.margin[0].0 + style.padding[0].0 + style.border.0;
             let inner_width = width - horizontal;
             let mut inner_height = 0.0;
+            let paint = (style.background.is_some() || style.border.0 > 0.0).then(|| {
+                let index = scratch.boxes.len();
+                scratch.boxes.push(BoxPaint {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                    style,
+                });
+                index
+            });
             while commands.get(*index) != Some(&Command::BoxEnd) {
                 inner_height += measure(
                     commands,
@@ -404,14 +421,14 @@ fn measure(
             *index += 1;
             let box_height =
                 inner_height + style.padding[0].0 + style.padding[2].0 + style.border.0 * 2.0;
-            if style.background.is_some() || style.border.0 > 0.0 {
-                scratch.boxes.push(BoxPaint {
+            if let Some(index) = paint {
+                scratch.boxes[index] = BoxPaint {
                     x: x + style.margin[3].0,
                     y: y + style.margin[0].0,
                     width: width - style.margin[1].0 - style.margin[3].0,
                     height: box_height,
                     style,
-                });
+                };
             }
             Ok(style.margin[0].0 + box_height + style.margin[2].0)
         }
@@ -447,6 +464,9 @@ fn measure(
             for column in columns {
                 match *column {
                     ColumnWidth::Fixed(value) if value.0 > 0.0 => fixed += f64::from(value.0),
+                    ColumnWidth::Percent(value) if value.0 > 0.0 => {
+                        fixed += f64::from(width) * f64::from(value.0) / 100.0
+                    }
                     ColumnWidth::Fraction(value) if value.0 > 0.0 => {
                         fractions += f64::from(value.0)
                     }
@@ -462,6 +482,7 @@ fn measure(
             for column in columns {
                 let cell_width = match *column {
                     ColumnWidth::Fixed(value) => value.0,
+                    ColumnWidth::Percent(value) => width * value.0 / 100.0,
                     ColumnWidth::Fraction(value) => {
                         (remaining * f64::from(value.0) / fractions) as f32
                     }

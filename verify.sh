@@ -12,7 +12,7 @@ wasm-pack build crates/flashpdf-wasm --release --target web --out-dir ../../$was
 # wasm-opt writes back over the glue's default path, so the package ships one
 # WASM file and a bundler resolves it without a fallback URL.
 mv $wasm/flashpdf_wasm_bg.wasm target/flashpdf_wasm_bg.raw.wasm
-npx --yes --package=binaryen@123.0.0 wasm-opt -Oz \
+pnpm exec wasm-opt -Oz \
   --enable-bulk-memory --enable-nontrapping-float-to-int \
   target/flashpdf_wasm_bg.raw.wasm -o $wasm/flashpdf_wasm_bg.wasm
 
@@ -26,8 +26,6 @@ if [ "$raw" -gt 120000 ] || [ "$compressed" -ge 100000 ]; then
   echo "Size gate failed; stop before adding features." >&2
   exit 1
 fi
-node --test tests/wasm-smoke.mjs
-
 cargo build --locked --release -p flashpdf-napi
 mkdir -p dist/napi
 case "$(uname -s)" in
@@ -37,13 +35,4 @@ esac
 
 pnpm typecheck
 pnpm test
-
-if command -v bun >/dev/null 2>&1; then
-  bun test packages/flashpdf/test/native.test.mjs
-else
-  echo "bun not installed; Bun support is unverified on this target." >&2
-fi
-
-# Packs the tarball and renders from a clean install in Node, Bun and a Vite
-# browser build. Needs network access for npm install.
-sh tests/install-smoke.sh
+pnpm test:e2e

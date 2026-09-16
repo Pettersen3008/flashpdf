@@ -1,0 +1,45 @@
+import assert from "node:assert/strict";
+
+import { Component, forwardRef, memo } from "react";
+import { Fragment, jsx, jsxs } from "react/jsx-runtime";
+import { test } from "vitest";
+
+import { reactTree } from "../dist/tree.js";
+
+test("given React components and fragments, when normalizing, then returns host elements", async () => {
+	const Row = ({ label }) => jsx("p", { children: label });
+	const tree = await reactTree(
+		jsxs(Fragment, { children: [jsx(Row, { label: "Invoice" }), false, null] }),
+	);
+
+	assert.deepEqual(tree, [{ type: "p", props: { children: "Invoice" } }, false, null]);
+});
+
+test("given memo, forwardRef, and class components, when normalizing, then resolves each to its host element", async () => {
+	const Memo = memo(({ label }) => jsx("p", { children: label }));
+	const Ref = forwardRef(({ label }) => jsx("p", { children: label }));
+	class Klass extends Component {
+		render() {
+			return jsx("p", { children: this.props.label });
+		}
+	}
+
+	for (const Type of [Memo, Ref, Klass]) {
+		assert.deepEqual(await reactTree(jsx(Type, { label: "x" })), {
+			type: "p",
+			props: { children: "x" },
+		});
+	}
+});
+
+test("given multi-child nesting, when normalizing, then 64 element levels fit and 65 do not", async () => {
+	// Each level ends in a <span>, so `nest(n)` is n + 1 elements deep. The
+	// children arrays React interposes must not count toward the budget.
+	const nest = (depth) =>
+		depth === 0
+			? "x"
+			: jsxs("div", { children: [nest(depth - 1), jsx("span", { children: "y" })] });
+
+	await assert.doesNotReject(() => reactTree(nest(63)));
+	await assert.rejects(() => reactTree(nest(64)), /nesting exceeds 64/);
+});

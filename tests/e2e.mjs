@@ -1,0 +1,159 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { chromium } from "playwright";
+import { build, preview } from "vite";
+
+const repo = dirname(dirname(fileURLToPath(import.meta.url)));
+const work = mkdtempSync(join(tmpdir(), "flashpdf-e2e-"));
+const run = (command, args, options = {}) =>
+	execFileSync(command, args, { cwd: work, encoding: "utf8", stdio: "pipe", ...options });
+
+try {
+	const tarball = run("npm", ["pack", "--pack-destination", work, "--silent"], {
+		cwd: join(repo, "packages/flashpdf"),
+	})
+		.trim()
+		.split("\n")
+		.at(-1);
+	writeFileSync(
+		join(work, "package.json"),
+		JSON.stringify({ name: "flashpdf-consumer", private: true, type: "module" }),
+	);
+	run("npm", [
+		"install",
+		"--silent",
+		"--no-audit",
+		"--no-fund",
+		join(work, tarball),
+		"react@19.3.0",
+		"@types/react@19.3.0",
+	]);
+	cpSync(join(repo, "packages/flashpdf/test/fixtures/Abel-Regular.ttf"), join(work, "font.ttf"));
+
+	writeFileSync(
+		join(work, "consumer.mjs"),
+		`import { readFile } from "node:fs/promises";
+import { jsx, jsxs } from "react/jsx-runtime";
+import { render, stylesheet } from "@flashpdf/core";
+
+const Invoice = ({ total }) => jsxs("main", {
+  style: { fontFamily: "Invoice" },
+  children: [jsx("h1", { children: "Invoice" }), jsx("p", { className: "total", children: total })],
+});
+const font = new Uint8Array(await readFile("font.ttf"));
+const pdf = await render(jsx(Invoice, { total: "$100.00" }), {
+  pageFormat: "A4",
+  margin: 36,
+  stylesheets: [stylesheet(".total { color: #0000ff; text-align: right }")],
+  fonts: [{ family: "Invoice", regular: font, bold: font }],
+});
+if (!(pdf instanceof Uint8Array)) throw new Error("render must return a Uint8Array");
+if ((Buffer.from(pdf).toString("latin1").match(/\\/Subtype \\/TrueType/g) ?? []).length !== 2)
+  throw new Error("embedded regular and bold fonts missing");
+process.stdout.write(Buffer.from(pdf).toString("base64"));
+`,
+	);
+
+	const nodePdf = run(process.execPath, ["consumer.mjs"]);
+	if (!nodePdf.startsWith("JVBER")) throw new Error("Node did not render a PDF");
+	console.log("node: ok");
+
+	if (spawnSync("bun", ["--version"]).status === 0) {
+		const bunPdf = run("bun", ["consumer.mjs"]);
+		if (bunPdf !== nodePdf) throw new Error("Bun output differs from Node");
+		console.log("bun: ok");
+	} else console.warn("bun not installed; Bun support is unverified on this target");
+
+	const resolved = ["@flashpdf/core", "@flashpdf/core/package.json"];
+	for (const entry of resolved)
+		run(process.execPath, [
+			"--input-type=module",
+			"-e",
+			`console.log(import.meta.resolve(${JSON.stringify(entry)}))`,
+		]);
+
+	const types = join(work, "types");
+	cpSync(join(repo, "packages/flashpdf/examples"), types, { recursive: true });
+	writeFileSync(
+		join(types, "consumer.tsx"),
+		`import { render, stylesheet, type EmbeddedFont, type RenderOptions } from "@flashpdf/core";
+
+const options: RenderOptions = { pageFormat: "A4", margin: 36 };
+const font: EmbeddedFont = { family: "Invoice", regular: new Uint8Array(), bold: new Uint8Array() };
+export function invoice(total: string) {
+  return render(<main><h1>Invoice</h1><p className="total">{total}</p></main>, {
+    ...options,
+    stylesheets: [stylesheet(".total { text-align: right }")],
+    fonts: [font],
+  });
+}
+`,
+	);
+	writeFileSync(
+		join(types, "tsconfig.json"),
+		JSON.stringify({
+			compilerOptions: {
+				strict: true,
+				outDir: "built",
+				module: "esnext",
+				target: "es2022",
+				moduleResolution: "bundler",
+				jsx: "react-jsx",
+				types: ["react"],
+			},
+			include: ["consumer.tsx", "native-invoice.tsx"],
+		}),
+	);
+	run("pnpm", ["exec", "tsc", "-p", join(types, "tsconfig.json")], { cwd: repo });
+	console.log("exports and React types: ok");
+
+	writeFileSync(
+		join(work, "index.html"),
+		'<!doctype html><html><body><pre id="out">rendering</pre><script type="module" src="/src.js"></script></body></html>',
+	);
+	writeFileSync(
+		join(work, "src.js"),
+		`import { jsx, jsxs } from "react/jsx-runtime";
+import { render } from "@flashpdf/core";
+const Invoice = () => jsxs("main", { children: [jsx("h1", { children: "Invoice" }), jsx("p", { children: "$100.00" })] });
+const pdf = await render(jsx(Invoice, {}));
+document.querySelector("#out").textContent = new TextDecoder().decode(pdf.subarray(0, 5)) + " " + pdf.length;
+`,
+	);
+	await build({ root: work, logLevel: "warn" });
+	const assets = join(work, "dist/assets");
+	const names = readdirSync(assets);
+	if (!names.some((name) => name.endsWith(".wasm"))) throw new Error("Vite emitted no WASM asset");
+	const bundle = names
+		.filter((name) => name.endsWith(".js"))
+		.map((name) => readFileSync(join(assets, name), "utf8"))
+		.join("\n");
+	if (bundle.includes("lightningcss")) throw new Error("browser bundle reaches Lightning CSS");
+	if (bundle.includes("externalized for browser"))
+		throw new Error("browser bundle uses Node builtins");
+
+	const server = await preview({
+		root: work,
+		logLevel: "error",
+		preview: { host: "127.0.0.1", port: 0 },
+	});
+	const address = server.httpServer.address();
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage();
+		await page.goto(`http://127.0.0.1:${address.port}`, { waitUntil: "networkidle" });
+		await page.waitForFunction(() =>
+			document.querySelector("#out")?.textContent?.startsWith("%PDF-"),
+		);
+		console.log(`browser: ${await page.locator("#out").textContent()}`);
+	} finally {
+		await browser.close();
+		server.httpServer.close();
+	}
+} finally {
+	rmSync(work, { recursive: true, force: true });
+}

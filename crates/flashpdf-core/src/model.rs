@@ -95,6 +95,7 @@ pub enum Command<'a> {
 pub enum ColumnWidth {
     Fixed(Pt),
     Fraction(Pt),
+    Percent(Pt),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
