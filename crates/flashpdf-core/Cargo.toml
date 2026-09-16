@@ -8,4 +8,4 @@ publish = false
 pdf-writer = "=0.15.0"
 
 [dev-dependencies]
-lopdf = { version = "0.38", default-features = false }
+lopdf = { version = "0.45", default-features = false }
