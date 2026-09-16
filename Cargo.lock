@@ -106,9 +106,9 @@ dependencies = [
 
 [[package]]
 name = "crc32fast"
-version = "1.5.1"
+version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8498c871161e1742aaa9d52551b2d6ebdd4c3d45a3be423e3728f33b955be550"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
 dependencies = [
  "cfg-if",
 ]
@@ -452,9 +452,9 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "napi"
-version = "3.12.3"
+version = "3.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2862d9586f6afe036f7f7fd03d017d3c11d948a4e34702c212dd9ef62ed98b58"
+checksum = "2ca373b1769db491f38386d57a882b9a21debb2dcd17c0d3e16d02ec311a1d7c"
 dependencies = [
  "bitflags",
  "ctor",
@@ -468,15 +468,15 @@ dependencies = [
 
 [[package]]
 name = "napi-build"
-version = "2.4.2"
+version = "2.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "860e7c40864f95cfb83cde99f9ebadd88ef3d9bdccd7dd2cee0cc96a2dd4ffa7"
+checksum = "709388aa95cadd11adda653ab6d8ebe5733144acd2b111fa7b2da8a0bf0f16a7"
 
 [[package]]
 name = "napi-derive"
-version = "3.6.4"
+version = "3.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3be5cc49fdef0239132348d2a2991d4e24b643ff6976ada349b20823b161ab28"
+checksum = "76117d85c6ccd9f07102daf39931c7229934483008276d84ecb7c19aa50dfe69"
 dependencies = [
  "convert_case",
  "ctor",
@@ -740,18 +740,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.13.2"
+version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cf0ded5c4e56918d8f8a339e1bb67d038d3bc6d144ac407904015ba2e4cde9b"
-dependencies = [
- "tinyvec_macros",
-]
-
-[[package]]
-name = "tinyvec_macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "ttf-parser"
@@ -898,6 +889,6 @@ dependencies = [
 
 [[package]]
 name = "zlib-rs"
-version = "0.6.7"
+version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
+checksum = "b268e58e7c693d7c271f93ffc4ba3b380412554231c85bf61ca7af91042a4112"

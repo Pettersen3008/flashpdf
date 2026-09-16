@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { PdfRenderer, initSync } from '../packages/flashpdf/wasm/flashpdf_wasm.js';
 
 const encoder = new TextEncoder();
+mkdirSync(new URL('../dist/', import.meta.url), { recursive: true });
 
 function join(...parts) {
   const bytes = new Uint8Array(parts.reduce((length, part) => length + part.length, 0));

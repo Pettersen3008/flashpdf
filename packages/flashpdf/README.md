@@ -2,9 +2,9 @@
 
 Render native JSX and a static CSS subset to a PDF. The layout engine is Rust compiled to WebAssembly, so the same code produces the same bytes in a browser, in Node, and in Bun.
 
-```bash
-npm install @flashpdf/core
-```
+> Status: v0.1.0 is source-available. The `@flashpdf/core` package is not published to npm yet.
+
+Build it from a clone with the commands in the repository [README](https://github.com/pettersen3008/flashpdf#working-on-flashpdf).
 
 ## Quickstart
 

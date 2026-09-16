@@ -2,9 +2,9 @@
 
 Render native JSX and a static CSS subset to a PDF. The layout engine is Rust compiled to WebAssembly, so the same code produces the same bytes in a browser, in Node, and in Bun.
 
-```bash
-npm install @flashpdf/core
-```
+> Status: v0.1.0 is source-available. The `@flashpdf/core` package is not published to npm yet.
+
+Build it from a clone with the commands in [Working on FlashPDF](#working-on-flashpdf).
 
 ## Quickstart
 
@@ -104,6 +104,8 @@ sh verify.sh
 That formats and lints the Rust workspace, formats and lints the TypeScript package, runs the tests, rebuilds and size-gates the WASM, and finally packs the tarball to render from a clean install in Node, Bun, and a Vite browser build.
 
 `tests/golden/css-invoice.txt` pins the PDF content stream of the CSS invoice: every draw position, colour, font, and page break. Regenerate it with `UPDATE_GOLDEN=1` and review the diff.
+
+See [AGENTS.md](./AGENTS.md) for the repository map and contribution rules.
 
 ## License
 
