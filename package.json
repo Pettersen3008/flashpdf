@@ -10,7 +10,7 @@
     "typecheck": "pnpm --filter @flashpdf/core typecheck"
   },
   "devDependencies": {
-    "@types/node": "24.10.1",
+    "@types/node": "26.5.1",
     "oxfmt": "0.68.0",
     "oxlint": "1.83.0",
     "typescript": "5.9.3"
