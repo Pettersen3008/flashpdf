@@ -1,0 +1,15 @@
+[package]
+name = "flashpdf-napi"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+flashpdf-core = { path = "../flashpdf-core" }
+napi = { version = "3", default-features = false }
+napi-derive = "3"

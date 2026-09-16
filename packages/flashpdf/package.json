@@ -1,0 +1,59 @@
+{
+  "name": "@flashpdf/core",
+  "version": "0.1.0",
+  "description": "Render native JSX and a static CSS subset to a PDF, in the browser, Node, or Bun.",
+  "keywords": [
+    "browser",
+    "bun",
+    "css",
+    "invoice",
+    "jsx",
+    "pdf",
+    "react",
+    "wasm"
+  ],
+  "homepage": "https://github.com/pettersen3008/flashpdf#readme",
+  "bugs": "https://github.com/pettersen3008/flashpdf/issues",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pettersen3008/flashpdf.git",
+    "directory": "packages/flashpdf"
+  },
+  "files": [
+    "README.md",
+    "CHANGELOG.md",
+    "dist",
+    "wasm/flashpdf_wasm.js",
+    "wasm/flashpdf_wasm.d.ts",
+    "wasm/flashpdf_wasm_bg.wasm",
+    "wasm/flashpdf_wasm_bg.wasm.d.ts",
+    "LICENSE"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./jsx-runtime": {
+      "types": "./dist/jsx-runtime.d.ts",
+      "default": "./dist/jsx-runtime.js"
+    },
+    "./jsx-dev-runtime": {
+      "types": "./dist/jsx-dev-runtime.d.ts",
+      "default": "./dist/jsx-dev-runtime.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsc && tsc -p examples/tsconfig.json",
+    "typecheck": "pnpm build && tsc -p tsconfig.test.json",
+    "test": "pnpm build && node --test test/*.mjs",
+    "bench": "pnpm build && node --expose-gc bench/css-invoice.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
