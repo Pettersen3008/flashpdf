@@ -17,7 +17,7 @@
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/pettersen3008/flashpdf.git",
+		"url": "https://github.com/Pettersen3008/flashpdf",
 		"directory": "packages/flashpdf"
 	},
 	"files": [
