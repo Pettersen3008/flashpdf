@@ -2,14 +2,12 @@
 
 Render native JSX and a static CSS subset to a PDF. The layout engine is Rust compiled to WebAssembly, so the same code produces the same bytes in a browser, in Node, and in Bun.
 
-> Status: v0.1.0 is source-available. The `@flashpdf/core` package is not published to npm yet.
-
 Build it from a clone with the commands in the repository [README](https://github.com/pettersen3008/flashpdf#working-on-flashpdf).
 
 ## Quickstart
 
 ```tsx
-import { render } from '@flashpdf/core';
+import { render } from '@pettersen3008/flashpdf';
 
 function Invoice({ total }: { total: string }) {
   return (
@@ -40,7 +38,7 @@ Compile stylesheets with the consuming app's build tool and pass the resulting s
 
 ```tsx
 import css from './invoice.css?inline';
-import { render } from '@flashpdf/core';
+import { render } from '@pettersen3008/flashpdf';
 
 const pdf = await render(<main className="invoice">…</main>, { stylesheets: [css] });
 ```
@@ -53,7 +51,7 @@ FlashPDF rejects any declaration it cannot honour, naming the property, the sele
 
 | Export | Signature | Notes |
 | --- | --- | --- |
-| `render` | `(element: ReactNode, options?: RenderOptions) => Promise<Uint8Array>` | Loads the WASM module once per process. |
+| `render` | `(element: ReactElement \| Iterable<ReactElement>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged, for tagging literals at author time. |
 
 `RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[] }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36.

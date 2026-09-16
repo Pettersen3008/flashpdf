@@ -473,10 +473,12 @@ fn measure(
                     _ => return Err(RenderError::InvalidLayout),
                 }
             }
+            let tolerance = f64::from(width) * f64::from(f32::EPSILON) * columns.len() as f64;
             let remaining = f64::from(width) - fixed;
-            if remaining < 0.0 || (fractions > 0.0 && remaining <= 0.0) {
+            if remaining < -tolerance || (fractions > 0.0 && remaining <= 0.0) {
                 return Err(RenderError::InvalidLayout);
             }
+            let remaining = remaining.max(0.0);
             let mut offset = 0.0;
             let mut height = 0.0_f32;
             for column in columns {

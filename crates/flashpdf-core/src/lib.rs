@@ -238,6 +238,23 @@ mod tests {
     }
 
     #[test]
+    fn given_percent_columns_totalling_one_hundred_when_rounded_then_accepts_them() {
+        use super::ColumnWidth::Percent;
+        let columns = [Percent(Pt(0.1)), Percent(Pt(99.9))];
+        assert_eq!(
+            parsed(&[
+                Command::RowStart { columns: &columns },
+                text(""),
+                text(""),
+                Command::RowEnd,
+            ])
+            .get_pages()
+            .len(),
+            1
+        );
+    }
+
+    #[test]
     fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint() {
         let red = super::BoxStyle {
             margin: [Pt(0.0); 4],

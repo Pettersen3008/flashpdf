@@ -34,5 +34,5 @@ case "$(uname -s)" in
 esac
 
 pnpm typecheck
-pnpm test
-pnpm test:e2e
+pnpm exec vitest run
+node tests/e2e.mjs

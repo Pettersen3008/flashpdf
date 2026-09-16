@@ -1,4 +1,4 @@
-import { render } from "@flashpdf/core";
+import { render } from "@pettersen3008/flashpdf";
 
 import styles from "./invoice.module.css";
 import invoiceCss from "./invoice.module.css?inline";

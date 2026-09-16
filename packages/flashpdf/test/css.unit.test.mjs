@@ -90,6 +90,10 @@ test("given cascading shorthands, selector whitespace, and transparent paint, wh
 		"main { margin-top: 12pt }",
 	]);
 	assert.deepEqual(boxStyle(style(cascade.props.style), 12).margin, [0, 0, 0, 0]);
+	const reordered = resolveStyles(jsx("main", { className: "x", children: "x" }), [
+		".x { margin-top: 1pt } .x { margin: 2pt } .x { margin-top: 3pt }",
+	]);
+	assert.deepEqual(boxStyle(style(reordered.props.style), 12).margin, [3, 2, 2, 2]);
 	assert.equal(boxStyle(style({ background: "transparent" }), 12).background, undefined);
 	// A colour the border shorthand does not hardcode still reaches `color`.
 	assert.deepEqual(

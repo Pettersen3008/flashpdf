@@ -30,6 +30,24 @@ test("given memo, forwardRef, and class components, when normalizing, then resol
 			props: { children: "x" },
 		});
 	}
+	const reference = { current: null };
+	const RefValue = forwardRef((props, ref) =>
+		jsx("p", { children: `${props.label}:${ref === reference}:${"ref" in props}` }),
+	);
+	assert.deepEqual(await reactTree(jsx(RefValue, { label: "x", ref: reference })), {
+		type: "p",
+		props: { children: "x:true:false" },
+	});
+});
+
+test("given iterable and bigint children, when normalizing, then matches React node semantics", async () => {
+	assert.deepEqual(
+		await reactTree(jsx("main", { children: new Set([1n, jsx("p", { children: "x" })]) })),
+		{
+			type: "main",
+			props: { children: ["1", { type: "p", props: { children: "x" } }] },
+		},
+	);
 });
 
 test("given multi-child nesting, when normalizing, then 64 element levels fit and 65 do not", async () => {

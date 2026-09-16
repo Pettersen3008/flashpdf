@@ -1,26 +1,29 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 - 2026-09-16
 
 ### Added
 - Oxlint and Oxfmt checks for the TypeScript package.
 - Host-provided embedded TrueType fonts through `RenderOptions.fonts`, selected by CSS/inline `fontFamily`, with regular and bold faces in browser/WASM, N-API, and Rust rendering.
 - MIT license, package metadata, and an `exports` map with `types` conditions for every entry point.
-- `tests/install-smoke.sh`, which packs the tarball and renders from a clean install in Node, Bun, a TypeScript consumer, and a Vite browser build.
+- A packed-package E2E test covering Node, Bun, TypeScript, Vite, and Chromium consumers.
 - `tests/golden/css-invoice.txt`, a content-stream golden that pins every draw position, colour, font, and page break of the CSS invoice.
 - Heading defaults matching a browser UA sheet: `h1`-`h6` size in `em` and render bold unless a rule or inline style says otherwise.
-- `key` on component elements, through `JSX.IntrinsicAttributes`.
+- Standard React JSX, including pure function components, fragments, memo, forward refs, and class components.
 
 ### Changed
 - Helvetica and Helvetica-Bold remain the fallback. Embedded-font text keeps the WinAnsi subset and rejects shaping, fallback lists, and faces beyond regular/bold.
-- The WASM now ships inside the package at `wasm/`, so an installed `@flashpdf/core` resolves its own module. Only the optimized build is published.
+- The WASM now ships inside the package at `wasm/`, so an installed `@pettersen3008/flashpdf` resolves its own module. Only the optimized build is published.
 - Unsupported CSS names the reason it cannot be honoured, and at-rule and selector errors carry a source position.
 - Rule order now runs across the whole `stylesheets` array, so a later sheet wins a tie at equal specificity.
+- Text layout uses each font's ascent and descent, bold Helvetica widths, percentage flex-row columns, transparent paint, and ordered shorthand expansion.
 
 ### Fixed
 - Pages using both the regular and bold font wrote `/Font` twice, which hid the regular font from viewers. Both now share one dictionary.
 - `width` and `flex` outside a flex row were silently dropped. They now reject.
+- CSS shorthand precedence, forwarded refs, React iterable and bigint children, and percentage rounding at exactly 100%.
 
 ### Removed
 - The compiler export and its Lightning CSS dependency. Consumers now compile CSS in their own frontend build.
+- The package-owned JSX runtime. React now creates the elements consumed by FlashPDF.
 - The unreachable table, page-header, page-number, and total-pages protocol paths, along with the `hello`, `render_row`, and `render_table` WASM demos. The optimized WASM fell from 109,796 to 104,016 bytes.

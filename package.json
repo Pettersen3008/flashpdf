@@ -3,7 +3,7 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "pnpm --filter @flashpdf/core build",
+		"build": "pnpm --filter @pettersen3008/flashpdf build",
 		"fmt": "oxfmt 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
 		"fmt:check": "oxfmt --check 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
 		"lint": "oxlint --deny-warnings .",
@@ -11,7 +11,7 @@
 		"test:unit": "pnpm build && vitest run --project unit",
 		"test:integration": "pnpm build && vitest run --project integration",
 		"test:e2e": "pnpm build && node tests/e2e.mjs",
-		"typecheck": "pnpm --filter @flashpdf/core typecheck"
+		"typecheck": "pnpm --filter @pettersen3008/flashpdf typecheck"
 	},
 	"devDependencies": {
 		"@types/node": "26.6.1",

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ReactElement } from "react";
 
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { object, props, number } from "./assert.js";
@@ -20,7 +20,10 @@ export type RenderOptions = {
 	fonts?: readonly EmbeddedFont[] | undefined;
 };
 
-export async function render(document: ReactNode, options?: RenderOptions): Promise<Uint8Array> {
+export async function render(
+	document: ReactElement | Iterable<ReactElement>,
+	options?: RenderOptions,
+): Promise<Uint8Array> {
 	const tree = await reactTree(document);
 	// A root fragment flattens to an array, so validate its members, not the array.
 	for (const child of children(tree)) object(child);

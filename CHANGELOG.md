@@ -13,7 +13,7 @@
 
 ### Changed
 - Helvetica and Helvetica-Bold remain the fallback. Embedded-font text keeps the WinAnsi subset and rejects shaping, fallback lists, and faces beyond regular/bold.
-- The WASM now ships inside the package at `wasm/`, so an installed `@flashpdf/core` resolves its own module. Only the optimized build is published.
+- The WASM now ships inside the package at `wasm/`, so an installed `@pettersen3008/flashpdf` resolves its own module. Only the optimized build is published.
 - Unsupported CSS names the reason it cannot be honoured, and at-rule and selector errors carry a source position.
 - Rule order now runs across the whole `stylesheets` array, so a later sheet wins a tie at equal specificity.
 

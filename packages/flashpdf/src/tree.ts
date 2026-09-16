@@ -19,7 +19,14 @@ function component(type: unknown): Render | undefined {
 	if (typeof type !== "object" || type === null) return undefined;
 	const wrapper = type as { $$typeof?: unknown; type?: unknown; render?: unknown };
 	if (wrapper.$$typeof === REACT_MEMO) return component(wrapper.type);
-	if (wrapper.$$typeof === REACT_FORWARD_REF) return component(wrapper.render);
+	if (wrapper.$$typeof === REACT_FORWARD_REF && typeof wrapper.render === "function")
+		return (p) => {
+			const { ref, ...props } = p;
+			return (wrapper.render as (props: Record<string, unknown>, ref: unknown) => unknown)(
+				props,
+				ref,
+			);
+		};
 	return undefined;
 }
 
@@ -27,8 +34,12 @@ function component(type: unknown): Render | undefined {
  *  children arrays React puts between them are transparent. */
 export async function reactTree(value: unknown, depth = 0): Promise<unknown> {
 	if (depth > 64) throw new Error("nesting exceeds 64");
+	if (typeof value === "bigint") return String(value);
 	if (Array.isArray(value)) return Promise.all(value.map((child) => reactTree(child, depth)));
 	if (typeof value !== "object" || value === null) return value;
+	const iterator = (value as { [Symbol.iterator]?: unknown })[Symbol.iterator];
+	if (typeof iterator === "function")
+		return Promise.all([...(value as Iterable<unknown>)].map((child) => reactTree(child, depth)));
 
 	const node = object(value);
 	if (!("type" in node) || !("props" in node)) return value;

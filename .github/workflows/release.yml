@@ -1,27 +1,27 @@
-name: CI
+name: Release
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+  release:
+    types: [published]
 
 permissions:
   contents: read
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  id-token: write
 
 jobs:
-  verify:
+  npm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.21.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 2026-09-16
       - uses: pnpm/setup@703c52620218391530e48b9e8870d5c0082e1b9b # v2.1.0
         with:
-          runtime: node@24.21.0
-          cache: true
+          cache: false
           require-lockfile: true
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -35,7 +35,8 @@ jobs:
         run: cargo install wasm-pack --locked --version 0.15.0
       - run: pnpm exec playwright install --with-deps chromium
       - run: sh verify.sh
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 20.19.5
-      - run: node tests/e2e.mjs --node-only
+      - name: Check release tag
+        run: test "v$(node -p 'require("./packages/flashpdf/package.json").version')" = "$GITHUB_REF_NAME"
+      - run: npm publish ./packages/flashpdf --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

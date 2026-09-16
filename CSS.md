@@ -9,7 +9,7 @@ The public authoring API is native JSX plus `render`. There are no `Document`, `
 Compile CSS in the consuming app's build step, then pass the resulting string to `render`. CSS Modules and minification belong to that build step. `stylesheet` validates the final CSS against FlashPDF's supported subset.
 
 ```ts
-import { render } from '@flashpdf/core';
+import { render } from '@pettersen3008/flashpdf';
 
 const css = '.invoice { padding: 18pt; background: #fff }';
 const pdf = await render(<main className="invoice">Invoice</main>, {

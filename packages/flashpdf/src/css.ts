@@ -132,9 +132,20 @@ function declarations(source: string, context = ""): Record<string, string> {
 		if (!item.trim()) continue;
 		const colon = item.indexOf(":");
 		if (colon < 1) throw new Error(`invalid CSS declaration: ${item.trim()}${context}`);
-		result[property(item.slice(0, colon).trim(), context)] = item.slice(colon + 1).trim();
+		const key = property(item.slice(0, colon).trim(), context);
+		delete result[key];
+		result[key] = item.slice(colon + 1).trim();
 	}
 	return result;
+}
+
+function cascade(target: Record<string, unknown>, source: Record<string, unknown> | undefined) {
+	if (!source) return;
+	for (const [key, value] of Object.entries(source)) {
+		// Reinsert overrides so shorthand/longhand order survives the cascade.
+		delete target[key];
+		target[key] = value;
+	}
 }
 function specificity(selector: string) {
 	return (
@@ -302,12 +313,12 @@ function visit(
 	const result: Record<string, unknown> = {};
 	for (const [key, item] of Object.entries(parent))
 		if (key.startsWith("--") || inherited.has(key)) result[key] = item;
-	Object.assign(result, uaStyles[value.type]);
+	cascade(result, uaStyles[value.type]);
 	for (const rule of rules
 		.filter((rule) => matches(rule.selector, identity, ancestors))
 		.sort((a, b) => a.specificity - b.specificity || a.order - b.order))
-		Object.assign(result, rule.declarations);
-	Object.assign(result, inline(props.style as Style | string | undefined));
+		cascade(result, rule.declarations);
+	cascade(result, inline(props.style as Style | string | undefined));
 	const budget = { expansions: 0 };
 	for (const [key, item] of Object.entries(result))
 		result[key] = resolveVariable(item, result, new Set(key.startsWith("--") ? [key] : []), budget);

@@ -1,4 +1,4 @@
-import { render, type RenderOptions } from "@flashpdf/core";
+import { render, type RenderOptions } from "@pettersen3008/flashpdf";
 
 export type Invoice = {
 	number: string;
