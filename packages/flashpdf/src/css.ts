@@ -246,6 +246,32 @@ function withoutComments(source: string) {
 		index = end + 2;
 	}
 }
+function whitespace(character: string) {
+	return (
+		character === " " ||
+		character === "\t" ||
+		character === "\n" ||
+		character === "\r" ||
+		character === "\f"
+	);
+}
+function normalizeSelector(selector: string) {
+	let result = "";
+	let pendingSpace = false;
+	for (const character of selector) {
+		if (whitespace(character)) {
+			pendingSpace = result.length > 0;
+		} else if (character === ">") {
+			result = result.trimEnd() + character;
+			pendingSpace = false;
+		} else {
+			if (pendingSpace && !result.endsWith(">")) result += " ";
+			result += character;
+			pendingSpace = false;
+		}
+	}
+	return result;
+}
 function parse(source: string): Rule[] {
 	const rules: Rule[] = [];
 	const clean = withoutComments(source);
@@ -254,17 +280,21 @@ function parse(source: string): Rule[] {
 		throw new Error(
 			`unsupported CSS at-rule: ${clean.slice(at).split(/[\s{;]/)[0]} at ${position(clean, at)}`,
 		);
-	const blocks = clean.matchAll(/([^{}]+)\{([^{}]*)\}/g);
 	let end = 0;
-	for (const block of blocks) {
-		if (clean.slice(end, block.index).trim())
-			throw new Error(`invalid CSS stylesheet at ${position(clean, end)}`);
-		end = block.index! + block[0].length;
-		const at = ` at ${position(clean, block.index!)}`;
-		const selectors = block[1]!;
-		const body = block[2]!;
+	while (end < clean.length) {
+		const start = clean.indexOf("{", end);
+		if (start < 0) break;
+		if (clean.slice(end, start).includes("}")) break;
+		const close = clean.indexOf("}", start + 1);
+		const nested = clean.indexOf("{", start + 1);
+		if (close < 0 || (nested >= 0 && nested < close)) break;
+		if (start === end) throw new Error(`invalid CSS stylesheet at ${position(clean, end)}`);
+		const at = ` at ${position(clean, end)}`;
+		const selectors = clean.slice(end, start);
+		const body = clean.slice(start + 1, close);
+		end = close + 1;
 		for (const selector of selectors.split(",").map((value) => value.trim())) {
-			const normalized = selector.replace(/\s+/g, " ").replace(/\s*>\s*/g, ">");
+			const normalized = normalizeSelector(selector);
 			const pieces = normalized.split(/(>| )/).filter(Boolean);
 			const validPart = (part: string) =>
 				/^(?:[a-z][\w-]*)?(?:(?:#[\w-]+)|(?:\.[\w-]+))*$/i.test(part) && part !== "";
