@@ -8,7 +8,6 @@ task explicitly changes it.
 
 - `crates/flashpdf-core` contains the Rust layout and PDF engine.
 - `crates/flashpdf-wasm` exposes the engine to browsers and JavaScript.
-- `crates/flashpdf-napi` provides the native test backend.
 - `packages/flashpdf/src` contains the TypeScript JSX, CSS, and binary adapters.
 - `packages/flashpdf/test` contains package and backend tests.
 - `tests` contains clean-install, WASM, and golden-output checks.
@@ -24,13 +23,13 @@ sh verify.sh
 ```
 
 `sh verify.sh` is the source of truth. It runs formatting, linting, Rust and
-TypeScript tests, WASM size gates, backend parity checks, and the clean-install
+TypeScript tests, WASM size gates, WASM integration checks, and the clean-install
 package smoke test.
 
 ## Constraints
 
 - Keep optimized WASM at or below 120 KB raw and below 100 KB gzipped.
-- Keep browser and native output byte-for-byte identical for the same input.
+- Keep output byte-for-byte deterministic for the same input.
 - Validate untrusted input at the TypeScript and Rust boundaries.
 - Do not commit `target/`, `dist/`, `node_modules/`, or generated package output.
 - Keep repository documentation public. Do not add chat transcripts, handoff

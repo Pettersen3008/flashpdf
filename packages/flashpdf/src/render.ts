@@ -1,12 +1,12 @@
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
-import { number, object, props } from "./assert.js";
+import { number, props } from "./assert.js";
 import { Binary } from "./binary.js";
+import { compile } from "./compile.js";
 import { resolveStyles } from "./css.js";
 import type { Element } from "./element.js";
 import { registerFonts } from "./fonts.js";
-import { lower } from "./lower.js";
 import { ProtocolWriter } from "./protocol.js";
-import { children, reactTree } from "./tree.js";
+import { resolveTree } from "./tree.js";
 
 export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array };
 export type RenderOptions = {
@@ -23,8 +23,8 @@ export function createRenderer(loadWasm: LoadWasm) {
 		document: Element | Iterable<Element>,
 		options?: RenderOptions,
 	): Promise<Uint8Array> {
-		const tree = await reactTree(document);
-		for (const child of children(tree)) object(child);
+		const tree = await resolveTree(document);
+		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
 		const p = props(options ?? {}, ["pageFormat", "margin", "stylesheets", "fonts"]);
 		const format = p.pageFormat === undefined ? "A4" : p.pageFormat;
 		if (format !== "A4" && format !== "Letter") throw new Error("invalid page format");
@@ -41,11 +41,10 @@ export function createRenderer(loadWasm: LoadWasm) {
 			writer.header(width, height, margin);
 			if (
 				p.stylesheets !== undefined &&
-				(!Array.isArray(p.stylesheets) ||
-					p.stylesheets.some((sheet) => typeof sheet !== "string"))
+				(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
 			)
 				throw new Error("invalid stylesheets");
-			lower(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
+			compile(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
 			writer.end();
 			consumed = true;
 			return renderer.finish();

@@ -23,15 +23,11 @@ void render(invoice, { fonts: [font] });
 // @ts-expect-error A PDF document starts with one or more React elements.
 void render("bare text");
 // @ts-expect-error FlashPDF only accepts its documented intrinsic elements.
-const unsupported = <button>Print</button>;
+const _unsupported = <button>Print</button>;
 // @ts-expect-error Unknown intrinsic properties cannot reach runtime validation.
-const unknownProperty = <main potato={1}>Invoice</main>;
+const _unknownProperty = <main potato={1}>Invoice</main>;
 // @ts-expect-error Grid is not part of FlashPDF's supported CSS subset.
-const grid = <main style={{ display: "grid" }}>Invoice</main>;
+const _grid = <main style={{ display: "grid" }}>Invoice</main>;
 // @ts-expect-error Text elements accept scalar text children only.
-const nestedBlock = (
-	<p>
-		<div>Invoice</div>
-	</p>
-);
+const _nestedBlock = <p children={<div>Invoice</div>} />;
 void import("@pettersen3008/flashpdf/jsx-runtime");

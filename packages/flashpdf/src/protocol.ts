@@ -1,6 +1,8 @@
 import { Binary } from "./binary.js";
 import type { Box } from "./style.js";
 
+export type Column = { kind: 0 | 1 | 2; value: number };
+
 const opcode = {
 	text: 1,
 	spacer: 2,
@@ -15,14 +17,6 @@ const opcode = {
 	end: 255,
 } as const;
 
-export type TextCommand = {
-	value: string;
-	size: number;
-	align: string;
-	color: readonly [number, number, number];
-	font: number;
-};
-
 export class ProtocolWriter {
 	constructor(private readonly binary: Binary) {}
 
@@ -30,8 +24,13 @@ export class ProtocolWriter {
 		this.binary.header(width, height, margin);
 	}
 
-	text(command: TextCommand) {
-		const { value, size, align, color, font } = command;
+	text(
+		value: string,
+		size: number,
+		align: string,
+		color: readonly [number, number, number],
+		font: number,
+	) {
 		if (align === "left" && color[0] === 0 && color[1] === 0 && color[2] === 0 && font === 0)
 			this.binary.record(opcode.text, () => {
 				this.binary.f32(size);
@@ -59,7 +58,7 @@ export class ProtocolWriter {
 		this.binary.record(opcode.stackEnd);
 	}
 
-	rowStart(columns: readonly { kind: number; value: number }[]) {
+	rowStart(columns: readonly Column[]) {
 		this.binary.record(opcode.rowStart, () => {
 			this.binary.u16(columns.length);
 			for (const column of columns) {
@@ -84,8 +83,7 @@ export class ProtocolWriter {
 				this.binary.u8(1);
 				for (const channel of box.background) this.binary.u8(channel);
 			} else this.binary.u8(0);
-			for (const edge of box.borderColor)
-				for (const channel of edge) this.binary.u8(channel);
+			for (const edge of box.borderColor) for (const channel of edge) this.binary.u8(channel);
 		});
 	}
 

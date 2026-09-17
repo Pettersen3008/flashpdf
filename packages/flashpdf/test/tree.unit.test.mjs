@@ -81,6 +81,14 @@ test("given iterable and bigint children, when normalizing, then matches React n
 	);
 });
 
+test("given an intrinsic tree, when normalizing, then reuses the unchanged tree", async () => {
+	const tree = {
+		type: "main",
+		props: { children: [{ type: "p", props: { children: "Invoice" } }] },
+	};
+	assert.equal(await reactTree(tree), tree);
+});
+
 test("given multi-child nesting, when normalizing, then 64 element levels fit and 65 do not", async () => {
 	// Each level ends in a <span>, so `nest(n)` is n + 1 elements deep. The
 	// children arrays React interposes must not count toward the budget.

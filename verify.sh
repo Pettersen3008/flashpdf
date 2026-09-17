@@ -26,13 +26,6 @@ if [ "$raw" -gt 120000 ] || [ "$compressed" -ge 100000 ]; then
   echo "Size gate failed; stop before adding features." >&2
   exit 1
 fi
-cargo build --locked --release -p flashpdf-napi
-mkdir -p dist/napi
-case "$(uname -s)" in
-  Darwin) cp target/release/libflashpdf_napi.dylib dist/napi/flashpdf.node ;;
-  *) cp target/release/libflashpdf_napi.so dist/napi/flashpdf.node ;;
-esac
-
 pnpm typecheck
 pnpm exec vitest run
 node tests/e2e.mjs

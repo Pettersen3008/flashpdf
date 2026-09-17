@@ -2,12 +2,46 @@
 pub struct Pt(pub(crate) f32);
 
 impl Pt {
+    pub const ZERO: Self = Self(0.0);
+
     pub fn new(value: f32) -> Result<Self, RenderError> {
         if value.is_finite() && value >= 0.0 {
             Ok(Self(value))
         } else {
             Err(RenderError::InvalidPoint)
         }
+    }
+
+    pub(crate) const fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl std::ops::Add for Pt {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::AddAssign for Pt {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl std::ops::Sub for Pt {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl std::ops::SubAssign for Pt {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
     }
 }
 
@@ -81,6 +115,14 @@ pub struct Rgb {
 
 impl Rgb {
     pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
+
+    pub(crate) fn normalized(self) -> [f32; 3] {
+        [
+            f32::from(self.r) / 255.0,
+            f32::from(self.g) / 255.0,
+            f32::from(self.b) / 255.0,
+        ]
+    }
 }
 
 impl From<[u8; 3]> for Rgb {
@@ -146,26 +188,6 @@ pub struct BoxStyle {
     pub border: Edges<Pt>,
     pub background: Option<Rgb>,
     pub border_color: Edges<Rgb>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Command<'a> {
-    Text { text: &'a str, style: TextStyle },
-    BoxStart { style: BoxStyle },
-    BoxEnd,
-    Spacer(Pt),
-    StackStart { gap: Pt },
-    StackEnd,
-    RowStart { columns: &'a [ColumnWidth] },
-    RowEnd,
-    PageBreak,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ColumnWidth {
-    Fixed(Pt),
-    Fraction(Fraction),
-    Percent(Percent),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

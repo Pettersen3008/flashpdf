@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { test } from "vitest";
 
-import { point, edges, color, nativeColumn } from "../dist/style.js";
+import { point, edges, color } from "../dist/style.js";
 
 test("given pt, px, em, and rem lengths, when resolving a point value, then converts to points", () => {
 	assert.equal(point("12pt"), 12);
@@ -32,8 +32,4 @@ test("given a named color or a 3- or 6-digit hex, when resolving a color, then c
 	assert.deepEqual(color("red"), [255, 0, 0]);
 	assert.deepEqual(color("#f00"), [255, 0, 0]);
 	assert.deepEqual(color("#ff0000"), [255, 0, 0]);
-});
-
-test("given a percentage row width, when lowering a column, then preserves it as a percentage", () => {
-	assert.deepEqual(nativeColumn({ props: { style: { width: "50%" } } }), { kind: 2, value: 50 });
 });

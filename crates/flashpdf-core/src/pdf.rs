@@ -3,12 +3,6 @@ use pdf_writer::{types::FontFlags, Content, Finish, Name, Pdf, Rect, Ref};
 use crate::font::{font_name, Font};
 use crate::{FontId, Page, HELVETICA_BOLD};
 
-/// Appends a page and returns its body cursor.
-pub(crate) fn start_page(page: Page, contents: &mut Vec<Content>) -> f32 {
-    contents.push(Content::new());
-    page.height.0 - page.margin.0
-}
-
 pub(crate) fn finish_pdf(
     page: Page,
     contents: Vec<Content>,

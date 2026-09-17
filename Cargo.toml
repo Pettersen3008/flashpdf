@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/flashpdf-core", "crates/flashpdf-napi", "crates/flashpdf-wasm"]
+members = ["crates/flashpdf-core", "crates/flashpdf-wasm"]
 resolver = "2"
 
 [profile.release]

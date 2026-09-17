@@ -58,6 +58,7 @@ export type TextChildren =
 	| undefined
 	| readonly TextChildren[];
 export type CommonProps = {
+	key?: string | number | undefined;
 	id?: string | undefined;
 	className?: string | undefined;
 	style?: StyleInput | undefined;
