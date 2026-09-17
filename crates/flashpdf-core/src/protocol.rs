@@ -10,7 +10,7 @@ pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 #[derive(Default)]
 pub struct Decoder {
@@ -173,13 +173,23 @@ impl Decoder {
                     pt(cursor.nonnegative_f32("padding bottom")?)?,
                     pt(cursor.nonnegative_f32("padding left")?)?,
                 ];
-                let border = pt(cursor.nonnegative_f32("border width")?)?;
+                let border = [
+                    pt(cursor.nonnegative_f32("border top width")?)?,
+                    pt(cursor.nonnegative_f32("border right width")?)?,
+                    pt(cursor.nonnegative_f32("border bottom width")?)?,
+                    pt(cursor.nonnegative_f32("border left width")?)?,
+                ];
                 let background = match cursor.take(1)?[0] {
                     0 => None,
                     1 => Some(cursor.take(3)?.try_into().unwrap()),
                     _ => return Err("invalid background".into()),
                 };
-                let border_color = cursor.take(3)?.try_into().unwrap();
+                let border_color = [
+                    cursor.take(3)?.try_into().unwrap(),
+                    cursor.take(3)?.try_into().unwrap(),
+                    cursor.take(3)?.try_into().unwrap(),
+                    cursor.take(3)?.try_into().unwrap(),
+                ];
                 cursor.done()?;
                 self.open(
                     Frame::Box,
@@ -483,11 +493,11 @@ mod tests {
 
     fn box_start() -> Vec<u8> {
         let mut payload = Vec::new();
-        for _ in 0..9 {
+        for _ in 0..12 {
             payload.extend(0.0_f32.to_le_bytes());
         }
         payload.extend([1, 0xee, 0xee, 0xee]);
-        payload.extend([0, 0, 0]);
+        payload.extend([0, 0, 0].repeat(4));
         record(17, &payload)
     }
 
@@ -593,7 +603,7 @@ mod tests {
         assert_eq!(push_error(&bad_magic), "invalid magic");
 
         let mut bad_version = representative();
-        bad_version[4..6].copy_from_slice(&2_u16.to_le_bytes());
+        bad_version[4..6].copy_from_slice(&1_u16.to_le_bytes());
         assert_eq!(push_error(&bad_version), "unknown version");
 
         let mut unknown = header(VERSION, 120.0, 60.0, 10.0);

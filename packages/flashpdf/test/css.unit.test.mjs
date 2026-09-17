@@ -31,6 +31,10 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 	}
 });
 
+test("given repeated comment markers, when parsing a stylesheet, then rejects without backtracking", () => {
+	assert.throws(() => stylesheet(`/*${"a/*".repeat(10_000)}`), /invalid CSS stylesheet/);
+});
+
 test("given bounded CSS variables, when resolving styles, then rejects cycles and oversized expansion", () => {
 	const element = jsx("main", {
 		style: { "--x": "var(--x)var(--x)", color: "var(--x)" },
@@ -96,12 +100,14 @@ test("given cascading shorthands, selector whitespace, and transparent paint, wh
 	assert.deepEqual(boxStyle(style(reordered.props.style), 12).margin, [3, 2, 2, 2]);
 	assert.equal(boxStyle(style({ background: "transparent" }), 12).background, undefined);
 	// A colour the border shorthand does not hardcode still reaches `color`.
-	assert.deepEqual(
-		boxStyle(style({ border: "1pt solid #336699" }), 12).borderColor,
+	assert.deepEqual(boxStyle(style({ border: "1pt solid #336699" }), 12).borderColor, [
 		[0x33, 0x66, 0x99],
-	);
-	assert.equal(boxStyle(style({ border: "1pt solid transparent" }), 12).border, 0);
-	assert.equal(boxStyle(style({ border: "none" }), 12).border, 0);
+		[0x33, 0x66, 0x99],
+		[0x33, 0x66, 0x99],
+		[0x33, 0x66, 0x99],
+	]);
+	assert.deepEqual(boxStyle(style({ border: "1pt solid transparent" }), 12).border, [0, 0, 0, 0]);
+	assert.deepEqual(boxStyle(style({ border: "none" }), 12).border, [0, 0, 0, 0]);
 	assert.throws(() => boxStyle(style({ border: "1pt solid gray" }), 12), /unsupported color: gray/);
 	assert.throws(
 		() => style({ color: "transparent" }) && color("transparent"),

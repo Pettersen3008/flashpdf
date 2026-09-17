@@ -57,9 +57,9 @@ pub enum TextAlign {
 pub struct BoxStyle {
     pub margin: [Pt; 4],
     pub padding: [Pt; 4],
-    pub border: Pt,
+    pub border: [Pt; 4],
     pub background: Option<[u8; 3]>,
-    pub border_color: [u8; 3],
+    pub border_color: [[u8; 3]; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
