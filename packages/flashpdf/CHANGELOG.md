@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1 - 2026-09-17
+
+### Changed
+- FlashPDF owns its JSX runtime and no longer requires React. Use `jsxImportSource: "@pettersen3008/flashpdf"` or the per-file pragma; React-created host-element trees remain supported.
+
 ## 0.1.0 - 2026-09-16
 
 ### Added

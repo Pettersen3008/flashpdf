@@ -1,6 +1,7 @@
 import { object, text } from "./assert.js";
 
 const REACT_FRAGMENT = Symbol.for("react.fragment");
+const FLASHPDF_FRAGMENT = Symbol.for("flashpdf.fragment");
 const REACT_MEMO = Symbol.for("react.memo");
 const REACT_FORWARD_REF = Symbol.for("react.forward_ref");
 
@@ -44,7 +45,8 @@ export async function reactTree(value: unknown, depth = 0): Promise<unknown> {
 	const node = object(value);
 	if (!("type" in node) || !("props" in node)) return value;
 	const p = object(node.props);
-	if (node.type === REACT_FRAGMENT) return reactTree(p.children, depth + 1);
+	if (node.type === REACT_FRAGMENT || node.type === FLASHPDF_FRAGMENT)
+		return reactTree(p.children, depth + 1);
 	const render = component(node.type);
 	if (render) return reactTree(await render(p), depth + 1);
 	return {

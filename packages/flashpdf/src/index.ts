@@ -1,15 +1,14 @@
-import type { ReactElement } from "react";
-
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { object, props, number } from "./assert.js";
 import { Binary } from "./binary.js";
 import { resolveStyles } from "./css.js";
+import type { Element } from "./element.js";
 import { registerFonts } from "./fonts.js";
 import { lower } from "./lower.js";
 import { reactTree, children } from "./tree.js";
 import { loadWasm } from "./wasm.js";
 
-export type { Style } from "./element.js";
+export type { Element, Style } from "./element.js";
 export { stylesheet } from "./css.js";
 
 export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array };
@@ -21,7 +20,7 @@ export type RenderOptions = {
 };
 
 export async function render(
-	document: ReactElement | Iterable<ReactElement>,
+	document: Element | Iterable<Element>,
 	options?: RenderOptions,
 ): Promise<Uint8Array> {
 	const tree = await reactTree(document);

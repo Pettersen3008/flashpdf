@@ -30,4 +30,12 @@ export type Style = {
 	[customProperty: `--${string}`]: string | number | undefined;
 };
 
+export type StyleInput = { [Property in keyof Style]: Style[Property] | undefined };
+
 export type Element = { readonly type: unknown; readonly props: unknown };
+export type PdfProps = {
+	children?: unknown | undefined;
+	className?: string | undefined;
+	style?: StyleInput | undefined;
+	[name: string]: unknown;
+};
