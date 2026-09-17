@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 - 2026-09-17
+
+### Changed
+
+- JSX input now resolves through typed host and styled nodes before protocol compilation. This keeps React-compatible input validation at the public boundary and preserves the documented `render` and CSS APIs.
+
+### Removed
+
+- The unexported N-API backend and its native package artifact. FlashPDF now uses its WASM renderer in browsers, Node, and Bun.
+
 ## 0.2.0 - 2026-09-17
 
 ### Added
