@@ -1,4 +1,5 @@
 import { object, text } from "./assert.js";
+import type { NormalizedStyle } from "./style.js";
 
 const REACT_FRAGMENT = Symbol.for("react.fragment");
 const FLASHPDF_FRAGMENT = Symbol.for("flashpdf.fragment");
@@ -99,9 +100,9 @@ export function* children(value: unknown, depth = 0): Generator<unknown> {
 
 /** `width` and `flex` size a flex row's columns; anywhere else they would be
  *  silently dropped, so they are rejected instead. */
-export function rowOnly(s: Record<string, unknown>, tag: string, inRow: boolean) {
+export function rowOnly(s: NormalizedStyle, tag: string, inRow: boolean) {
 	if (inRow) return;
-	for (const key of ["width", "flex"])
+	for (const key of ["width", "flex"] as const)
 		if (s[key] !== undefined)
 			throw new Error(`${key} applies only to a flex row child, not <${tag}>`);
 }

@@ -1,7 +1,21 @@
 import { object, number } from "./assert.js";
 import { supported, unsupported } from "./css.js";
+import type { Length, StyleInput } from "./element.js";
 
-export function style(value: unknown, tag = ""): Record<string, unknown> {
+export type NormalizedStyle = StyleInput & {
+	borderTopWidth?: Length;
+	borderRightWidth?: Length;
+	borderBottomWidth?: Length;
+	borderLeftWidth?: Length;
+	borderTopColor?: string;
+	borderRightColor?: string;
+	borderBottomColor?: string;
+	borderLeftColor?: string;
+};
+
+const SIDES = ["Top", "Right", "Bottom", "Left"] as const;
+
+export function style(value: unknown, tag = ""): NormalizedStyle {
 	if (value === undefined) return {};
 	const where = tag && ` on <${tag}>`;
 	const result = object(value);
@@ -67,11 +81,11 @@ function edgeValues(value: unknown, name: "margin" | "padding"): unknown[] {
 				: values;
 }
 
-function normalize(value: Record<string, unknown>) {
+function normalize(value: Record<string, unknown>): NormalizedStyle {
 	const result: Record<string, unknown> = {};
 	for (const [key, item] of Object.entries(value)) {
 		if (key === "margin" || key === "padding") {
-			for (const [index, side] of ["Top", "Right", "Bottom", "Left"].entries())
+			for (const [index, side] of SIDES.entries())
 				result[`${key}${side}`] = edgeValues(item, key)[index];
 			continue;
 		}
@@ -89,7 +103,7 @@ function normalize(value: Record<string, unknown>) {
 		}
 		result[key] = item;
 	}
-	return result;
+	return result as NormalizedStyle;
 }
 
 const BORDER_STYLE = /^(?:none|hidden|dotted|dashed|solid|double|groove|ridge|inset|outset)$/;
@@ -138,7 +152,7 @@ export type Box = {
 };
 
 export function edges(
-	s: Record<string, unknown>,
+	s: NormalizedStyle,
 	name: "margin" | "padding",
 	parent: number,
 ): [number, number, number, number] {
@@ -155,12 +169,12 @@ export function edges(
 					: values.length === 4
 						? values
 						: [0, 0, 0, 0];
-	return ["Top", "Right", "Bottom", "Left"].map((side, index) =>
+	return SIDES.map((side, index) =>
 		s[`${name}${side}`] === undefined ? expanded[index] : point(s[`${name}${side}`], parent),
 	) as [number, number, number, number];
 }
 
-export function boxStyle(s: Record<string, unknown>, parent: number): Box | undefined {
+export function boxStyle(s: NormalizedStyle, parent: number): Box | undefined {
 	const hasBox = [
 		"margin",
 		"marginTop",
@@ -189,14 +203,14 @@ export function boxStyle(s: Record<string, unknown>, parent: number): Box | unde
 		"borderLeftColor",
 		"background",
 		"backgroundColor",
-	].some((key) => s[key] !== undefined);
+	].some((key) => s[key as keyof NormalizedStyle] !== undefined);
 	if (!hasBox) return undefined;
-	const border = ["Top", "Right", "Bottom", "Left"].map((side) => {
+	const border = SIDES.map((side) => {
 		const width = s[`border${side}Width`] ?? s.borderWidth;
 		const paint = s[`border${side}Color`] ?? s.borderColor;
 		return paint === "transparent" || width === undefined ? 0 : point(width, parent);
 	}) as Box["border"];
-	const borderColor = ["Top", "Right", "Bottom", "Left"].map((side) => {
+	const borderColor = SIDES.map((side) => {
 		const paint = s[`border${side}Color`] ?? s.borderColor;
 		return paint === "transparent" || paint === undefined ? [0, 0, 0] : color(paint);
 	}) as Box["borderColor"];
@@ -252,7 +266,7 @@ export type FontSlots = { regular: number; bold?: number | undefined };
 export const helvetica: FontSlots = { regular: 0, bold: 1 };
 
 export function font(
-	s: Record<string, unknown>,
+	s: NormalizedStyle,
 	inherited: FontSlots,
 	inheritedBold: boolean,
 	fonts: ReadonlyMap<string, FontSlots>,

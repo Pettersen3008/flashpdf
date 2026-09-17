@@ -1,5 +1,5 @@
 import { object, props, text } from "./assert.js";
-import type { Binary } from "./binary.js";
+import type { ProtocolWriter } from "./protocol.js";
 import {
 	style,
 	point,
@@ -10,6 +10,7 @@ import {
 	helvetica,
 	type Box,
 	type FontSlots,
+	type NormalizedStyle,
 } from "./style.js";
 import { children, scalarText, rowOnly } from "./tree.js";
 
@@ -33,7 +34,7 @@ const ROOT: Inherited = {
 /** Resolves a child's inherited text/font state once; the flex-row, avoid-break
  *  wrapper, block-flow, and leaf-text branches below all share this. */
 function nextInherited(
-	s: Record<string, unknown>,
+	s: NormalizedStyle,
 	current: Inherited,
 	fonts: ReadonlyMap<string, FontSlots>,
 ): StyleContext {
@@ -48,31 +49,19 @@ function nextInherited(
 }
 
 function emitText(
-	binary: Binary,
+	writer: ProtocolWriter,
 	size: number,
 	value: string,
 	align: string,
 	paint: [number, number, number],
 	fontIndex: number,
 ) {
-	if (align === "left" && paint[0] === 0 && paint[1] === 0 && paint[2] === 0 && fontIndex === 0)
-		binary.record(1, () => {
-			binary.f32(size);
-			binary.text(value);
-		});
-	else
-		binary.record(16, () => {
-			binary.f32(size);
-			binary.u8(align === "center" ? 1 : align === "right" ? 2 : 0);
-			for (const channel of paint) binary.u8(channel);
-			binary.u8(fontIndex);
-			binary.text(value);
-		});
+	writer.text({ value, size, align, color: paint, font: fontIndex });
 }
 
 function emitBreak(
-	binary: Binary,
-	s: Record<string, unknown>,
+	writer: ProtocolWriter,
+	s: NormalizedStyle,
 	key: "breakBefore" | "breakAfter",
 	depth: number,
 ) {
@@ -81,23 +70,14 @@ function emitBreak(
 		throw new Error(
 			`nested ${key === "breakBefore" ? "break-before" : "break-after"} is not implemented`,
 		);
-	binary.record(7);
+	writer.pageBreak();
 }
 
-function withBox(binary: Binary, box: Box | undefined, tag: string, body: () => void) {
-	if (box)
-		binary.record(17, () => {
-			for (const edge of [...box.margin, ...box.padding]) binary.f32(edge);
-			for (const edge of box.border) binary.f32(edge);
-			if (box.background) {
-				binary.u8(1);
-				for (const channel of box.background) binary.u8(channel);
-			} else binary.u8(0);
-			for (const edge of box.borderColor) for (const channel of edge) binary.u8(channel);
-		});
+function withBox(writer: ProtocolWriter, box: Box | undefined, tag: string, body: () => void) {
+	if (box) writer.boxStart(box);
 	try {
 		body();
-		if (box) binary.record(18);
+		if (box) writer.boxEnd();
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		if (box && message === "PageOverflow")
@@ -151,7 +131,7 @@ function verticalMargin(box: Box | undefined) {
 
 export function lower(
 	value: unknown,
-	binary: Binary,
+	writer: ProtocolWriter,
 	fonts: ReadonlyMap<string, FontSlots>,
 	inherited: Inherited = ROOT,
 	depth = 0,
@@ -159,7 +139,7 @@ export function lower(
 	for (const child of children(value)) {
 		if (typeof child === "string" || typeof child === "number") {
 			emitText(
-				binary,
+				writer,
 				inherited.size,
 				text(child),
 				inherited.align,
@@ -179,7 +159,7 @@ export function lower(
 				const p = props(node.props, ["children", "style"]);
 				const s = style(p.style, node.type);
 				rowOnly(s, node.type, inherited.inRow);
-				emitBreak(binary, s, "breakBefore", depth);
+				emitBreak(writer, s, "breakBefore", depth);
 				const items =
 					s.display === "flex" && (s.flexDirection ?? "row") === "row"
 						? [...children(p.children)]
@@ -187,33 +167,26 @@ export function lower(
 				const next = nextInherited(s, inherited, fonts);
 				const box = boxStyle(s, next.size);
 				const streamMargin = verticalMargin(box) && !inherited.inRow && s.breakInside !== "avoid";
-				if (streamMargin && box!.margin[0]) binary.record(2, () => binary.f32(box!.margin[0]));
-				withBox(binary, streamMargin ? undefined : box, node.type, () => {
+				if (streamMargin && box!.margin[0]) writer.spacer(box!.margin[0]);
+				withBox(writer, streamMargin ? undefined : box, node.type, () => {
 					if (items && items.length) {
 						if (s.gap !== undefined && point(s.gap, next.size) !== 0)
 							throw new Error("row gap is not implemented");
-						binary.record(5, () => {
-							binary.u16(items.length);
-							for (const item of items) {
-								const column = nativeColumn(item);
-								binary.u8(column.kind);
-								binary.f32(column.value);
-							}
-						});
+						writer.rowStart(items.map(nativeColumn));
 						for (const item of items)
-							lower(item, binary, fonts, { ...next, inRow: true }, depth + 1);
-						binary.record(6);
+							lower(item, writer, fonts, { ...next, inRow: true }, depth + 1);
+						writer.rowEnd();
 					} else if (inherited.inRow || s.breakInside === "avoid") {
-						binary.record(3, () => binary.f32(s.gap === undefined ? 0 : point(s.gap, next.size)));
-						lower(p.children, binary, fonts, { ...next, inRow: false }, depth + 1);
-						binary.record(4);
+						writer.stackStart(s.gap === undefined ? 0 : point(s.gap, next.size));
+						lower(p.children, writer, fonts, { ...next, inRow: false }, depth + 1);
+						writer.stackEnd();
 					} else {
 						// Block children are independent renderer blocks, so normal document
 						// flow can advance pages without retaining a whole <main> in memory.
 						const blocks = [...children(p.children)];
 						const gap = s.gap === undefined ? 0 : point(s.gap, next.size);
 						for (let index = 0; index < blocks.length; index++) {
-							if (index && gap) binary.record(2, () => binary.f32(gap));
+							if (index && gap) writer.spacer(gap);
 							const inline = inlineText(blocks[index], { ...next, inRow: false }, fonts);
 							if (inline !== undefined) {
 								let value = inline;
@@ -224,7 +197,7 @@ export function lower(
 								}
 								if (index < blocks.length) index--;
 								emitText(
-									binary,
+									writer,
 									next.size,
 									value,
 									next.align,
@@ -233,12 +206,12 @@ export function lower(
 								);
 								continue;
 							}
-							lower(blocks[index], binary, fonts, { ...next, inRow: false }, depth);
+							lower(blocks[index], writer, fonts, { ...next, inRow: false }, depth);
 						}
 					}
 				});
-				if (streamMargin && box!.margin[2]) binary.record(2, () => binary.f32(box!.margin[2]));
-				emitBreak(binary, s, "breakAfter", depth);
+				if (streamMargin && box!.margin[2]) writer.spacer(box!.margin[2]);
+				emitBreak(writer, s, "breakAfter", depth);
 				break;
 			}
 			case "span":
@@ -252,12 +225,12 @@ export function lower(
 				const p = props(node.props, ["children", "style"]);
 				const s = style(p.style, node.type);
 				rowOnly(s, node.type, inherited.inRow);
-				emitBreak(binary, s, "breakBefore", depth);
+				emitBreak(writer, s, "breakBefore", depth);
 				const next = nextInherited(s, inherited, fonts);
 				const box = boxStyle(s, next.size);
-				withBox(binary, box, node.type, () => {
+				withBox(writer, box, node.type, () => {
 					emitText(
-						binary,
+						writer,
 						next.size,
 						scalarText(p.children),
 						next.align,
@@ -265,7 +238,7 @@ export function lower(
 						next.bold ? next.family.bold! : next.family.regular,
 					);
 				});
-				emitBreak(binary, s, "breakAfter", depth);
+				emitBreak(writer, s, "breakAfter", depth);
 				break;
 			}
 			case "hr": {
@@ -280,7 +253,7 @@ export function lower(
 					style(rule ? { ...s, borderBottom: "1pt solid black" } : s),
 					next.size,
 				)!;
-				withBox(binary, box, node.type, () => {});
+				withBox(writer, box, node.type, () => {});
 				break;
 			}
 			default:

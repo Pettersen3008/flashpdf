@@ -34,7 +34,7 @@ impl PdfRenderer {
         self.decoder
             .add_font(bytes.to_vec())
             .map(u32::from)
-            .map_err(error)
+            .map_err(|value| error(value.to_string()))
     }
 
     /// `chunk` stays borrowed for this synchronous call. The decoder copies
@@ -44,7 +44,9 @@ impl PdfRenderer {
         if chunk.len() > INPUT_CAPACITY {
             return Err(error("input exceeds window"));
         }
-        self.decoder.push(&chunk).map_err(error)
+        self.decoder
+            .push(&chunk)
+            .map_err(|value| error(value.to_string()))
     }
 
     #[napi]
@@ -52,7 +54,7 @@ impl PdfRenderer {
         std::mem::take(&mut self.decoder)
             .finish()
             .map(Buffer::from)
-            .map_err(error)
+            .map_err(|value| error(value.to_string()))
     }
 }
 

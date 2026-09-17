@@ -1,7 +1,7 @@
 use pdf_writer::{types::FontFlags, Content, Finish, Name, Pdf, Rect, Ref};
 
 use crate::font::{font_name, Font};
-use crate::{Page, HELVETICA_BOLD};
+use crate::{FontId, Page, HELVETICA_BOLD};
 
 /// Appends a page and returns its body cursor.
 pub(crate) fn start_page(page: Page, contents: &mut Vec<Content>) -> f32 {
@@ -15,20 +15,17 @@ pub(crate) fn finish_pdf(
     fonts: Vec<Font>,
     used_fonts: Vec<bool>,
 ) -> Vec<u8> {
-    let used: Vec<u8> = (0..fonts.len())
+    let used: Vec<FontId> = (0..fonts.len())
         .filter(|slot| used_fonts[*slot])
-        .map(|slot| slot as u8)
+        .map(|slot| FontId::new(slot as u8))
         .collect();
     let capacity = contents
         .iter()
         .map(Content::len)
-        .chain(
-            used.iter()
-                .filter_map(|slot| match &fonts[usize::from(*slot)] {
-                    Font::Embedded(font) => Some(font.bytes.len()),
-                    Font::Helvetica { .. } => None,
-                }),
-        )
+        .chain(used.iter().filter_map(|slot| match &fonts[slot.index()] {
+            Font::Embedded(font) => Some(font.bytes.len()),
+            Font::Helvetica { .. } => None,
+        }))
         .try_fold(8 * 1024_usize, |total, length| total.checked_add(length));
     let mut pdf = capacity
         .map(|capacity| Pdf::with_capacity(capacity.max(8 * 1024)))
@@ -45,7 +42,7 @@ pub(crate) fn finish_pdf(
         reference
     };
     struct FontRefs {
-        slot: u8,
+        slot: FontId,
         font: Ref,
         descriptor: Option<Ref>,
         file: Option<Ref>,
@@ -54,7 +51,7 @@ pub(crate) fn finish_pdf(
         .iter()
         .map(|slot| {
             let font = allocate();
-            let embedded = matches!(fonts[usize::from(*slot)], Font::Embedded(_));
+            let embedded = matches!(fonts[slot.index()], Font::Embedded(_));
             FontRefs {
                 slot: *slot,
                 font,
@@ -71,7 +68,7 @@ pub(crate) fn finish_pdf(
     pdf.pages(pages).kids(page_refs.clone()).count(count as i32);
 
     for refs in &font_refs {
-        match &fonts[usize::from(refs.slot)] {
+        match &fonts[refs.slot.index()] {
             Font::Helvetica { .. } => {
                 pdf.type1_font(refs.font)
                     .base_font(Name(if refs.slot == HELVETICA_BOLD {
@@ -82,7 +79,7 @@ pub(crate) fn finish_pdf(
                     .encoding_predefined(Name(b"WinAnsiEncoding"));
             }
             Font::Embedded(font) => {
-                let name = format!("FlashPDF{}", refs.slot);
+                let name = format!("FlashPDF{}", refs.slot.slot());
                 let mut output = pdf.indirect(refs.font).dict();
                 output.pair(Name(b"Type"), Name(b"Font"));
                 output.pair(Name(b"Subtype"), Name(b"TrueType"));

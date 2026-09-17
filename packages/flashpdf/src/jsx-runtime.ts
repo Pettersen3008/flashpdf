@@ -1,4 +1,4 @@
-import type { Element, PdfProps } from "./element.js";
+import type { BlockProps, Element, HrProps, PdfProps, TextProps } from "./element.js";
 
 export const Fragment = Symbol.for("flashpdf.fragment");
 
@@ -20,6 +20,20 @@ export namespace JSX {
 		key?: string | number;
 	}
 	export interface IntrinsicElements {
-		[element: string]: PdfProps;
+		main: BlockProps;
+		div: BlockProps;
+		section: BlockProps;
+		article: BlockProps;
+		header: BlockProps;
+		footer: BlockProps;
+		p: TextProps;
+		span: TextProps;
+		h1: TextProps;
+		h2: TextProps;
+		h3: TextProps;
+		h4: TextProps;
+		h5: TextProps;
+		h6: TextProps;
+		hr: HrProps;
 	}
 }

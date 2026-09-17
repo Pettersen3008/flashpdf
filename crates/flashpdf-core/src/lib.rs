@@ -11,7 +11,10 @@ pub use layout::{render, Renderer};
 pub use model::*;
 #[cfg(test)]
 mod tests {
-    use super::{Command, Page, Pt, RenderError};
+    use super::{
+        Command, Edges, Fraction as FractionValue, Page, Percent as PercentValue, Pt, RenderError,
+        Rgb, TextStyle,
+    };
 
     #[test]
     fn given_valid_commands_when_rendered_then_pdf_is_valid_and_deterministic() {
@@ -36,7 +39,7 @@ mod tests {
                 narrow_page,
                 &[Command::Text {
                     text: "WW",
-                    size: Pt::new(30.0).unwrap(),
+                    style: TextStyle::plain(Pt::new(30.0).unwrap()),
                 }]
             ),
             Err(RenderError::TextTooWide)
@@ -46,7 +49,7 @@ mod tests {
                 Page::A4,
                 &[Command::Text {
                     text: "\u{1f642}",
-                    size: Pt::new(12.0).unwrap(),
+                    style: TextStyle::plain(Pt::new(12.0).unwrap()),
                 }]
             ),
             Err(RenderError::UnsupportedCharacter('\u{1f642}'))
@@ -55,17 +58,17 @@ mod tests {
         let commands = [
             Command::Text {
                 text: "First \u{20ac}",
-                size: Pt::new(14.0).unwrap(),
+                style: TextStyle::plain(Pt::new(14.0).unwrap()),
             },
             Command::Spacer(Pt::new(12.0).unwrap()),
             Command::Text {
                 text: "After spacer",
-                size: Pt::new(10.0).unwrap(),
+                style: TextStyle::plain(Pt::new(10.0).unwrap()),
             },
             Command::PageBreak,
             Command::Text {
                 text: "Second page",
-                size: Pt::new(12.0).unwrap(),
+                style: TextStyle::plain(Pt::new(12.0).unwrap()),
             },
         ];
         let bytes = super::render(Page::A4, &commands).unwrap();
@@ -103,7 +106,7 @@ mod tests {
     fn text(text: &str) -> Command<'_> {
         Command::Text {
             text,
-            size: Pt(10.0),
+            style: TextStyle::plain(Pt(10.0)),
         }
     }
 
@@ -190,7 +193,11 @@ mod tests {
     #[test]
     fn given_columns_when_wrapped_then_pdf_has_measured_positions_and_deterministic_bytes() {
         use super::ColumnWidth::{Fixed, Fraction};
-        let columns = [Fixed(Pt(20.0)), Fraction(Pt(1.0)), Fraction(Pt(3.0))];
+        let columns = [
+            Fixed(Pt(20.0)),
+            Fraction(FractionValue::new(1.0).unwrap()),
+            Fraction(FractionValue::new(3.0).unwrap()),
+        ];
         let commands = [
             Command::RowStart { columns: &columns },
             Command::StackStart { gap: Pt(0.0) },
@@ -225,7 +232,10 @@ mod tests {
     #[test]
     fn given_percent_and_fraction_columns_when_measured_then_percent_uses_row_width() {
         use super::ColumnWidth::{Fraction, Percent};
-        let columns = [Percent(Pt(50.0)), Fraction(Pt(1.0))];
+        let columns = [
+            Percent(PercentValue::new(50.0).unwrap()),
+            Fraction(FractionValue::new(1.0).unwrap()),
+        ];
         let pdf = parsed(&[
             Command::RowStart { columns: &columns },
             text("left"),
@@ -240,7 +250,10 @@ mod tests {
     #[test]
     fn given_percent_columns_totalling_one_hundred_when_rounded_then_accepts_them() {
         use super::ColumnWidth::Percent;
-        let columns = [Percent(Pt(0.1)), Percent(Pt(99.9))];
+        let columns = [
+            Percent(PercentValue::new(0.1).unwrap()),
+            Percent(PercentValue::new(99.9).unwrap()),
+        ];
         assert_eq!(
             parsed(&[
                 Command::RowStart { columns: &columns },
@@ -257,14 +270,14 @@ mod tests {
     #[test]
     fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint() {
         let red = super::BoxStyle {
-            margin: [Pt(0.0); 4],
-            padding: [Pt(1.0); 4],
-            border: [Pt(0.0); 4],
-            background: Some([255, 0, 0]),
-            border_color: [[0, 0, 0]; 4],
+            margin: Edges::all(Pt(0.0)),
+            padding: Edges::all(Pt(1.0)),
+            border: Edges::all(Pt(0.0)),
+            background: Some(Rgb { r: 255, g: 0, b: 0 }),
+            border_color: Edges::all(Rgb::BLACK),
         };
         let blue = super::BoxStyle {
-            background: Some([0, 0, 255]),
+            background: Some(Rgb { r: 0, g: 0, b: 255 }),
             ..red
         };
         let pdf = parsed(&[
@@ -325,13 +338,6 @@ mod tests {
             ],
             vec![
                 Command::RowStart {
-                    columns: &[Fraction(Pt(0.0))],
-                },
-                text("x"),
-                Command::RowEnd,
-            ],
-            vec![
-                Command::RowStart {
                     columns: &[Fixed(Pt(20.0))],
                 },
                 Command::RowEnd,
@@ -350,7 +356,8 @@ mod tests {
                 Err(RenderError::InvalidLayout)
             );
         }
-        let too_many = [Fraction(Pt(1.0)); 257];
+        assert_eq!(FractionValue::new(0.0), Err(RenderError::InvalidLayout));
+        let too_many = [Fraction(FractionValue::new(1.0).unwrap()); 257];
         assert_eq!(
             super::render(page(), &[Command::RowStart { columns: &too_many }]),
             Err(RenderError::InvalidLayout)

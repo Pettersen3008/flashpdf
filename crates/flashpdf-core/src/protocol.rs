@@ -3,7 +3,8 @@
 //! Adapters own transport only. Every value is validated here before it becomes
 //! a domain type, so the WASM and N-API bindings cannot diverge.
 
-use crate::OwnedCommand;
+use crate::font::valid_win_ansi;
+use crate::{Edges, FontId, Fraction, OwnedCommand, Percent, Rgb, TextAlign, TextStyle};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -11,6 +12,117 @@ const MAX_RECORD: usize = 64 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
 const VERSION: u16 = 2;
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum Opcode {
+    Text = 1,
+    Spacer = 2,
+    StackStart = 3,
+    StackEnd = 4,
+    RowStart = 5,
+    RowEnd = 6,
+    PageBreak = 7,
+    StyledText = 16,
+    BoxStart = 17,
+    BoxEnd = 18,
+    End = 255,
+}
+
+impl TryFrom<u8> for Opcode {
+    type Error = ProtocolError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(match value {
+            1 => Self::Text,
+            2 => Self::Spacer,
+            3 => Self::StackStart,
+            4 => Self::StackEnd,
+            5 => Self::RowStart,
+            6 => Self::RowEnd,
+            7 => Self::PageBreak,
+            16 => Self::StyledText,
+            17 => Self::BoxStart,
+            18 => Self::BoxEnd,
+            255 => Self::End,
+            _ => return Err(ProtocolError::UnknownOpcode),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum ProtocolError {
+    FontsAfterDocument,
+    TooManyFonts,
+    InvalidFont(String),
+    DataAfterEnd,
+    RecordTooLarge,
+    InvalidMagic,
+    UnknownVersion,
+    InvalidNesting,
+    InvalidTextAlignment,
+    UnknownFont,
+    InvalidBackground,
+    EmptyDocument,
+    UnknownOpcode,
+    MissingHeader,
+    NestingTooDeep,
+    RowCellCountMismatch,
+    TruncatedProtocol,
+    InvalidLength,
+    TruncatedRecord,
+    InvalidStringLength,
+    InvalidUtf8,
+    UnsupportedWinAnsi,
+    InvalidColumnCount,
+    InvalidColumnKind,
+    InvalidRecordLength,
+    InvalidValue(&'static str),
+    Render(crate::RenderError),
+}
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self {
+            Self::FontsAfterDocument => "fonts must be registered before document",
+            Self::TooManyFonts => "too many fonts",
+            Self::InvalidFont(message) => return formatter.write_str(message),
+            Self::DataAfterEnd => "data after end",
+            Self::RecordTooLarge => "record too large",
+            Self::InvalidMagic => "invalid magic",
+            Self::UnknownVersion => "unknown version",
+            Self::InvalidNesting => "invalid nesting",
+            Self::InvalidTextAlignment => "invalid text alignment",
+            Self::UnknownFont => "unknown font",
+            Self::InvalidBackground => "invalid background",
+            Self::EmptyDocument => "empty document",
+            Self::UnknownOpcode => "unknown opcode",
+            Self::MissingHeader => "missing header",
+            Self::NestingTooDeep => "nesting exceeds 64",
+            Self::RowCellCountMismatch => "row cell count mismatch",
+            Self::TruncatedProtocol => "truncated protocol",
+            Self::InvalidLength => "invalid length",
+            Self::TruncatedRecord => "truncated record",
+            Self::InvalidStringLength => "invalid string length",
+            Self::InvalidUtf8 => "invalid UTF-8",
+            Self::UnsupportedWinAnsi => "unsupported WinAnsi character",
+            Self::InvalidColumnCount => "invalid column count",
+            Self::InvalidColumnKind => "invalid column kind",
+            Self::InvalidRecordLength => "invalid record length",
+            Self::InvalidValue(name) => return write!(formatter, "invalid {name}"),
+            Self::Render(error) => return write!(formatter, "{error:?}"),
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl std::error::Error for ProtocolError {}
+
+impl From<crate::RenderError> for ProtocolError {
+    fn from(error: crate::RenderError) -> Self {
+        Self::Render(error)
+    }
+}
 
 #[derive(Default)]
 pub struct Decoder {
@@ -33,21 +145,21 @@ enum Frame {
 impl Decoder {
     /// Font files bypass the bounded document window because a whole TTF must
     /// remain available until the PDF's font stream is written.
-    pub fn add_font(&mut self, bytes: Vec<u8>) -> Result<u8, String> {
+    pub fn add_font(&mut self, bytes: Vec<u8>) -> Result<u8, ProtocolError> {
         if self.page.is_some() {
-            return Err("fonts must be registered before document".into());
+            return Err(ProtocolError::FontsAfterDocument);
         }
         if self.fonts.len() >= 254 {
-            return Err("too many fonts".into());
+            return Err(ProtocolError::TooManyFonts);
         }
         self.fonts
-            .push(crate::EmbeddedFont::parse(bytes).map_err(|error| error.to_string())?);
+            .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
         Ok((self.fonts.len() + 1) as u8)
     }
 
-    pub fn push(&mut self, bytes: &[u8]) -> Result<(), String> {
+    pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
         if self.ended && !bytes.is_empty() {
-            return Err("data after end".into());
+            return Err(ProtocolError::DataAfterEnd);
         }
         self.pending.extend_from_slice(bytes);
         let mut pending = std::mem::take(&mut self.pending);
@@ -67,7 +179,7 @@ impl Decoder {
                 }
                 let length = u32::from_le_bytes(remaining[1..5].try_into().unwrap()) as usize;
                 if length > MAX_RECORD {
-                    return Err("record too large".into());
+                    return Err(ProtocolError::RecordTooLarge);
                 }
                 let total = 5 + length;
                 if remaining.len() < total {
@@ -87,48 +199,47 @@ impl Decoder {
         result
     }
 
-    fn read_header(&mut self, bytes: &[u8]) -> Result<(), String> {
+    fn read_header(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
         if &bytes[..4] != MAGIC {
-            return Err("invalid magic".into());
+            return Err(ProtocolError::InvalidMagic);
         }
         if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != VERSION {
-            return Err("unknown version".into());
+            return Err(ProtocolError::UnknownVersion);
         }
         let width = positive_f32(&bytes[6..10], "page width")?;
         let height = positive_f32(&bytes[10..14], "page height")?;
         let margin = nonnegative_f32(&bytes[14..18], "margin")?;
-        self.page =
-            Some(crate::Page::new(pt(width)?, pt(height)?, pt(margin)?).map_err(render_error)?);
+        self.page = Some(crate::Page::new(pt(width)?, pt(height)?, pt(margin)?)?);
         Ok(())
     }
 
-    fn read_record(&mut self, opcode: u8, payload: &[u8]) -> Result<(), String> {
+    fn read_record(&mut self, opcode: u8, payload: &[u8]) -> Result<(), ProtocolError> {
         if self.ended {
-            return Err("data after end".into());
+            return Err(ProtocolError::DataAfterEnd);
         }
         let mut cursor = Cursor::new(payload);
-        match opcode {
-            1 => {
+        match Opcode::try_from(opcode)? {
+            Opcode::Text => {
                 let size = pt(cursor.positive_f32("font size")?)?;
                 let text = cursor.text()?.to_owned();
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Text(text, size))
+                self.layout_command(OwnedCommand::Text(text, TextStyle::plain(size)))
             }
-            2 => {
+            Opcode::Spacer => {
                 let space = pt(cursor.nonnegative_f32("spacer")?)?;
                 cursor.done()?;
                 self.layout_command(OwnedCommand::Spacer(space))
             }
-            3 => {
+            Opcode::StackStart => {
                 let gap = pt(cursor.nonnegative_f32("stack gap")?)?;
                 cursor.done()?;
                 self.open(Frame::Stack, OwnedCommand::StackStart(gap))
             }
-            4 => {
+            Opcode::StackEnd => {
                 cursor.done()?;
                 self.close(false, OwnedCommand::StackEnd)
             }
-            5 => {
+            Opcode::RowStart => {
                 let columns = cursor.columns()?;
                 cursor.done()?;
                 self.open(
@@ -139,70 +250,78 @@ impl Decoder {
                     OwnedCommand::RowStart(columns),
                 )
             }
-            6 => {
+            Opcode::RowEnd => {
                 cursor.done()?;
                 self.close(true, OwnedCommand::RowEnd)
             }
-            7 => {
+            Opcode::PageBreak => {
                 cursor.done()?;
                 if !self.frames.is_empty() {
-                    return Err("invalid nesting".into());
+                    return Err(ProtocolError::InvalidNesting);
                 }
                 self.ensure_renderer()?
                     .push(&[crate::Command::PageBreak])
-                    .map_err(render_error)
+                    .map_err(ProtocolError::from)
             }
-            16 => {
+            Opcode::StyledText => {
                 let size = pt(cursor.positive_f32("font size")?)?;
                 let align = match cursor.take(1)?[0] {
-                    0 => crate::TextAlign::Left,
-                    1 => crate::TextAlign::Center,
-                    2 => crate::TextAlign::Right,
-                    _ => return Err("invalid text alignment".into()),
+                    0 => TextAlign::Left,
+                    1 => TextAlign::Center,
+                    2 => TextAlign::Right,
+                    _ => return Err(ProtocolError::InvalidTextAlignment),
                 };
-                let color: [u8; 3] = cursor.take(3)?.try_into().unwrap();
-                let font = cursor.take(1)?[0];
+                let color = Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap());
+                let font = FontId::new(cursor.take(1)?[0]);
                 let font_count = self
                     .renderer
                     .as_ref()
                     .map_or(self.fonts.len() + 2, crate::Renderer::font_count);
-                if usize::from(font) >= font_count {
-                    return Err("unknown font".into());
+                if font.index() >= font_count {
+                    return Err(ProtocolError::UnknownFont);
                 }
                 let text = cursor.text()?.to_owned();
                 cursor.done()?;
-                self.layout_command(OwnedCommand::StyledText(text, size, align, color, font))
+                self.layout_command(OwnedCommand::Text(
+                    text,
+                    TextStyle {
+                        size,
+                        align,
+                        color,
+                        font,
+                    },
+                ))
             }
-            17 => {
-                let margin = [
-                    pt(cursor.nonnegative_f32("margin top")?)?,
-                    pt(cursor.nonnegative_f32("margin right")?)?,
-                    pt(cursor.nonnegative_f32("margin bottom")?)?,
-                    pt(cursor.nonnegative_f32("margin left")?)?,
-                ];
-                let padding = [
-                    pt(cursor.nonnegative_f32("padding top")?)?,
-                    pt(cursor.nonnegative_f32("padding right")?)?,
-                    pt(cursor.nonnegative_f32("padding bottom")?)?,
-                    pt(cursor.nonnegative_f32("padding left")?)?,
-                ];
-                let border = [
-                    pt(cursor.nonnegative_f32("border top width")?)?,
-                    pt(cursor.nonnegative_f32("border right width")?)?,
-                    pt(cursor.nonnegative_f32("border bottom width")?)?,
-                    pt(cursor.nonnegative_f32("border left width")?)?,
-                ];
+            Opcode::BoxStart => {
+                let margin = Edges {
+                    top: pt(cursor.nonnegative_f32("margin top")?)?,
+                    right: pt(cursor.nonnegative_f32("margin right")?)?,
+                    bottom: pt(cursor.nonnegative_f32("margin bottom")?)?,
+                    left: pt(cursor.nonnegative_f32("margin left")?)?,
+                };
+                let padding = Edges {
+                    top: pt(cursor.nonnegative_f32("padding top")?)?,
+                    right: pt(cursor.nonnegative_f32("padding right")?)?,
+                    bottom: pt(cursor.nonnegative_f32("padding bottom")?)?,
+                    left: pt(cursor.nonnegative_f32("padding left")?)?,
+                };
+                let border = Edges {
+                    top: pt(cursor.nonnegative_f32("border top width")?)?,
+                    right: pt(cursor.nonnegative_f32("border right width")?)?,
+                    bottom: pt(cursor.nonnegative_f32("border bottom width")?)?,
+                    left: pt(cursor.nonnegative_f32("border left width")?)?,
+                };
                 let background = match cursor.take(1)?[0] {
                     0 => None,
-                    1 => Some(cursor.take(3)?.try_into().unwrap()),
-                    _ => return Err("invalid background".into()),
+                    1 => Some(Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap())),
+                    _ => return Err(ProtocolError::InvalidBackground),
                 };
-                let border_color = [
-                    cursor.take(3)?.try_into().unwrap(),
-                    cursor.take(3)?.try_into().unwrap(),
-                    cursor.take(3)?.try_into().unwrap(),
-                    cursor.take(3)?.try_into().unwrap(),
-                ];
+                let border_color = Edges {
+                    top: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
+                    right: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
+                    bottom: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
+                    left: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
+                };
                 cursor.done()?;
                 self.open(
                     Frame::Box,
@@ -215,27 +334,26 @@ impl Decoder {
                     }),
                 )
             }
-            18 => {
+            Opcode::BoxEnd => {
                 cursor.done()?;
                 self.close_box()
             }
-            255 => {
+            Opcode::End => {
                 cursor.done()?;
                 if !self.frames.is_empty() {
-                    return Err("invalid nesting".into());
+                    return Err(ProtocolError::InvalidNesting);
                 }
                 if self.renderer.is_none() {
-                    return Err("empty document".into());
+                    return Err(ProtocolError::EmptyDocument);
                 }
                 self.ended = true;
                 Ok(())
             }
-            _ => Err("unknown opcode".into()),
         }
     }
 
-    fn ensure_renderer(&mut self) -> Result<&mut crate::Renderer, String> {
-        let page = self.page.ok_or("missing header")?;
+    fn ensure_renderer(&mut self) -> Result<&mut crate::Renderer, ProtocolError> {
+        let page = self.page.ok_or(ProtocolError::MissingHeader)?;
         if self.renderer.is_none() {
             self.renderer = Some(crate::Renderer::with_fonts(
                 page,
@@ -245,7 +363,7 @@ impl Decoder {
         Ok(self.renderer.as_mut().unwrap())
     }
 
-    fn layout_command(&mut self, command: OwnedCommand) -> Result<(), String> {
+    fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         self.block.push(command);
         self.complete_child()?;
         if self.frames.is_empty() {
@@ -254,22 +372,22 @@ impl Decoder {
         Ok(())
     }
 
-    fn open(&mut self, frame: Frame, command: OwnedCommand) -> Result<(), String> {
+    fn open(&mut self, frame: Frame, command: OwnedCommand) -> Result<(), ProtocolError> {
         if self.frames.len() >= 64 {
-            return Err("nesting exceeds 64".into());
+            return Err(ProtocolError::NestingTooDeep);
         }
         self.block.push(command);
         self.frames.push(frame);
         Ok(())
     }
 
-    fn close(&mut self, row: bool, command: OwnedCommand) -> Result<(), String> {
-        let frame = self.frames.pop().ok_or("invalid nesting")?;
+    fn close(&mut self, row: bool, command: OwnedCommand) -> Result<(), ProtocolError> {
+        let frame = self.frames.pop().ok_or(ProtocolError::InvalidNesting)?;
         match (row, frame) {
             (false, Frame::Stack) => {}
             (true, Frame::Row { columns, cells }) if columns == cells => {}
-            (true, Frame::Row { .. }) => return Err("row cell count mismatch".into()),
-            _ => return Err("invalid nesting".into()),
+            (true, Frame::Row { .. }) => return Err(ProtocolError::RowCellCountMismatch),
+            _ => return Err(ProtocolError::InvalidNesting),
         }
         self.block.push(command);
         self.complete_child()?;
@@ -279,9 +397,9 @@ impl Decoder {
         Ok(())
     }
 
-    fn close_box(&mut self) -> Result<(), String> {
+    fn close_box(&mut self) -> Result<(), ProtocolError> {
         if !matches!(self.frames.pop(), Some(Frame::Box)) {
-            return Err("invalid nesting".into());
+            return Err(ProtocolError::InvalidNesting);
         }
         self.block.push(OwnedCommand::BoxEnd);
         self.complete_child()?;
@@ -291,18 +409,18 @@ impl Decoder {
         Ok(())
     }
 
-    fn complete_child(&mut self) -> Result<(), String> {
+    fn complete_child(&mut self) -> Result<(), ProtocolError> {
         if let Some(Frame::Row { columns, cells }) = self.frames.last_mut() {
             *cells += 1;
             if *cells > *columns {
-                return Err("row cell count mismatch".into());
+                return Err(ProtocolError::RowCellCountMismatch);
             }
         }
         Ok(())
     }
 
-    fn flush_block(&mut self) -> Result<(), String> {
-        let page = self.page.ok_or("missing header")?;
+    fn flush_block(&mut self) -> Result<(), ProtocolError> {
+        let page = self.page.ok_or(ProtocolError::MissingHeader)?;
         let Self {
             renderer, block, ..
         } = self;
@@ -311,18 +429,18 @@ impl Decoder {
                 crate::Renderer::with_fonts(page, std::mem::take(&mut self.fonts))
             })
             .push_owned(block)
-            .map_err(render_error)?;
+            .map_err(ProtocolError::from)?;
         block.clear();
         Ok(())
     }
 
-    pub fn finish(self) -> Result<Vec<u8>, String> {
+    pub fn finish(self) -> Result<Vec<u8>, ProtocolError> {
         if self.page.is_none() || !self.ended || !self.pending.is_empty() {
-            return Err("truncated protocol".into());
+            return Err(ProtocolError::TruncatedProtocol);
         }
         self.renderer
             .map(crate::Renderer::finish)
-            .ok_or_else(|| "empty document".into())
+            .ok_or(ProtocolError::EmptyDocument)
     }
 }
 
@@ -336,129 +454,102 @@ impl<'a> Cursor<'a> {
         Self { bytes, offset: 0 }
     }
 
-    fn take(&mut self, length: usize) -> Result<&'a [u8], String> {
-        let end = self.offset.checked_add(length).ok_or("invalid length")?;
-        let value = self.bytes.get(self.offset..end).ok_or("truncated record")?;
+    fn take(&mut self, length: usize) -> Result<&'a [u8], ProtocolError> {
+        let end = self
+            .offset
+            .checked_add(length)
+            .ok_or(ProtocolError::InvalidLength)?;
+        let value = self
+            .bytes
+            .get(self.offset..end)
+            .ok_or(ProtocolError::TruncatedRecord)?;
         self.offset = end;
         Ok(value)
     }
 
-    fn u16(&mut self) -> Result<u16, String> {
+    fn u16(&mut self) -> Result<u16, ProtocolError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
 
-    fn u32(&mut self) -> Result<u32, String> {
+    fn u32(&mut self) -> Result<u32, ProtocolError> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
 
-    fn positive_f32(&mut self, name: &str) -> Result<f32, String> {
+    fn positive_f32(&mut self, name: &'static str) -> Result<f32, ProtocolError> {
         positive_f32(self.take(4)?, name)
     }
 
-    fn nonnegative_f32(&mut self, name: &str) -> Result<f32, String> {
+    fn nonnegative_f32(&mut self, name: &'static str) -> Result<f32, ProtocolError> {
         nonnegative_f32(self.take(4)?, name)
     }
 
-    fn text(&mut self) -> Result<&'a str, String> {
-        let length = usize::try_from(self.u32()?).map_err(|_| "invalid string length")?;
-        let text = std::str::from_utf8(self.take(length)?).map_err(|_| "invalid UTF-8")?;
-        validate_win_ansi(text)?;
+    fn text(&mut self) -> Result<&'a str, ProtocolError> {
+        let length =
+            usize::try_from(self.u32()?).map_err(|_| ProtocolError::InvalidStringLength)?;
+        let text =
+            std::str::from_utf8(self.take(length)?).map_err(|_| ProtocolError::InvalidUtf8)?;
+        if !valid_win_ansi(text) {
+            return Err(ProtocolError::UnsupportedWinAnsi);
+        }
         Ok(text)
     }
 
-    fn columns(&mut self) -> Result<Vec<crate::ColumnWidth>, String> {
+    fn columns(&mut self) -> Result<Vec<crate::ColumnWidth>, ProtocolError> {
         let count = usize::from(self.u16()?);
         if count == 0 || count > 256 {
-            return Err("invalid column count".into());
+            return Err(ProtocolError::InvalidColumnCount);
         }
         let mut columns = Vec::with_capacity(count);
         for _ in 0..count {
             let kind = self.take(1)?[0];
-            let value = pt(self.positive_f32("column width")?)?;
+            let value = self.positive_f32("column width")?;
             columns.push(match kind {
-                0 => crate::ColumnWidth::Fixed(value),
-                1 => crate::ColumnWidth::Fraction(value),
-                2 => crate::ColumnWidth::Percent(value),
-                _ => return Err("invalid column kind".into()),
+                0 => crate::ColumnWidth::Fixed(pt(value)?),
+                1 => crate::ColumnWidth::Fraction(Fraction::new(value)?),
+                2 => crate::ColumnWidth::Percent(Percent::new(value)?),
+                _ => return Err(ProtocolError::InvalidColumnKind),
             });
         }
         Ok(columns)
     }
 
-    fn done(&self) -> Result<(), String> {
+    fn done(&self) -> Result<(), ProtocolError> {
         if self.offset == self.bytes.len() {
             Ok(())
         } else {
-            Err("invalid record length".into())
+            Err(ProtocolError::InvalidRecordLength)
         }
     }
 }
 
-fn pt(value: f32) -> Result<crate::Pt, String> {
-    crate::Pt::new(value).map_err(render_error)
+fn pt(value: f32) -> Result<crate::Pt, ProtocolError> {
+    crate::Pt::new(value).map_err(ProtocolError::from)
 }
 
-fn positive_f32(bytes: &[u8], name: &str) -> Result<f32, String> {
-    let value = f32::from_le_bytes(bytes.try_into().map_err(|_| "truncated record")?);
+fn positive_f32(bytes: &[u8], name: &'static str) -> Result<f32, ProtocolError> {
+    let value = f32::from_le_bytes(
+        bytes
+            .try_into()
+            .map_err(|_| ProtocolError::TruncatedRecord)?,
+    );
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
-        Err(format!("invalid {name}"))
+        Err(ProtocolError::InvalidValue(name))
     }
 }
 
-fn nonnegative_f32(bytes: &[u8], name: &str) -> Result<f32, String> {
-    let value = f32::from_le_bytes(bytes.try_into().map_err(|_| "truncated record")?);
+fn nonnegative_f32(bytes: &[u8], name: &'static str) -> Result<f32, ProtocolError> {
+    let value = f32::from_le_bytes(
+        bytes
+            .try_into()
+            .map_err(|_| ProtocolError::TruncatedRecord)?,
+    );
     if value.is_finite() && value >= 0.0 {
         Ok(value)
     } else {
-        Err(format!("invalid {name}"))
+        Err(ProtocolError::InvalidValue(name))
     }
-}
-
-fn validate_win_ansi(text: &str) -> Result<(), String> {
-    for character in text.chars() {
-        if !matches!(
-            character,
-            '\t'..='\r'
-                | ' '..='~'
-                | '\u{00a0}'..='\u{00ff}'
-                | '\u{20ac}'
-                | '\u{201a}'
-                | '\u{0192}'
-                | '\u{201e}'
-                | '\u{2026}'
-                | '\u{2020}'
-                | '\u{2021}'
-                | '\u{02c6}'
-                | '\u{2030}'
-                | '\u{0160}'
-                | '\u{2039}'
-                | '\u{0152}'
-                | '\u{017d}'
-                | '\u{2018}'
-                | '\u{2019}'
-                | '\u{201c}'
-                | '\u{201d}'
-                | '\u{2022}'
-                | '\u{2013}'
-                | '\u{2014}'
-                | '\u{02dc}'
-                | '\u{2122}'
-                | '\u{0161}'
-                | '\u{203a}'
-                | '\u{0153}'
-                | '\u{017e}'
-                | '\u{0178}'
-        ) {
-            return Err("unsupported WinAnsi character".into());
-        }
-    }
-    Ok(())
-}
-
-fn render_error(error: crate::RenderError) -> String {
-    format!("{error:?}")
 }
 
 #[cfg(test)]
@@ -541,13 +632,13 @@ mod tests {
 
     fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
         let mut decoder = Decoder::default();
-        decoder.push(bytes)?;
-        decoder.finish()
+        decoder.push(bytes).map_err(|error| error.to_string())?;
+        decoder.finish().map_err(|error| error.to_string())
     }
 
     fn push_error(bytes: &[u8]) -> String {
         let mut decoder = Decoder::default();
-        decoder.push(bytes).unwrap_err()
+        decoder.push(bytes).unwrap_err().to_string()
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::RenderError;
+use crate::{FontId, RenderError};
 use pdf_writer::Rect;
 
 const HELVETICA_WIDTHS: [u16; 224] = [
@@ -235,8 +235,8 @@ impl Font {
 }
 
 /// `/F1` is slot 0, so a PDF resource name never collides with a slot number.
-pub(crate) fn font_name(slot: u8, buffer: &mut [u8; 4]) -> &[u8] {
-    let number = u32::from(slot) + 1;
+pub(crate) fn font_name(font: FontId, buffer: &mut [u8; 4]) -> &[u8] {
+    let number = u32::from(font.slot()) + 1;
     buffer[0] = b'F';
     let mut length = 1;
     for divisor in [100, 10] {
@@ -281,6 +281,11 @@ pub(crate) fn encode_win_ansi(character: char) -> Result<u8, RenderError> {
         _ => return Err(RenderError::UnsupportedCharacter(character)),
     };
     Ok(byte)
+}
+
+pub(crate) fn valid_win_ansi(text: &str) -> bool {
+    text.chars()
+        .all(|character| matches!(character, '\t'..='\r') || encode_win_ansi(character).is_ok())
 }
 
 pub(crate) fn decode_win_ansi(byte: u8) -> Option<char> {

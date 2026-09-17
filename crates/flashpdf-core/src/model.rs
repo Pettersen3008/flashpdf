@@ -43,9 +43,76 @@ impl Page {
         }
     }
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Edges<T> {
+    pub top: T,
+    pub right: T,
+    pub bottom: T,
+    pub left: T,
+}
+
+impl<T: Copy> Edges<T> {
+    pub const fn all(value: T) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+
+    pub const fn into_array(self) -> [T; 4] {
+        [self.top, self.right, self.bottom, self.left]
+    }
+}
+
+impl<T> Edges<T> {
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        [&self.top, &self.right, &self.bottom, &self.left].into_iter()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Rgb {
+    pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
+}
+
+impl From<[u8; 3]> for Rgb {
+    fn from([r, g, b]: [u8; 3]) -> Self {
+        Self { r, g, b }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct FontId(u8);
+
+impl FontId {
+    pub const HELVETICA: Self = Self(0);
+    pub const HELVETICA_BOLD: Self = Self(1);
+
+    pub(crate) const fn new(value: u8) -> Self {
+        Self(value)
+    }
+
+    pub(crate) const fn slot(self) -> u8 {
+        self.0
+    }
+
+    pub(crate) const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Font slots 0 and 1 preserve the regular and bold Helvetica fallback.
-pub const HELVETICA: u8 = 0;
-pub const HELVETICA_BOLD: u8 = 1;
+pub const HELVETICA: FontId = FontId::HELVETICA;
+pub const HELVETICA_BOLD: FontId = FontId::HELVETICA_BOLD;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TextAlign {
     Left,
@@ -54,39 +121,42 @@ pub enum TextAlign {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextStyle {
+    pub size: Pt,
+    pub align: TextAlign,
+    pub color: Rgb,
+    pub font: FontId,
+}
+
+impl TextStyle {
+    pub const fn plain(size: Pt) -> Self {
+        Self {
+            size,
+            align: TextAlign::Left,
+            color: Rgb::BLACK,
+            font: FontId::HELVETICA,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxStyle {
-    pub margin: [Pt; 4],
-    pub padding: [Pt; 4],
-    pub border: [Pt; 4],
-    pub background: Option<[u8; 3]>,
-    pub border_color: [[u8; 3]; 4],
+    pub margin: Edges<Pt>,
+    pub padding: Edges<Pt>,
+    pub border: Edges<Pt>,
+    pub background: Option<Rgb>,
+    pub border_color: Edges<Rgb>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command<'a> {
-    Text {
-        text: &'a str,
-        size: Pt,
-    },
-    StyledText {
-        text: &'a str,
-        size: Pt,
-        align: TextAlign,
-        color: [u8; 3],
-        font: u8,
-    },
-    BoxStart {
-        style: BoxStyle,
-    },
+    Text { text: &'a str, style: TextStyle },
+    BoxStart { style: BoxStyle },
     BoxEnd,
     Spacer(Pt),
-    StackStart {
-        gap: Pt,
-    },
+    StackStart { gap: Pt },
     StackEnd,
-    RowStart {
-        columns: &'a [ColumnWidth],
-    },
+    RowStart { columns: &'a [ColumnWidth] },
     RowEnd,
     PageBreak,
 }
@@ -94,8 +164,44 @@ pub enum Command<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ColumnWidth {
     Fixed(Pt),
-    Fraction(Pt),
-    Percent(Pt),
+    Fraction(Fraction),
+    Percent(Percent),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
+pub struct Fraction(f32);
+
+impl Fraction {
+    pub fn new(value: f32) -> Result<Self, RenderError> {
+        if value.is_finite() && value > 0.0 {
+            Ok(Self(value))
+        } else {
+            Err(RenderError::InvalidLayout)
+        }
+    }
+
+    pub(crate) const fn get(self) -> f32 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[repr(transparent)]
+pub struct Percent(f32);
+
+impl Percent {
+    pub fn new(value: f32) -> Result<Self, RenderError> {
+        if value.is_finite() && value > 0.0 {
+            Ok(Self(value))
+        } else {
+            Err(RenderError::InvalidLayout)
+        }
+    }
+
+    pub(crate) const fn get(self) -> f32 {
+        self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

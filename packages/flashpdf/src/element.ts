@@ -1,20 +1,23 @@
+export type Length = number | "0" | `${number}${"pt" | "px" | "em" | "rem"}`;
+export type Width = number | `${number}${"pt" | "px" | "%"}`;
+
 export type Style = {
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
 	flex?: number;
-	width?: number | `${number}${"pt" | "px" | "%"}`;
+	width?: Width;
 	margin?: number | string;
-	marginTop?: number | string;
-	marginRight?: number | string;
-	marginBottom?: number | string;
-	marginLeft?: number | string;
+	marginTop?: Length;
+	marginRight?: Length;
+	marginBottom?: Length;
+	marginLeft?: Length;
 	padding?: number | string;
-	paddingTop?: number | string;
-	paddingRight?: number | string;
-	paddingBottom?: number | string;
-	paddingLeft?: number | string;
+	paddingTop?: Length;
+	paddingRight?: Length;
+	paddingBottom?: Length;
+	paddingLeft?: Length;
 	border?: string | number;
-	borderWidth?: number | string;
+	borderWidth?: Length;
 	borderColor?: string;
 	borderTop?: string | number;
 	borderRight?: string | number;
@@ -22,8 +25,8 @@ export type Style = {
 	borderLeft?: string | number;
 	background?: string;
 	backgroundColor?: string;
-	gap?: number | string;
-	fontSize?: number | string;
+	gap?: Length;
+	fontSize?: Length;
 	fontFamily?: string;
 	fontWeight?: number | "normal" | "bold";
 	textAlign?: "left" | "center" | "right";
@@ -37,9 +40,29 @@ export type Style = {
 export type StyleInput = { [Property in keyof Style]: Style[Property] | undefined };
 
 export type Element = { readonly type: unknown; readonly props: unknown };
-export type PdfProps = {
-	children?: unknown | undefined;
+export type PdfNode =
+	| Element
+	| string
+	| number
+	| bigint
+	| boolean
+	| null
+	| undefined
+	| readonly PdfNode[];
+export type TextChildren =
+	| string
+	| number
+	| bigint
+	| boolean
+	| null
+	| undefined
+	| readonly TextChildren[];
+export type CommonProps = {
+	id?: string | undefined;
 	className?: string | undefined;
 	style?: StyleInput | undefined;
-	[name: string]: unknown;
 };
+export type BlockProps = CommonProps & { children?: PdfNode | undefined };
+export type TextProps = CommonProps & { children?: TextChildren | undefined };
+export type HrProps = CommonProps & { children?: never };
+export type PdfProps = BlockProps | TextProps | HrProps;

@@ -29,7 +29,7 @@ impl PdfRenderer {
     pub fn add_font(&mut self, bytes: Vec<u8>) -> Result<u8, JsValue> {
         self.decoder
             .add_font(bytes)
-            .map_err(|error| JsValue::from_str(&error))
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     pub fn push(&mut self, length: usize) -> Result<(), JsValue> {
@@ -38,13 +38,13 @@ impl PdfRenderer {
         }
         self.decoder
             .push(&self.input[..length])
-            .map_err(|error| JsValue::from_str(&error))
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     pub fn finish(self) -> Result<Vec<u8>, JsValue> {
         self.decoder
             .finish()
-            .map_err(|error| JsValue::from_str(&error))
+            .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 }
 
