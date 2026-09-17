@@ -4,7 +4,7 @@
 		"rootDir": ".",
 		"noEmit": true,
 		"jsx": "react-jsx",
-		"jsxImportSource": "react"
+		"jsxImportSource": "@pettersen3008/flashpdf"
 	},
 	"include": ["src", "test/*.tsx", "examples/*.tsx", "examples/*.d.ts"]
 }

@@ -21,21 +21,13 @@ try {
 		join(work, "package.json"),
 		JSON.stringify({ name: "flashpdf-consumer", private: true, type: "module" }),
 	);
-	run("npm", [
-		"install",
-		"--silent",
-		"--no-audit",
-		"--no-fund",
-		join(work, tarball),
-		"react@19.3.0",
-		"@types/react@19.3.0",
-	]);
+	run("npm", ["install", "--silent", "--no-audit", "--no-fund", join(work, tarball)]);
 	cpSync(join(repo, "packages/flashpdf/test/fixtures/Abel-Regular.ttf"), join(work, "font.ttf"));
 
 	writeFileSync(
 		join(work, "consumer.mjs"),
 		`import { readFile } from "node:fs/promises";
-import { jsx, jsxs } from "react/jsx-runtime";
+import { jsx, jsxs } from "@pettersen3008/flashpdf/jsx-runtime";
 import { render, stylesheet } from "@pettersen3008/flashpdf";
 
 const Invoice = ({ total }) => jsxs("main", {
@@ -67,7 +59,11 @@ process.stdout.write(Buffer.from(pdf).toString("base64"));
 	} else if (!nodeOnly) console.warn("bun not installed; Bun support is unverified on this target");
 
 	if (!nodeOnly) {
-		const resolved = ["@pettersen3008/flashpdf", "@pettersen3008/flashpdf/package.json"];
+		const resolved = [
+			"@pettersen3008/flashpdf",
+			"@pettersen3008/flashpdf/package.json",
+			"@pettersen3008/flashpdf/jsx-runtime",
+		];
 		for (const entry of resolved)
 			run(process.execPath, [
 				"--input-type=module",
@@ -102,7 +98,7 @@ export function invoice(total: string) {
 					target: "es2022",
 					moduleResolution: "bundler",
 					jsx: "react-jsx",
-					types: ["react"],
+					jsxImportSource: "@pettersen3008/flashpdf",
 				},
 				include: ["consumer.tsx", "native-invoice.tsx"],
 			}),
@@ -120,7 +116,7 @@ const pdf = await nativeInvoice({
 });
 if (Buffer.from(pdf.subarray(0, 5)).toString() !== "%PDF-") throw new Error("invoice example did not render");`,
 		]);
-		console.log("exports, React types, and invoice example: ok");
+		console.log("exports, JSX types, and invoice example: ok");
 
 		writeFileSync(
 			join(work, "index.html"),
@@ -128,7 +124,7 @@ if (Buffer.from(pdf.subarray(0, 5)).toString() !== "%PDF-") throw new Error("inv
 		);
 		writeFileSync(
 			join(work, "src.js"),
-			`import { jsx, jsxs } from "react/jsx-runtime";
+			`import { jsx, jsxs } from "@pettersen3008/flashpdf/jsx-runtime";
 import { render } from "@pettersen3008/flashpdf";
 const Invoice = () => jsxs("main", { children: [jsx("h1", { children: "Invoice" }), jsx("p", { children: "$100.00" })] });
 const pdf = await render(jsx(Invoice, {}));

@@ -22,5 +22,4 @@ const font: EmbeddedFont = { family: "Invoice", regular: new Uint8Array(), bold:
 void render(invoice, { fonts: [font] });
 // @ts-expect-error A PDF document starts with one or more React elements.
 void render("bare text");
-// @ts-expect-error React owns the JSX runtime; FlashPDF only consumes its nodes.
 void import("@pettersen3008/flashpdf/jsx-runtime");

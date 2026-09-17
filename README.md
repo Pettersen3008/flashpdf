@@ -7,6 +7,7 @@ Build it from a clone with the commands in [Working on FlashPDF](#working-on-fla
 ## Quickstart
 
 ```tsx
+/** @jsxImportSource @pettersen3008/flashpdf */
 import { render } from '@pettersen3008/flashpdf';
 
 function Invoice({ total }: { total: string }) {
@@ -35,7 +36,7 @@ Configure npm to use GitHub Packages for this scope:
 
 GitHub Packages requires a GitHub token with `read:packages` when installing. Public package visibility is configured on the package page after the first release.
 
-This is standard React JSX. FlashPDF resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
+FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImportSource: "@pettersen3008/flashpdf"` to a template-only `tsconfig`, or use the file pragma above in an app that also uses React. FlashPDF also accepts ordinary React host-element trees. It resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
 
 `render` returns a `Uint8Array`. FlashPDF ships no viewer, download, or upload helper, so you own what happens next:
 
@@ -62,7 +63,7 @@ FlashPDF rejects any declaration it cannot honour, naming the property, the sele
 
 | Export | Signature | Notes |
 | --- | --- | --- |
-| `render` | `(element: ReactElement \| Iterable<ReactElement>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
+| `render` | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged, for tagging literals at author time. |
 
 `RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[] }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36.

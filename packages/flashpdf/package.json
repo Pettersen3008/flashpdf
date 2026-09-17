@@ -1,6 +1,6 @@
 {
 	"name": "@pettersen3008/flashpdf",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Render native JSX and a static CSS subset to a PDF, in the browser, Node, or Bun.",
 	"keywords": [
 		"browser",
@@ -39,7 +39,15 @@
 			"types": "./dist/index.d.ts",
 			"default": "./dist/index.js"
 		},
-		"./package.json": "./package.json"
+		"./package.json": "./package.json",
+		"./jsx-runtime": {
+			"types": "./dist/jsx-runtime.d.ts",
+			"default": "./dist/jsx-runtime.js"
+		},
+		"./jsx-dev-runtime": {
+			"types": "./dist/jsx-dev-runtime.d.ts",
+			"default": "./dist/jsx-dev-runtime.js"
+		}
 	},
 	"publishConfig": {
 		"@pettersen3008:registry": "https://npm.pkg.github.com",
@@ -50,10 +58,7 @@
 		"typecheck": "pnpm build && tsc -p tsconfig.test.json",
 		"test": "pnpm build && vitest run --config ../../vitest.config.ts",
 		"bench": "pnpm build && node --expose-gc bench/css-invoice.mjs",
-		"prepack": "node -e \"const{existsSync}=require('node:fs');for(const file of['dist/index.js','dist/index.d.ts','wasm/flashpdf_wasm.js','wasm/flashpdf_wasm.d.ts','wasm/flashpdf_wasm_bg.wasm','wasm/flashpdf_wasm_bg.wasm.d.ts'])if(!existsSync(file))throw Error('missing '+file+'; run sh verify.sh from the repository root')\""
-	},
-	"peerDependencies": {
-		"react": ">=19 <20"
+		"prepack": "node -e \"const{existsSync}=require('node:fs');for(const file of['dist/index.js','dist/index.d.ts','dist/jsx-runtime.js','dist/jsx-runtime.d.ts','dist/jsx-dev-runtime.js','dist/jsx-dev-runtime.d.ts','wasm/flashpdf_wasm.js','wasm/flashpdf_wasm.d.ts','wasm/flashpdf_wasm_bg.wasm','wasm/flashpdf_wasm_bg.wasm.d.ts'])if(!existsSync(file))throw Error('missing '+file+'; run sh verify.sh from the repository root')\""
 	},
 	"engines": {
 		"node": ">=20"

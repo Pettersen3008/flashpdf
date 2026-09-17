@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 
-import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { test } from "vitest";
 
 import { render, stylesheet } from "../dist/index.js";
+import { Fragment, jsx, jsxs } from "../dist/jsx-runtime.js";
 
 const string = (pdf) => Buffer.from(pdf).toString("latin1");
 const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", import.meta.url)));
