@@ -259,9 +259,9 @@ mod tests {
         let red = super::BoxStyle {
             margin: [Pt(0.0); 4],
             padding: [Pt(1.0); 4],
-            border: Pt(0.0),
+            border: [Pt(0.0); 4],
             background: Some([255, 0, 0]),
-            border_color: [0, 0, 0],
+            border_color: [[0, 0, 0]; 4],
         };
         let blue = super::BoxStyle {
             background: Some([0, 0, 255]),

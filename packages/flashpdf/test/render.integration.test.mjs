@@ -135,6 +135,42 @@ test("given a long native main with a page break rule, when rendering, then it p
 	assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
 });
 
+test("given adjacent text and plain spans, when rendering, then keeps them in one inline run", async () => {
+	const pdf = await render(
+		jsx("main", {
+			children: [jsx("span", { children: "Label:" }), " value"],
+		}),
+	);
+	assert.match(string(pdf), /\(Label: value\)/);
+});
+
+test("given a long margin-only wrapper, when rendering, then it paginates", async () => {
+	const pdf = await render(
+		jsx("main", {
+			style: { marginTop: "12pt" },
+			children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+		}),
+	);
+	assert.match(string(pdf), /\/Count 2/);
+});
+
+test("given per-edge borders and hr, when rendering, then emits native rules", async () => {
+	const pdf = await render(
+		jsx("main", {
+			children: [
+				jsx("div", { style: { borderBottom: "1pt solid red" }, children: "Total" }),
+				jsx("hr", {}),
+			],
+		}),
+	);
+	assert.match(string(pdf), /1 0 0 rg/);
+});
+
+test("given an hr border, when rendering, then uses the author rule", async () => {
+	const pdf = await render(jsx("hr", { style: { border: "2pt solid red" } }));
+	assert.match(string(pdf), /1 0 0 rg/);
+});
+
 test("given non-native JSX, when rendering, then rejects it", async () => {
 	await assert.rejects(render({ type: "table", props: {} }), /unsupported element/);
 });

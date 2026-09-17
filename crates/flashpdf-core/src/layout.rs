@@ -195,22 +195,21 @@ fn write_lines(content: &mut Content, scratch: &Scratch, left: f32, top: f32) {
             );
             content.rect(x, y, paint.width, paint.height).fill_nonzero();
         }
-        if paint.style.border.0 > 0.0 {
-            let color = paint.style.border_color;
-            content.set_stroke_rgb(
-                f32::from(color[0]) / 255.0,
-                f32::from(color[1]) / 255.0,
-                f32::from(color[2]) / 255.0,
-            );
-            content
-                .set_line_width(paint.style.border.0)
-                .rect(
-                    x + paint.style.border.0 / 2.0,
-                    y + paint.style.border.0 / 2.0,
-                    paint.width - paint.style.border.0,
-                    paint.height - paint.style.border.0,
-                )
-                .stroke();
+        let [top, right, bottom, left] = paint.style.border.map(|edge| edge.0);
+        for (edge, (x, y, width, height)) in paint.style.border_color.iter().zip([
+            (x, y + paint.height - top, paint.width, top),
+            (x + paint.width - right, y, right, paint.height),
+            (x, y, paint.width, bottom),
+            (x, y, left, paint.height),
+        ]) {
+            if width > 0.0 && height > 0.0 {
+                content.set_fill_rgb(
+                    f32::from(edge[0]) / 255.0,
+                    f32::from(edge[1]) / 255.0,
+                    f32::from(edge[2]) / 255.0,
+                );
+                content.rect(x, y, width, height).fill_nonzero();
+            }
         }
     }
     for line in &scratch.lines {
@@ -381,7 +380,8 @@ fn measure(
                 + style.margin[3].0
                 + style.padding[1].0
                 + style.padding[3].0
-                + style.border.0 * 2.0;
+                + style.border[1].0
+                + style.border[3].0;
             if horizontal >= width
                 || style
                     .margin
@@ -391,11 +391,13 @@ fn measure(
             {
                 return Err(RenderError::InvalidLayout);
             }
-            let inset_x = style.margin[3].0 + style.padding[3].0 + style.border.0;
-            let inset_y = style.margin[0].0 + style.padding[0].0 + style.border.0;
+            let inset_x = style.margin[3].0 + style.padding[3].0 + style.border[3].0;
+            let inset_y = style.margin[0].0 + style.padding[0].0 + style.border[0].0;
             let inner_width = width - horizontal;
             let mut inner_height = 0.0;
-            let paint = (style.background.is_some() || style.border.0 > 0.0).then(|| {
+            let paint = (style.background.is_some()
+                || style.border.iter().any(|edge| edge.0 > 0.0))
+            .then(|| {
                 let index = scratch.boxes.len();
                 scratch.boxes.push(BoxPaint {
                     x: 0.0,
@@ -419,8 +421,11 @@ fn measure(
                 )?;
             }
             *index += 1;
-            let box_height =
-                inner_height + style.padding[0].0 + style.padding[2].0 + style.border.0 * 2.0;
+            let box_height = inner_height
+                + style.padding[0].0
+                + style.padding[2].0
+                + style.border[0].0
+                + style.border[2].0;
             if let Some(index) = paint {
                 scratch.boxes[index] = BoxPaint {
                     x: x + style.margin[3].0,

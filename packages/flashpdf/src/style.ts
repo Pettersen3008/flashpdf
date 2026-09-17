@@ -81,6 +81,12 @@ function normalize(value: Record<string, unknown>) {
 			result.borderColor = border.color;
 			continue;
 		}
+		if (/^border(?:Top|Right|Bottom|Left)$/.test(key)) {
+			const border = parseBorder(item);
+			result[`${key}Width`] = border.width;
+			result[`${key}Color`] = border.color;
+			continue;
+		}
 		result[key] = item;
 	}
 	return result;
@@ -121,9 +127,14 @@ export function point(value: unknown, parent = 12, positive = false): number {
 export type Box = {
 	margin: [number, number, number, number];
 	padding: [number, number, number, number];
-	border: number;
+	border: [number, number, number, number];
 	background?: [number, number, number] | undefined;
-	borderColor: [number, number, number];
+	borderColor: [
+		[number, number, number],
+		[number, number, number],
+		[number, number, number],
+		[number, number, number],
+	];
 };
 
 export function edges(
@@ -164,14 +175,31 @@ export function boxStyle(s: Record<string, unknown>, parent: number): Box | unde
 		"border",
 		"borderWidth",
 		"borderColor",
+		"borderTop",
+		"borderRight",
+		"borderBottom",
+		"borderLeft",
+		"borderTopWidth",
+		"borderRightWidth",
+		"borderBottomWidth",
+		"borderLeftWidth",
+		"borderTopColor",
+		"borderRightColor",
+		"borderBottomColor",
+		"borderLeftColor",
 		"background",
 		"backgroundColor",
 	].some((key) => s[key] !== undefined);
 	if (!hasBox) return undefined;
-	const invisible = s.borderColor === "transparent";
-	const border = invisible || s.borderWidth === undefined ? 0 : point(s.borderWidth, parent);
-	const borderColor: [number, number, number] =
-		invisible || s.borderColor === undefined ? [0, 0, 0] : color(s.borderColor);
+	const border = ["Top", "Right", "Bottom", "Left"].map((side) => {
+		const width = s[`border${side}Width`] ?? s.borderWidth;
+		const paint = s[`border${side}Color`] ?? s.borderColor;
+		return paint === "transparent" || width === undefined ? 0 : point(width, parent);
+	}) as Box["border"];
+	const borderColor = ["Top", "Right", "Bottom", "Left"].map((side) => {
+		const paint = s[`border${side}Color`] ?? s.borderColor;
+		return paint === "transparent" || paint === undefined ? [0, 0, 0] : color(paint);
+	}) as Box["borderColor"];
 	const backgroundValue = s.backgroundColor ?? s.background;
 	return {
 		margin: edges(s, "margin", parent),

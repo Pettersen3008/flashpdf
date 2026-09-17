@@ -6,6 +6,8 @@ The public authoring API is native JSX plus `render`. There are no `Document`, `
 
 ## Authoring
 
+FlashPDF supports a small static JSX vocabulary, not browser HTML compatibility. Use `main`, `div`, `section`, `article`, `header`, `footer`, `p`, headings, `span`, and `hr`. Adjacent text and unstyled `span` nodes flow together; styled spans remain standalone layout nodes. Normal block children paginate independently. Flex rows, `break-inside: avoid`, and painted or padded boxes are atomic. A margin-only wrapper with vertical margins streams normally.
+
 Compile CSS in the consuming app's build step, then pass the resulting string to `render`. CSS Modules and minification belong to that build step. `stylesheet` validates the final CSS against FlashPDF's supported subset.
 
 ```ts
@@ -44,6 +46,6 @@ Normal block children stream independently, so long `<main>` documents paginate 
 - Helvetica and Helvetica-Bold are the fallback. Registered host-provided TTF families support regular and optional bold files. CSS fallback lists, italic/other faces, OpenType features, shaping, line-height, letter-spacing, and text decoration reject.
 - Text remains Latin/WinAnsi. Unsupported Unicode characters reject even when the embedded TTF contains them.
 - No image component yet. Hosts must keep logos outside the generated PDF until a bounded image-byte protocol lands.
-- No border radius, gradients, `height`, `min-width`, `max-width`, or per-edge border widths.
+- No border radius, gradients, `height`, `min-width`, or `max-width`. `border-top`, `border-right`, `border-bottom`, and `border-left` accept the same solid syntax as `border`; `<hr>` renders a one-point bottom rule.
 - `gap` on a flex row rejects. Use a fixed-width spacer column.
 - A decorated box is atomic. Use document margins for page-wide padding and decorate individual cards/sections, not a multi-page root wrapper.

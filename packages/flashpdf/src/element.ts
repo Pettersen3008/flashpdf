@@ -16,6 +16,10 @@ export type Style = {
 	border?: string | number;
 	borderWidth?: number | string;
 	borderColor?: string;
+	borderTop?: string | number;
+	borderRight?: string | number;
+	borderBottom?: string | number;
+	borderLeft?: string | number;
 	background?: string;
 	backgroundColor?: string;
 	gap?: number | string;

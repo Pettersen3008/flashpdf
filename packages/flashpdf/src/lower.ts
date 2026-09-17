@@ -84,19 +84,74 @@ function emitBreak(
 	binary.record(7);
 }
 
-async function withBox(binary: Binary, box: Box | undefined, body: () => Promise<void>) {
+async function withBox(
+	binary: Binary,
+	box: Box | undefined,
+	tag: string,
+	body: () => Promise<void>,
+) {
 	if (box)
 		binary.record(17, () => {
 			for (const edge of [...box.margin, ...box.padding]) binary.f32(edge);
-			binary.f32(box.border);
+			for (const edge of box.border) binary.f32(edge);
 			if (box.background) {
 				binary.u8(1);
 				for (const channel of box.background) binary.u8(channel);
 			} else binary.u8(0);
-			for (const channel of box.borderColor) binary.u8(channel);
+			for (const edge of box.borderColor) for (const channel of edge) binary.u8(channel);
 		});
-	await body();
-	if (box) binary.record(18);
+	try {
+		await body();
+		if (box) binary.record(18);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (box && message === "PageOverflow")
+			throw new Error(`PageOverflow in <${tag}>: use document margins or split this decorated box`);
+		throw error;
+	}
+}
+
+function inlineText(
+	value: unknown,
+	inherited: Inherited,
+	fonts: ReadonlyMap<string, FontSlots>,
+): string | undefined {
+	if (typeof value === "string" || typeof value === "number") return text(value);
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const node = object(value);
+	if (node.type !== "span") return undefined;
+	const p = props(node.props, ["children", "style"]);
+	const s = style(p.style, "span");
+	rowOnly(s, "span", inherited.inRow);
+	if (boxStyle(s, inherited.size) || s.breakBefore === "page" || s.breakAfter === "page")
+		return undefined;
+	const next = nextInherited(s, inherited, fonts);
+	if (
+		next.size !== inherited.size ||
+		next.align !== inherited.align ||
+		next.bold !== inherited.bold ||
+		next.family !== inherited.family ||
+		next.color.some((channel, index) => channel !== inherited.color[index])
+	)
+		return undefined;
+	let result = "";
+	for (const child of children(p.children)) {
+		const nested = inlineText(child, inherited, fonts);
+		if (nested === undefined) return undefined;
+		result += nested;
+	}
+	return result;
+}
+
+function verticalMargin(box: Box | undefined) {
+	return (
+		box &&
+		box.margin[1] === 0 &&
+		box.margin[3] === 0 &&
+		box.padding.every((edge) => edge === 0) &&
+		box.border.every((edge) => edge === 0) &&
+		box.background === undefined
+	);
 }
 
 export async function lower(
@@ -136,7 +191,9 @@ export async function lower(
 						: undefined;
 				const next = nextInherited(s, inherited, fonts);
 				const box = boxStyle(s, next.size);
-				await withBox(binary, box, async () => {
+				const streamMargin = verticalMargin(box) && !inherited.inRow && s.breakInside !== "avoid";
+				if (streamMargin && box!.margin[0]) binary.record(2, () => binary.f32(box!.margin[0]));
+				await withBox(binary, streamMargin ? undefined : box, node.type, async () => {
 					if (items && items.length) {
 						if (s.gap !== undefined && point(s.gap, next.size) !== 0)
 							throw new Error("row gap is not implemented");
@@ -160,12 +217,32 @@ export async function lower(
 						// flow can advance pages without retaining a whole <main> in memory.
 						const blocks = [...children(p.children)];
 						const gap = s.gap === undefined ? 0 : point(s.gap, next.size);
-						for (const [index, block] of blocks.entries()) {
+						for (let index = 0; index < blocks.length; index++) {
 							if (index && gap) binary.record(2, () => binary.f32(gap));
-							await lower(block, binary, fonts, { ...next, inRow: false }, depth);
+							const inline = inlineText(blocks[index], { ...next, inRow: false }, fonts);
+							if (inline !== undefined) {
+								let value = inline;
+								while (++index < blocks.length) {
+									const sibling = inlineText(blocks[index], { ...next, inRow: false }, fonts);
+									if (sibling === undefined) break;
+									value += sibling;
+								}
+								if (index < blocks.length) index--;
+								emitText(
+									binary,
+									next.size,
+									value,
+									next.align,
+									next.color,
+									next.bold ? next.family.bold! : next.family.regular,
+								);
+								continue;
+							}
+							await lower(blocks[index], binary, fonts, { ...next, inRow: false }, depth);
 						}
 					}
 				});
+				if (streamMargin && box!.margin[2]) binary.record(2, () => binary.f32(box!.margin[2]));
 				emitBreak(binary, s, "breakAfter", depth);
 				break;
 			}
@@ -183,7 +260,7 @@ export async function lower(
 				emitBreak(binary, s, "breakBefore", depth);
 				const next = nextInherited(s, inherited, fonts);
 				const box = boxStyle(s, next.size);
-				await withBox(binary, box, async () => {
+				await withBox(binary, box, node.type, async () => {
 					emitText(
 						binary,
 						next.size,
@@ -194,6 +271,21 @@ export async function lower(
 					);
 				});
 				emitBreak(binary, s, "breakAfter", depth);
+				break;
+			}
+			case "hr": {
+				const p = props(node.props, ["children", "style"]);
+				const s = style(p.style, node.type);
+				const next = nextInherited(s, inherited, fonts);
+				const rule =
+					s.borderWidth === undefined &&
+					s.borderBottomWidth === undefined &&
+					s.borderBottom === undefined;
+				const box = boxStyle(
+					style(rule ? { ...s, borderBottom: "1pt solid black" } : s),
+					next.size,
+				)!;
+				await withBox(binary, box, node.type, async () => {});
 				break;
 			}
 			default:

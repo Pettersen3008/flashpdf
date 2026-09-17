@@ -43,6 +43,10 @@ const cssNames: Record<string, keyof Style | RejectedProperty> = {
 	"background-color": "backgroundColor",
 	background: "background",
 	"border-color": "borderColor",
+	"border-top": "borderTop",
+	"border-right": "borderRight",
+	"border-bottom": "borderBottom",
+	"border-left": "borderLeft",
 	"border-radius": "borderRadius",
 	"border-width": "borderWidth",
 	"break-after": "breakAfter",
@@ -86,6 +90,10 @@ export const supported = new Set<keyof Style>([
 	"border",
 	"borderWidth",
 	"borderColor",
+	"borderTop",
+	"borderRight",
+	"borderBottom",
+	"borderLeft",
 	"background",
 	"backgroundColor",
 	"gap",
@@ -300,6 +308,7 @@ function visit(
 			"h4",
 			"h5",
 			"h6",
+			"hr",
 		].includes(value.type)
 	)
 		return value;

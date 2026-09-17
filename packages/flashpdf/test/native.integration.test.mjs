@@ -27,14 +27,12 @@ const representative = (binary) => {
 		});
 	text("Before");
 	binary.record(17, () => {
-		for (let index = 0; index < 9; index += 1) binary.f32(0);
+		for (let index = 0; index < 12; index += 1) binary.f32(0);
 		binary.u8(1);
 		binary.u8(0xee);
 		binary.u8(0xee);
 		binary.u8(0xee);
-		binary.u8(0);
-		binary.u8(0);
-		binary.u8(0);
+		for (let index = 0; index < 12; index += 1) binary.u8(0);
 	});
 	text("Boxed");
 	binary.record(18);
