@@ -7,12 +7,43 @@ import { test } from "vitest";
 import { reactTree } from "../dist/tree.js";
 
 test("given React components and fragments, when normalizing, then returns host elements", async () => {
+	const calls = [];
+	const Nested = ({ label }) => {
+		calls.push("nested");
+		return jsx("p", { children: label });
+	};
 	const Row = ({ label }) => jsx("p", { children: label });
+	const Parent = ({ label }) => {
+		calls.push("parent");
+		return jsx(Nested, { label });
+	};
+	const Sibling = ({ label }) => {
+		calls.push("sibling");
+		return jsx("p", { children: label });
+	};
+	const AsyncRow = async ({ label }) => jsx("p", { children: label });
 	const tree = await reactTree(
-		jsxs(Fragment, { children: [jsx(Row, { label: "Invoice" }), false, null] }),
+		jsxs(Fragment, {
+			children: [
+				jsx(Parent, { label: "Invoice" }),
+				jsx(Sibling, { label: "Due" }),
+				jsx(Row, { label: "Subtotal" }),
+				jsx(AsyncRow, { label: "Paid" }),
+				false,
+				null,
+			],
+		}),
 	);
 
-	assert.deepEqual(tree, [{ type: "p", props: { children: "Invoice" } }, false, null]);
+	assert.deepEqual(tree, [
+		{ type: "p", props: { children: "Invoice" } },
+		{ type: "p", props: { children: "Due" } },
+		{ type: "p", props: { children: "Subtotal" } },
+		{ type: "p", props: { children: "Paid" } },
+		false,
+		null,
+	]);
+	assert.deepEqual(calls, ["parent", "sibling", "nested"]);
 });
 
 test("given memo, forwardRef, and class components, when normalizing, then resolves each to its host element", async () => {

@@ -10,11 +10,18 @@ export class Binary {
 	private readonly bytes = new Uint8Array(65541);
 	private readonly view = new DataView(this.bytes.buffer);
 	private readonly encoder = new TextEncoder();
+	private readonly inputPtr: number;
+	private readonly inputCapacity: number;
+	private input: Uint8Array;
 	private offset = 0;
 	constructor(
 		private readonly renderer: InputWindow,
 		private readonly memory: { buffer: ArrayBufferLike },
-	) {}
+	) {
+		this.inputPtr = renderer.input_ptr();
+		this.inputCapacity = renderer.input_capacity();
+		this.input = new Uint8Array(memory.buffer, this.inputPtr, this.inputCapacity);
+	}
 	u8(value: number) {
 		this.reserve(1);
 		this.view.setUint8(this.offset++, value);
@@ -61,10 +68,11 @@ export class Binary {
 		if (this.offset + length > this.bytes.length) throw new Error("record too large");
 	}
 	private flush() {
-		const capacity = this.renderer.input_capacity();
-		for (let offset = 0; offset < this.offset; offset += capacity) {
-			const chunk = this.bytes.subarray(offset, Math.min(offset + capacity, this.offset));
-			new Uint8Array(this.memory.buffer, this.renderer.input_ptr(), chunk.length).set(chunk);
+		for (let offset = 0; offset < this.offset; offset += this.inputCapacity) {
+			if (this.input.buffer !== this.memory.buffer)
+				this.input = new Uint8Array(this.memory.buffer, this.inputPtr, this.inputCapacity);
+			const chunk = this.bytes.subarray(offset, Math.min(offset + this.inputCapacity, this.offset));
+			this.input.set(chunk);
 			this.renderer.push(chunk.length);
 		}
 		this.offset = 0;

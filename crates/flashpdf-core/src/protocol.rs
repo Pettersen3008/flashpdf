@@ -50,40 +50,53 @@ impl Decoder {
             return Err("data after end".into());
         }
         self.pending.extend_from_slice(bytes);
-        if self.page.is_none() {
-            if self.pending.len() < HEADER_LEN {
-                return Ok(());
+        let mut pending = std::mem::take(&mut self.pending);
+        let mut consumed = 0;
+        let result = (|| {
+            if self.page.is_none() {
+                if pending.len() < HEADER_LEN {
+                    return Ok(());
+                }
+                self.read_header(&pending[..HEADER_LEN])?;
+                consumed = HEADER_LEN;
             }
-            self.read_header()?;
-            self.pending.drain(..HEADER_LEN);
+            loop {
+                let remaining = &pending[consumed..];
+                if remaining.len() < 5 {
+                    return Ok(());
+                }
+                let length = u32::from_le_bytes(remaining[1..5].try_into().unwrap()) as usize;
+                if length > MAX_RECORD {
+                    return Err("record too large".into());
+                }
+                let total = 5 + length;
+                if remaining.len() < total {
+                    return Ok(());
+                }
+                let start = consumed;
+                consumed += total;
+                self.read_record(pending[start], &pending[start + 5..consumed])?;
+            }
+        })();
+        if consumed > 0 {
+            let remaining = pending.len() - consumed;
+            pending.copy_within(consumed.., 0);
+            pending.truncate(remaining);
         }
-        loop {
-            if self.pending.len() < 5 {
-                return Ok(());
-            }
-            let length = u32::from_le_bytes(self.pending[1..5].try_into().unwrap()) as usize;
-            if length > MAX_RECORD {
-                return Err("record too large".into());
-            }
-            let total = 5 + length;
-            if self.pending.len() < total {
-                return Ok(());
-            }
-            let record: Vec<u8> = self.pending.drain(..total).collect();
-            self.read_record(record[0], &record[5..])?;
-        }
+        self.pending = pending;
+        result
     }
 
-    fn read_header(&mut self) -> Result<(), String> {
-        if &self.pending[..4] != MAGIC {
+    fn read_header(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if &bytes[..4] != MAGIC {
             return Err("invalid magic".into());
         }
-        if u16::from_le_bytes(self.pending[4..6].try_into().unwrap()) != VERSION {
+        if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != VERSION {
             return Err("unknown version".into());
         }
-        let width = positive_f32(&self.pending[6..10], "page width")?;
-        let height = positive_f32(&self.pending[10..14], "page height")?;
-        let margin = nonnegative_f32(&self.pending[14..18], "margin")?;
+        let width = positive_f32(&bytes[6..10], "page width")?;
+        let height = positive_f32(&bytes[10..14], "page height")?;
+        let margin = nonnegative_f32(&bytes[14..18], "margin")?;
         self.page =
             Some(crate::Page::new(pt(width)?, pt(height)?, pt(margin)?).map_err(render_error)?);
         Ok(())
@@ -293,12 +306,11 @@ impl Decoder {
         let Self {
             renderer, block, ..
         } = self;
-        let commands: Vec<_> = block.iter().map(OwnedCommand::borrow).collect();
         renderer
             .get_or_insert_with(|| {
                 crate::Renderer::with_fonts(page, std::mem::take(&mut self.fonts))
             })
-            .push(&commands)
+            .push_owned(block)
             .map_err(render_error)?;
         block.clear();
         Ok(())

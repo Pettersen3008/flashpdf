@@ -84,12 +84,7 @@ function emitBreak(
 	binary.record(7);
 }
 
-async function withBox(
-	binary: Binary,
-	box: Box | undefined,
-	tag: string,
-	body: () => Promise<void>,
-) {
+function withBox(binary: Binary, box: Box | undefined, tag: string, body: () => void) {
 	if (box)
 		binary.record(17, () => {
 			for (const edge of [...box.margin, ...box.padding]) binary.f32(edge);
@@ -101,7 +96,7 @@ async function withBox(
 			for (const edge of box.borderColor) for (const channel of edge) binary.u8(channel);
 		});
 	try {
-		await body();
+		body();
 		if (box) binary.record(18);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -154,13 +149,13 @@ function verticalMargin(box: Box | undefined) {
 	);
 }
 
-export async function lower(
+export function lower(
 	value: unknown,
 	binary: Binary,
 	fonts: ReadonlyMap<string, FontSlots>,
 	inherited: Inherited = ROOT,
 	depth = 0,
-): Promise<void> {
+): void {
 	for (const child of children(value)) {
 		if (typeof child === "string" || typeof child === "number") {
 			emitText(
@@ -193,7 +188,7 @@ export async function lower(
 				const box = boxStyle(s, next.size);
 				const streamMargin = verticalMargin(box) && !inherited.inRow && s.breakInside !== "avoid";
 				if (streamMargin && box!.margin[0]) binary.record(2, () => binary.f32(box!.margin[0]));
-				await withBox(binary, streamMargin ? undefined : box, node.type, async () => {
+				withBox(binary, streamMargin ? undefined : box, node.type, () => {
 					if (items && items.length) {
 						if (s.gap !== undefined && point(s.gap, next.size) !== 0)
 							throw new Error("row gap is not implemented");
@@ -206,11 +201,11 @@ export async function lower(
 							}
 						});
 						for (const item of items)
-							await lower(item, binary, fonts, { ...next, inRow: true }, depth + 1);
+							lower(item, binary, fonts, { ...next, inRow: true }, depth + 1);
 						binary.record(6);
 					} else if (inherited.inRow || s.breakInside === "avoid") {
 						binary.record(3, () => binary.f32(s.gap === undefined ? 0 : point(s.gap, next.size)));
-						await lower(p.children, binary, fonts, { ...next, inRow: false }, depth + 1);
+						lower(p.children, binary, fonts, { ...next, inRow: false }, depth + 1);
 						binary.record(4);
 					} else {
 						// Block children are independent renderer blocks, so normal document
@@ -238,7 +233,7 @@ export async function lower(
 								);
 								continue;
 							}
-							await lower(blocks[index], binary, fonts, { ...next, inRow: false }, depth);
+							lower(blocks[index], binary, fonts, { ...next, inRow: false }, depth);
 						}
 					}
 				});
@@ -260,7 +255,7 @@ export async function lower(
 				emitBreak(binary, s, "breakBefore", depth);
 				const next = nextInherited(s, inherited, fonts);
 				const box = boxStyle(s, next.size);
-				await withBox(binary, box, node.type, async () => {
+				withBox(binary, box, node.type, () => {
 					emitText(
 						binary,
 						next.size,
@@ -285,7 +280,7 @@ export async function lower(
 					style(rule ? { ...s, borderBottom: "1pt solid black" } : s),
 					next.size,
 				)!;
-				await withBox(binary, box, node.type, async () => {});
+				withBox(binary, box, node.type, () => {});
 				break;
 			}
 			default:

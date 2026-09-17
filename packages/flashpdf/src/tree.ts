@@ -31,28 +31,52 @@ function component(type: unknown): Render | undefined {
 	return undefined;
 }
 
+function thenable(value: unknown): value is PromiseLike<unknown> {
+	return (
+		(typeof value === "object" || typeof value === "function") &&
+		value !== null &&
+		typeof (value as { then?: unknown }).then === "function"
+	);
+}
+
+function list(values: Iterable<unknown>, depth: number): unknown[] | Promise<unknown[]> {
+	const result: unknown[] = [];
+	let pending = false;
+	for (const value of values) {
+		const child = normalize(value, depth);
+		pending ||= thenable(child);
+		result.push(child);
+	}
+	return pending ? Promise.all(result) : result;
+}
+
 /** `depth` counts element levels only, matching the renderer's own limit; the
  *  children arrays React puts between them are transparent. */
-export async function reactTree(value: unknown, depth = 0): Promise<unknown> {
+function normalize(value: unknown, depth: number): unknown {
 	if (depth > 64) throw new Error("nesting exceeds 64");
 	if (typeof value === "bigint") return String(value);
-	if (Array.isArray(value)) return Promise.all(value.map((child) => reactTree(child, depth)));
+	if (Array.isArray(value)) return list(value, depth);
 	if (typeof value !== "object" || value === null) return value;
 	const iterator = (value as { [Symbol.iterator]?: unknown })[Symbol.iterator];
-	if (typeof iterator === "function")
-		return Promise.all([...(value as Iterable<unknown>)].map((child) => reactTree(child, depth)));
+	if (typeof iterator === "function") return list(value as Iterable<unknown>, depth);
 
 	const node = object(value);
 	if (!("type" in node) || !("props" in node)) return value;
 	const p = object(node.props);
 	if (node.type === REACT_FRAGMENT || node.type === FLASHPDF_FRAGMENT)
-		return reactTree(p.children, depth + 1);
+		return normalize(p.children, depth + 1);
 	const render = component(node.type);
-	if (render) return reactTree(await render(p), depth + 1);
-	return {
+	if (render) return Promise.resolve(render(p)).then((result) => normalize(result, depth + 1));
+	const child = normalize(p.children, depth + 1);
+	const result = (children: unknown) => ({
 		type: node.type,
-		props: { ...p, children: await reactTree(p.children, depth + 1) },
-	};
+		props: { ...p, children },
+	});
+	return thenable(child) ? Promise.resolve(child).then(result) : result(child);
+}
+
+export async function reactTree(value: unknown, depth = 0): Promise<unknown> {
+	return normalize(value, depth);
 }
 
 export function scalarText(value: unknown): string {

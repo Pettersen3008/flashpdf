@@ -1,8 +1,10 @@
 import type { Element, Style } from "./element.js";
 
 type Identity = { tag: string; id?: string | undefined; classes: readonly string[] };
+type SelectorPart = { tag: string; ids: readonly string[]; classes: readonly string[] };
+type SelectorPiece = SelectorPart | " " | ">";
 type Rule = {
-	selector: string;
+	selector: readonly SelectorPiece[];
 	declarations: Record<string, string>;
 	order: number;
 	specificity: number;
@@ -155,45 +157,39 @@ function cascade(target: Record<string, unknown>, source: Record<string, unknown
 		target[key] = value;
 	}
 }
-function specificity(selector: string) {
+function selectorPart(part: string): SelectorPart {
+	return {
+		tag: part.match(/^[a-z][\w-]*/i)?.[0] ?? "",
+		ids: part.match(/#[\w-]+/g)?.map((value) => value.slice(1)) ?? [],
+		classes: part.match(/\.[\w-]+/g)?.map((value) => value.slice(1)) ?? [],
+	};
+}
+function specificity(selector: readonly SelectorPiece[]) {
+	let result = 0;
+	for (const part of selector)
+		if (typeof part !== "string")
+			result += part.ids.length * 100 + part.classes.length * 10 + Number(Boolean(part.tag));
+	return result;
+}
+function matchesPart(part: SelectorPiece | undefined, node: Identity | undefined) {
+	if (part === undefined || typeof part === "string" || node === undefined) return false;
 	return (
-		(selector.match(/#[\w-]+/g)?.length ?? 0) * 100 +
-		(selector.match(/\.[\w-]+/g)?.length ?? 0) * 10 +
-		(selector.match(/(^|[ >])[a-z][\w-]*/gi)?.length ?? 0)
+		(!part.tag || part.tag === node.tag) &&
+		part.ids.every((id) => id === node.id) &&
+		part.classes.every((value) => node.classes.includes(value))
 	);
 }
-function matchesPart(part: string | undefined, node: Identity | undefined) {
-	if (part === undefined || node === undefined) return false;
-	const tag = part.match(/^[a-z][\w-]*/i)?.[0];
-	return (
-		(!tag || tag === node.tag) &&
-		!part.match(/#[\w-]+/g)?.some((value) => value.slice(1) !== node.id) &&
-		!part.match(/\.[\w-]+/g)?.some((value) => !node.classes.includes(value.slice(1)))
-	);
-}
-function matches(selector: string, node: Identity, ancestors: readonly Identity[]) {
-	const pieces = selector
-		.trim()
-		.replace(/\s+/g, " ")
-		.replace(/\s*>\s*/g, ">")
-		.split(/(>|\s+)/)
-		.filter(Boolean);
-	let current: Identity | undefined = node;
+function matches(pieces: readonly SelectorPiece[], node: Identity, ancestors: readonly Identity[]) {
+	if (!matchesPart(pieces.at(-1), node)) return false;
 	let ancestor = ancestors.length - 1;
-	for (let index = pieces.length - 1; index >= 0;) {
-		const part = pieces[index--];
-		if (part === ">") {
-			current = ancestors[ancestor--];
-			if (!current || !matchesPart(pieces[index--], current)) return false;
-			continue;
+	for (let index = pieces.length - 2; index > 0; index -= 2) {
+		const wanted = pieces[index - 1];
+		if (pieces[index] === ">") {
+			if (!matchesPart(wanted, ancestors[ancestor--])) return false;
+		} else {
+			while (ancestor >= 0 && !matchesPart(wanted, ancestors[ancestor])) ancestor--;
+			if (ancestor-- < 0) return false;
 		}
-		if (!current || !matchesPart(part, current)) return false;
-		if (index < 0) return true;
-		if (pieces[index] === " ") index--;
-		const wanted = pieces[index--];
-		while (ancestor >= 0 && !matchesPart(wanted, ancestors[ancestor])) ancestor--;
-		if (ancestor < 0) return false;
-		current = ancestors[ancestor--];
 	}
 	return true;
 }
@@ -307,11 +303,14 @@ function parse(source: string): Rule[] {
 				pieces.length % 2 === 0
 			)
 				throw new Error(`unsupported CSS selector: ${selector || selectors.trim()}${at}`);
+			const compiled = pieces.map((part, index) =>
+				index % 2 === 0 ? selectorPart(part) : (part as " " | ">"),
+			);
 			rules.push({
-				selector,
+				selector: compiled,
 				declarations: declarations(body, ` in selector ${JSON.stringify(selector)}${at}`),
 				order: rules.length,
-				specificity: specificity(selector),
+				specificity: specificity(compiled),
 			});
 		}
 	}
@@ -328,7 +327,7 @@ function node(value: unknown): value is Element {
 function visit(
 	value: unknown,
 	rules: Rule[],
-	ancestors: readonly Identity[],
+	ancestors: Identity[],
 	parent: Record<string, unknown>,
 ): unknown {
 	if (Array.isArray(value)) return value.map((child) => visit(child, rules, ancestors, parent));
@@ -365,14 +364,18 @@ function visit(
 	for (const [key, item] of Object.entries(parent))
 		if (key.startsWith("--") || inherited.has(key)) result[key] = item;
 	cascade(result, uaStyles[value.type]);
-	for (const rule of rules
-		.filter((rule) => matches(rule.selector, identity, ancestors))
-		.sort((a, b) => a.specificity - b.specificity || a.order - b.order))
-		cascade(result, rule.declarations);
+	for (const rule of rules)
+		if (matches(rule.selector, identity, ancestors)) cascade(result, rule.declarations);
 	cascade(result, inline(props.style as Style | string | undefined));
-	const budget = { expansions: 0 };
+	let budget: { expansions: number } | undefined;
 	for (const [key, item] of Object.entries(result))
-		result[key] = resolveVariable(item, result, new Set(key.startsWith("--") ? [key] : []), budget);
+		if (typeof item === "string" && item.includes("var("))
+			result[key] = resolveVariable(
+				item,
+				result,
+				new Set(key.startsWith("--") ? [key] : []),
+				(budget ??= { expansions: 0 }),
+			);
 	if (result.fontSize !== undefined) {
 		const value = result.fontSize;
 		if (typeof value === "string") {
@@ -389,18 +392,23 @@ function visit(
 	if (typeof result.flex === "string" && /^(?:\d+(?:\.\d*)?|\.\d+)$/.test(result.flex.trim()))
 		result.flex = Number(result.flex);
 	const { className: _className, id: _id, style: _style, children, ...rest } = props;
+	ancestors.push(identity);
+	const resolvedChildren = visit(children, rules, ancestors, result);
+	ancestors.pop();
 	return {
 		type: value.type,
 		props: {
 			...rest,
 			style: result,
-			children: visit(children, rules, [...ancestors, identity], result),
+			children: resolvedChildren,
 		},
 	};
 }
 export function resolveStyles(value: unknown, sheets: readonly string[] = []): unknown {
 	// `parse` numbers rules per sheet, so reindex: a later sheet outranks an
 	// earlier one at equal specificity, exactly as a browser stacks <link> tags.
-	const rules = sheets.flatMap(parse).map((rule, order) => ({ ...rule, order }));
+	const rules = sheets.flatMap(parse);
+	for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
+	rules.sort((a, b) => a.specificity - b.specificity || a.order - b.order);
 	return visit(value, rules, [], {});
 }

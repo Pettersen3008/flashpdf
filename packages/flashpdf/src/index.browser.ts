@@ -44,7 +44,7 @@ export async function render(
 			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
 		)
 			throw new Error("invalid stylesheets");
-		await lower(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), binary, fonts);
+		lower(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), binary, fonts);
 		binary.record(255);
 		consumed = true;
 		return renderer.finish();

@@ -19,7 +19,20 @@ pub(crate) fn finish_pdf(
         .filter(|slot| used_fonts[*slot])
         .map(|slot| slot as u8)
         .collect();
-    let mut pdf = Pdf::new();
+    let capacity = contents
+        .iter()
+        .map(Content::len)
+        .chain(
+            used.iter()
+                .filter_map(|slot| match &fonts[usize::from(*slot)] {
+                    Font::Embedded(font) => Some(font.bytes.len()),
+                    Font::Helvetica { .. } => None,
+                }),
+        )
+        .try_fold(8 * 1024_usize, |total, length| total.checked_add(length));
+    let mut pdf = capacity
+        .map(|capacity| Pdf::with_capacity(capacity.max(8 * 1024)))
+        .unwrap_or_else(Pdf::new);
     let catalog = Ref::new(1);
     let pages = Ref::new(2);
 
@@ -99,6 +112,7 @@ pub(crate) fn finish_pdf(
             }
         }
     }
+    drop(fonts);
 
     for (index, content) in contents.into_iter().enumerate() {
         let page_ref = Ref::new(first_page + index as i32 * 2);

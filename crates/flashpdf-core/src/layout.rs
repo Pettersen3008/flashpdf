@@ -22,6 +22,27 @@ pub struct Renderer {
     used_fonts: Vec<bool>,
 }
 
+enum Commands<'a, 'b> {
+    Borrowed(&'a [Command<'b>]),
+    Owned(&'a [OwnedCommand]),
+}
+
+impl Commands<'_, '_> {
+    fn get(&self, index: usize) -> Option<Command<'_>> {
+        match self {
+            Self::Borrowed(commands) => commands.get(index).copied(),
+            Self::Owned(commands) => commands.get(index).map(OwnedCommand::borrow),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(commands) => commands.len(),
+            Self::Owned(commands) => commands.len(),
+        }
+    }
+}
+
 impl Renderer {
     pub fn new(page: Page) -> Self {
         Self::with_fonts(page, Vec::new())
@@ -58,9 +79,17 @@ impl Renderer {
     }
 
     pub fn push(&mut self, commands: &[Command<'_>]) -> Result<(), RenderError> {
+        self.push_commands(Commands::Borrowed(commands))
+    }
+
+    pub(crate) fn push_owned(&mut self, commands: &[OwnedCommand]) -> Result<(), RenderError> {
+        self.push_commands(Commands::Owned(commands))
+    }
+
+    fn push_commands(&mut self, commands: Commands<'_, '_>) -> Result<(), RenderError> {
         let mut index = 0;
         while index < commands.len() {
-            if commands[index] == Command::PageBreak {
+            if commands.get(index) == Some(Command::PageBreak) {
                 self.cursor = start_page(self.page, &mut self.contents);
                 index += 1;
                 continue;
@@ -73,7 +102,7 @@ impl Renderer {
             } = self;
             scratch.clear();
             let height = measure(
-                commands,
+                &commands,
                 &mut index,
                 self.page.width.0 - self.page.margin.0 * 2.0,
                 0.0,
@@ -282,14 +311,20 @@ fn measure_text_styled(
     let mut line_start = scratch.text.len();
     let mut has_word = false;
     for word in text.split_ascii_whitespace() {
-        let word_width = word.chars().try_fold(0_u64, |width, character| {
-            encode_win_ansi(character)
-                .and_then(|byte| selected_font.width(byte))
-                .map(|advance| width + u64::from(advance))
-        })? as f32
-            * size.0
-            / 1000.0;
+        let previous_end = scratch.text.len();
+        if has_word {
+            scratch.text.push(b' ');
+        }
+        let word_start = scratch.text.len();
+        let mut advance = 0_u64;
+        for character in word.chars() {
+            let byte = encode_win_ansi(character)?;
+            advance += u64::from(selected_font.width(byte)?);
+            scratch.text.push(byte);
+        }
+        let word_width = advance as f32 * size.0 / 1000.0;
         if word_width > width {
+            scratch.text.truncate(previous_end);
             return Err(RenderError::TextTooWide);
         }
         let space = if has_word {
@@ -299,7 +334,7 @@ fn measure_text_styled(
         };
         if has_word && used + space + word_width > width {
             scratch.lines.push(Line {
-                text: line_start..scratch.text.len(),
+                text: line_start..previous_end,
                 size: size.0,
                 x,
                 y: y + height + ascent,
@@ -311,15 +346,12 @@ fn measure_text_styled(
             });
             height += line_height;
             used = 0.0;
-            line_start = scratch.text.len();
+            // The separator before the wrapped word stays outside both ranges.
+            line_start = word_start;
             has_word = false;
         }
         if has_word {
-            scratch.text.push(b' ');
             used += space;
-        }
-        for character in word.chars() {
-            scratch.text.push(encode_win_ansi(character)?);
         }
         used += word_width;
         has_word = true;
@@ -344,7 +376,7 @@ fn measure_text_styled(
 // One top-level block owns all measured lines; nested containers share this buffer.
 #[allow(clippy::too_many_arguments)] // Layout state is explicit rather than boxed into a context struct.
 fn measure(
-    commands: &[Command<'_>],
+    commands: &Commands<'_, '_>,
     index: &mut usize,
     width: f32,
     x: f32,
@@ -356,7 +388,7 @@ fn measure(
     if !width.is_finite() || width <= 0.0 {
         return Err(RenderError::InvalidLayout);
     }
-    let command = *commands.get(*index).ok_or(RenderError::InvalidLayout)?;
+    let command = commands.get(*index).ok_or(RenderError::InvalidLayout)?;
     *index += 1;
     if depth >= 64
         && matches!(
@@ -408,7 +440,7 @@ fn measure(
                 });
                 index
             });
-            while commands.get(*index) != Some(&Command::BoxEnd) {
+            while commands.get(*index) != Some(Command::BoxEnd) {
                 inner_height += measure(
                     commands,
                     index,
@@ -441,7 +473,7 @@ fn measure(
         Command::StackStart { gap } => {
             let mut height = 0.0;
             let mut first = true;
-            while commands.get(*index) != Some(&Command::StackEnd) {
+            while commands.get(*index) != Some(Command::StackEnd) {
                 if !first {
                     height += gap.0;
                 }
@@ -506,7 +538,7 @@ fn measure(
                 )?);
                 offset += cell_width;
             }
-            if commands.get(*index) != Some(&Command::RowEnd) {
+            if commands.get(*index) != Some(Command::RowEnd) {
                 return Err(RenderError::InvalidLayout);
             }
             *index += 1;

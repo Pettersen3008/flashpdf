@@ -10,7 +10,6 @@ use napi_derive::napi;
 
 #[napi]
 pub struct PdfRenderer {
-    input: Box<[u8]>,
     decoder: Decoder,
 }
 
@@ -19,14 +18,13 @@ impl PdfRenderer {
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {
-            input: vec![0; INPUT_CAPACITY].into_boxed_slice(),
             decoder: Decoder::default(),
         }
     }
 
     #[napi]
     pub fn input_capacity(&self) -> u32 {
-        self.input.len() as u32
+        INPUT_CAPACITY as u32
     }
 
     /// N-API only borrows a Buffer for this call. The decoder takes the single
@@ -39,16 +37,14 @@ impl PdfRenderer {
             .map_err(error)
     }
 
-    /// `chunk` borrows JS-owned memory that is only valid for this call, so the
-    /// bytes land in Rust-owned scratch before the decoder sees them.
+    /// `chunk` stays borrowed for this synchronous call. The decoder copies
+    /// only bytes it must retain across calls.
     #[napi]
     pub fn push(&mut self, chunk: BufferSlice<'_>) -> Result<()> {
-        let length = chunk.len();
-        if length > self.input.len() {
+        if chunk.len() > INPUT_CAPACITY {
             return Err(error("input exceeds window"));
         }
-        self.input[..length].copy_from_slice(&chunk);
-        self.decoder.push(&self.input[..length]).map_err(error)
+        self.decoder.push(&chunk).map_err(error)
     }
 
     #[napi]
