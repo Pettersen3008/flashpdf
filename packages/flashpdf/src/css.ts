@@ -234,9 +234,21 @@ function position(source: string, index: number) {
 	const before = source.slice(0, index);
 	return `${before.split("\n").length}:${before.length - before.lastIndexOf("\n")}`;
 }
+function withoutComments(source: string) {
+	const parts: string[] = [];
+	let index = 0;
+	while (true) {
+		const start = source.indexOf("/*", index);
+		if (start < 0) return parts.join("") + source.slice(index);
+		parts.push(source.slice(index, start));
+		const end = source.indexOf("*/", start + 2);
+		if (end < 0) return parts.join("") + source.slice(start);
+		index = end + 2;
+	}
+}
 function parse(source: string): Rule[] {
 	const rules: Rule[] = [];
-	const clean = source.replace(/\/\*[\s\S]*?\*\//g, "");
+	const clean = withoutComments(source);
 	const at = clean.indexOf("@");
 	if (at >= 0)
 		throw new Error(

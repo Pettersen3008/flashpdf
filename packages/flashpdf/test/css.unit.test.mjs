@@ -31,6 +31,10 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 	}
 });
 
+test("given repeated comment markers, when parsing a stylesheet, then rejects without backtracking", () => {
+	assert.throws(() => stylesheet(`/*${"a/*".repeat(10_000)}`), /invalid CSS stylesheet/);
+});
+
 test("given bounded CSS variables, when resolving styles, then rejects cycles and oversized expansion", () => {
 	const element = jsx("main", {
 		style: { "--x": "var(--x)var(--x)", color: "var(--x)" },
