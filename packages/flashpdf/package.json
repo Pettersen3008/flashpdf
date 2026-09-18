@@ -37,6 +37,7 @@
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",
+			"workerd": "./dist/index.worker.js",
 			"browser": "./dist/index.browser.js",
 			"node": "./dist/index.js",
 			"default": "./dist/index.js"
@@ -59,6 +60,7 @@
 		"build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc && tsc -p examples/tsconfig.json",
 		"typecheck": "pnpm build && tsc -p tsconfig.test.json",
 		"test": "pnpm build && vitest run --config ../../vitest.config.ts",
+		"examples:css": "node examples/css-integrations/tailwind.mjs && node examples/css-integrations/stylex.mjs && node examples/css-integrations/styled-components.mjs",
 		"bench": "pnpm build && node --expose-gc bench/css-invoice.mjs",
 		"prepack": "node -e \"const{existsSync}=require('node:fs');for(const file of['dist/index.js','dist/index.d.ts','dist/jsx-runtime.js','dist/jsx-runtime.d.ts','dist/jsx-dev-runtime.js','dist/jsx-dev-runtime.d.ts','wasm/flashpdf_wasm.js','wasm/flashpdf_wasm.d.ts','wasm/flashpdf_wasm_bg.wasm','wasm/flashpdf_wasm_bg.wasm.d.ts'])if(!existsSync(file))throw Error('missing '+file+'; run sh verify.sh from the repository root')\""
 	},

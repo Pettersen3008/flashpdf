@@ -57,6 +57,8 @@ const pdf = await render(<main className="invoice">…</main>, { stylesheets: [c
 
 CSS Modules, minification, and syntax transforms belong to the frontend build. Lightning CSS works well as a Vite, webpack, or Rollup plugin. FlashPDF only validates the subset it can render.
 
+Runnable Tailwind, StyleX, and styled-components build-step examples live in [`packages/flashpdf/examples/css-integrations`](./packages/flashpdf/examples/css-integrations). They compile or extract static CSS, then pass that string through `render({ stylesheets })`.
+
 FlashPDF rejects any declaration it cannot honour, naming the property, the selector, and the source position. It never silently drops one.
 
 ## API
@@ -65,8 +67,18 @@ FlashPDF rejects any declaration it cannot honour, naming the property, the sele
 | --- | --- | --- |
 | `render` | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged, for tagging literals at author time. |
+| `PageNumber` | `() => Element` | Resolves to the current page number inside `RenderOptions.footer`. |
+| `TotalPages` | `() => Element` | Resolves to the final page count inside `RenderOptions.footer`. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[] }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36.
+`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; footer?: Element }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. A footer accepts one styled text line, repeats at the bottom of every page, and reserves its measured height before body pagination.
+
+```tsx
+import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
+
+const pdf = await render(<Invoice />, {
+  footer: <footer style={{ fontSize: '9pt', textAlign: 'center' }}>Page <PageNumber /> of <TotalPages /></footer>,
+});
+```
 
 ## Embedded fonts
 
@@ -89,8 +101,10 @@ v1 embeds whole TrueType files and keeps the existing WinAnsi text subset. It su
 | Browser via Vite, webpack, or Rollup | Yes, including host-provided `Uint8Array` TTFs, the bundler emits the WASM as an asset |
 | Node 20+ | Yes, including host-provided `Uint8Array` TTFs |
 | Bun 1.x | Yes, including host-provided `Uint8Array` TTFs |
+| AWS Lambda Node.js 20+ | Yes, include the package's `wasm/` directory in the deployment artifact |
+| Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
 
-Every target runs the same decoder, so a document that renders in one produces identical bytes in the others. `tests/e2e.mjs` proves this against a packed tarball with Node, Bun, Vite, and Chromium.
+Every target runs the same decoder, so a document that renders in one produces identical bytes in the others. `tests/e2e.mjs` proves this against a packed tarball with Node, AWS Lambda handler packaging, Bun, Vite, Chromium, and Wrangler's local Workers runtime. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
 
 ## Assets
 
@@ -115,6 +129,8 @@ sh verify.sh
 ```
 
 That formats and lints the Rust workspace, runs the Vitest unit and integration projects, rebuilds and size-gates the WASM, and finally runs the packed-package E2E test in Node, Bun, and Chromium.
+
+Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. It reports median cold start, warm render, peak RSS, installed package and WASM size, and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts. Each library uses its native authoring API, so the results compare end-to-end workloads rather than a shared layout implementation.
 
 To publish the verified package, create a GitHub Release with a `v*` tag. The release workflow publishes it to GitHub Packages.
 

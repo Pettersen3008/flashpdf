@@ -36,8 +36,12 @@ pub(crate) fn encode(character: char) -> Result<u8, RenderError> {
 }
 
 pub(crate) fn valid(text: &str) -> bool {
-    text.chars()
-        .all(|character| matches!(character, '\t'..='\r') || encode(character).is_ok())
+    text.chars().all(|character| {
+        matches!(
+            character,
+            '\t'..='\r' | crate::PAGE_NUMBER | crate::TOTAL_PAGES
+        ) || encode(character).is_ok()
+    })
 }
 
 pub(crate) fn decode(byte: u8) -> Option<char> {

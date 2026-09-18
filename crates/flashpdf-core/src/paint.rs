@@ -48,27 +48,40 @@ impl<'a> PdfPainter<'a> {
 
     fn paint_text(&mut self, layout: &LayoutBuffer, origin: Point) {
         for line in &layout.lines {
-            self.content.begin_text();
-            self.set_fill(line.style.color);
-            let mut buffer = [0_u8; 4];
-            self.content.set_font(
-                Name(font_name(line.style.font, &mut buffer)),
-                line.style.size.get(),
+            self.paint_line(
+                &layout.text[line.text.clone()],
+                line.style,
+                Point {
+                    x: origin.x + line.origin.x,
+                    y: origin.y - line.origin.y,
+                },
+                line.available_width,
+                line.text_width,
             );
-            let x = match line.style.align {
-                TextAlign::Left => line.origin.x,
-                TextAlign::Center => {
-                    line.origin.x + Pt((line.available_width - line.text_width).get() / 2.0)
-                }
-                TextAlign::Right => line.origin.x + line.available_width - line.text_width,
-            };
-            self.content.next_line(
-                origin.x.get() + x.get(),
-                origin.y.get() - line.origin.y.get(),
-            );
-            self.content.show(Str(&layout.text[line.text.clone()]));
-            self.content.end_text();
         }
+    }
+
+    pub(crate) fn paint_line(
+        &mut self,
+        text: &[u8],
+        style: crate::TextStyle,
+        origin: Point,
+        available_width: Pt,
+        text_width: Pt,
+    ) {
+        self.content.begin_text();
+        self.set_fill(style.color);
+        let mut buffer = [0_u8; 4];
+        self.content
+            .set_font(Name(font_name(style.font, &mut buffer)), style.size.get());
+        let x = match style.align {
+            TextAlign::Left => origin.x,
+            TextAlign::Center => origin.x + Pt((available_width - text_width).get() / 2.0),
+            TextAlign::Right => origin.x + available_width - text_width,
+        };
+        self.content.next_line(x.get(), origin.y.get());
+        self.content.show(Str(text));
+        self.content.end_text();
     }
 
     fn set_fill(&mut self, color: Rgb) {

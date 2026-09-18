@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 import { test } from "vitest";
 
-import { render, stylesheet } from "../dist/index.js";
+import { PageNumber, render, stylesheet, TotalPages } from "../dist/index.js";
 import { Fragment, jsx, jsxs } from "../dist/jsx-runtime.js";
 
 const string = (pdf) => Buffer.from(pdf).toString("latin1");
@@ -12,7 +12,7 @@ const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", 
 
 test("given the package entry point, when importing it, then exposes only the renderer and stylesheet validator", async () => {
 	const api = await import("../dist/index.js");
-	assert.deepEqual(Object.keys(api).sort(), ["render", "stylesheet"]);
+	assert.deepEqual(Object.keys(api).sort(), ["PageNumber", "TotalPages", "render", "stylesheet"]);
 });
 
 test("given the rendering entry point, when following its imports, then it has no build-tool dependencies", () => {
@@ -133,6 +133,23 @@ test("given a long native main with a page break rule, when rendering, then it p
 		{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
 	);
 	assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+});
+
+test("given a page footer, when rendering multiple pages, then repeats resolved page numbers", async () => {
+	const document = jsx("main", {
+		children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+	});
+	const footer = jsxs("footer", {
+		style: { fontSize: "9pt", textAlign: "center" },
+		children: ["Page ", jsx(PageNumber, {}), " of ", jsx(TotalPages, {})],
+	});
+	const pdf = await render(document, { footer });
+	assert.match(string(pdf), /\(Page 1 of 2\)/);
+	assert.match(string(pdf), /\(Page 2 of 2\)/);
+	await assert.rejects(
+		render(jsx("main", { children: jsx(PageNumber, {}) })),
+		/only valid in a footer/,
+	);
 });
 
 test("given adjacent text and plain spans, when rendering, then keeps them in one inline run", async () => {

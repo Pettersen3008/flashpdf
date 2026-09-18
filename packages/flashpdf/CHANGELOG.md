@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Repeating `RenderOptions.footer` content with `PageNumber` and `TotalPages` tokens.
+- Tested AWS Lambda Node.js packaging and a `workerd` export for Cloudflare Workers.
+- Runnable Tailwind, StyleX, and styled-components static-CSS build examples.
+- An isolated comparison benchmark for FlashPDF, PDFKit, React-pdf, and Takumi.
+
 ## 0.2.1 - 2026-09-17
 
 ### Changed

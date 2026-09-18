@@ -17,5 +17,8 @@ pub(crate) use font::EmbeddedFont;
 pub use model::*;
 pub use renderer::{render, Renderer};
 
+pub(crate) const PAGE_NUMBER: char = '\u{1e}';
+pub(crate) const TOTAL_PAGES: char = '\u{1f}';
+
 #[cfg(test)]
 mod tests;
