@@ -52,6 +52,24 @@ process.stdout.write(Buffer.from(pdf).toString("base64"));
 	if (!nodePdf.startsWith("JVBER")) throw new Error("Node did not render a PDF");
 	console.log("node: ok");
 
+	writeFileSync(
+		join(work, "lambda.mjs"),
+		`import { jsx } from "@pettersen3008/flashpdf/jsx-runtime";
+import { render } from "@pettersen3008/flashpdf";
+export async function handler() {
+  const pdf = await render(jsx("main", { children: "Lambda invoice" }));
+  return { statusCode: 200, isBase64Encoded: true, body: Buffer.from(pdf).toString("base64") };
+}
+`,
+	);
+	const lambdaPdf = run(process.execPath, [
+		"--input-type=module",
+		"-e",
+		`const { handler } = await import("./lambda.mjs"); const response = await handler(); process.stdout.write(response.body);`,
+	]);
+	if (!lambdaPdf.startsWith("JVBER")) throw new Error("Lambda handler did not render a PDF");
+	console.log("aws-lambda: ok");
+
 	if (!nodeOnly && spawnSync("bun", ["--version"]).status === 0) {
 		const bunPdf = run("bun", ["consumer.mjs"]);
 		if (bunPdf !== nodePdf) throw new Error("Bun output differs from Node");
@@ -59,6 +77,38 @@ process.stdout.write(Buffer.from(pdf).toString("base64"));
 	} else if (!nodeOnly) console.warn("bun not installed; Bun support is unverified on this target");
 
 	if (!nodeOnly) {
+		writeFileSync(
+			join(work, "worker.mjs"),
+			`import { jsx } from "@pettersen3008/flashpdf/jsx-runtime";
+import { render } from "@pettersen3008/flashpdf";
+export default {
+  async fetch() {
+    return new Response(await render(jsx("main", { children: "Worker invoice" })), {
+      headers: { "content-type": "application/pdf" },
+    });
+  },
+};
+`,
+		);
+		writeFileSync(
+			join(work, "wrangler.jsonc"),
+			JSON.stringify({
+				name: "flashpdf-smoke",
+				main: "worker.mjs",
+				compatibility_date: "2026-09-18",
+			}),
+		);
+		const { unstable_startWorker } = await import("wrangler");
+		const worker = await unstable_startWorker({ config: join(work, "wrangler.jsonc") });
+		try {
+			const response = await worker.fetch("http://example.com");
+			const workerPdf = Buffer.from(await response.arrayBuffer()).toString("latin1");
+			if (!workerPdf.startsWith("%PDF-")) throw new Error("Cloudflare Worker did not render a PDF");
+			console.log("cloudflare-worker: ok");
+		} finally {
+			await worker.dispose();
+		}
+
 		const resolved = [
 			"@pettersen3008/flashpdf",
 			"@pettersen3008/flashpdf/package.json",

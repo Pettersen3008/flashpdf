@@ -1,5 +1,5 @@
 import { createRenderer } from "./render.js";
-import { loadWasm } from "./wasm.browser.js";
+import { loadWasm } from "./wasm.worker.js";
 
 export type { Element, Length, Style, Width } from "./element.js";
 export { stylesheet } from "./css.js";

@@ -20,7 +20,7 @@ export function number(value: unknown, positive = false): number {
 }
 const WINANSI = new RegExp(
 	// oxlint-disable-next-line no-control-regex -- Reject characters outside WinAnsi.
-	"[^\\u0009-\\u000d\\u0020-\\u007e\\u00a0-\\u00ff\\u20ac\\u201a\\u0192\\u201e\\u2026\\u2020\\u2021\\u02c6\\u2030\\u0160\\u2039\\u0152\\u017d\\u2018\\u2019\\u201c\\u201d\\u2022\\u2013\\u2014\\u02dc\\u2122\\u0161\\u203a\\u0153\\u017e\\u0178]",
+	"[^\\u0009-\\u000d\\u001e-\\u007e\\u00a0-\\u00ff\\u20ac\\u201a\\u0192\\u201e\\u2026\\u2020\\u2021\\u02c6\\u2030\\u0160\\u2039\\u0152\\u017d\\u2018\\u2019\\u201c\\u201d\\u2022\\u2013\\u2014\\u02dc\\u2122\\u0161\\u203a\\u0153\\u017e\\u0178]",
 	"u",
 );
 export function text(value: unknown): string {

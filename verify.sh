@@ -27,5 +27,6 @@ if [ "$raw" -gt 120000 ] || [ "$compressed" -ge 100000 ]; then
   exit 1
 fi
 pnpm typecheck
+pnpm --filter @pettersen3008/flashpdf examples:css
 pnpm exec vitest run
 node tests/e2e.mjs

@@ -1,4 +1,5 @@
 import type { StyledNode } from "./css.js";
+import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
 import type { ProtocolWriter, Column } from "./protocol.js";
 import {
 	boxStyle,
@@ -45,7 +46,9 @@ function inherit(
 	};
 }
 
-function writeText(writer: ProtocolWriter, value: string, state: TextState) {
+function writeText(writer: ProtocolWriter, value: string, state: TextState, pageTokens: boolean) {
+	if (!pageTokens && (value.includes(PAGE_NUMBER) || value.includes(TOTAL_PAGES)))
+		throw new Error("page tokens are only valid in a footer");
 	writer.text(
 		value,
 		state.size,
@@ -158,10 +161,11 @@ export function compile(
 	fonts: ReadonlyMap<string, FontSlots>,
 	context: Context = ROOT,
 	depth = 0,
+	pageTokens = false,
 ): void {
 	for (const node of nodes) {
 		if (node.kind === "text") {
-			writeText(writer, node.value, context);
+			writeText(writer, node.value, context, pageTokens);
 			continue;
 		}
 		const style = node.style;
@@ -184,11 +188,11 @@ export function compile(
 						if (style.gap !== undefined && point(style.gap, next.size) !== 0)
 							throw new Error("row gap is not implemented");
 						writer.rowStart(node.children.map(column));
-						compile(node.children, writer, fonts, { ...next, inRow: true }, depth + 1);
+						compile(node.children, writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
 						writer.rowEnd();
 					} else if (context.inRow || style.breakInside === "avoid") {
 						writer.stackStart(style.gap === undefined ? 0 : point(style.gap, next.size));
-						compile(node.children, writer, fonts, { ...next, inRow: false }, depth + 1);
+						compile(node.children, writer, fonts, { ...next, inRow: false }, depth + 1, pageTokens);
 						writer.stackEnd();
 					} else {
 						const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
@@ -196,7 +200,14 @@ export function compile(
 							if (index && gap) writer.spacer(gap);
 							const inline = inlineText(node.children[index]!, { ...next, inRow: false }, fonts);
 							if (inline === undefined) {
-								compile([node.children[index]!], writer, fonts, { ...next, inRow: false }, depth);
+								compile(
+									[node.children[index]!],
+									writer,
+									fonts,
+									{ ...next, inRow: false },
+									depth,
+									pageTokens,
+								);
 								continue;
 							}
 							let value = inline;
@@ -206,7 +217,7 @@ export function compile(
 								value += sibling;
 							}
 							if (index < node.children.length) index--;
-							writeText(writer, value, next);
+							writeText(writer, value, next, pageTokens);
 						}
 					}
 				});
@@ -226,7 +237,7 @@ export function compile(
 				pageBreak(writer, style, "breakBefore", depth);
 				const next = inherit(style, context, fonts);
 				box(writer, boxStyle(style, next.size), node.tag, () =>
-					writeText(writer, textOnly(node.children), next),
+					writeText(writer, textOnly(node.children), next, pageTokens),
 				);
 				pageBreak(writer, style, "breakAfter", depth);
 				break;
