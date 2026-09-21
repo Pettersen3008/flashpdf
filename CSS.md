@@ -2,7 +2,7 @@
 
 FlashPDF renders a static CSS subset. It does not embed a browser engine, fetch assets, execute JavaScript in CSS, or support media/container queries, Grid, positioned layout, transforms, filters, animations, or SVG layout.
 
-The public authoring API is native JSX plus `render`. There are no `Document`, `Text`, `Table`, `Stack`, `Row`, page-token, preview, or download helpers.
+The public authoring API is native JSX plus `render`. `PageNumber` and `TotalPages` work only in the repeating `RenderOptions.footer`. There are no `Document`, `Text`, `Table`, `Stack`, `Row`, preview, or download helpers.
 
 ## Authoring
 
@@ -19,7 +19,11 @@ const pdf = await render(<main className="invoice">Invoice</main>, {
 });
 ```
 
-The CSS may come from CSS Modules, Tailwind's already-generated output, or extracted styled-components CSS. Unsupported declarations fail before rendering and name the property, selector, and source position:
+The CSS may come from CSS Modules or any tool that emits static CSS. Runnable build-step examples cover [Tailwind](./packages/flashpdf/examples/css-integrations/tailwind.mjs), [StyleX](./packages/flashpdf/examples/css-integrations/stylex.mjs), and [styled-components](./packages/flashpdf/examples/css-integrations/styled-components.mjs). Run all three with `pnpm --filter @pettersen3008/flashpdf examples:css`.
+
+Tailwind's example builds only the utilities used by the PDF template. StyleX passes Babel metadata through `processStylexRules`. styled-components' server output also contains hydration metadata with unsupported attribute selectors and `content`; its example selects the generated component rule before calling `render`. FlashPDF adds no runtime adapter for any of them.
+
+Unsupported declarations in generated CSS fail before rendering and name the property, selector, and source position:
 
 ```
 unsupported CSS property: line-height (line height is fixed to the font size) in selector ".total" at 4:3

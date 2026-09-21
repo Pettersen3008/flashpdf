@@ -11,6 +11,7 @@ const opcode = {
 	rowStart: 5,
 	rowEnd: 6,
 	pageBreak: 7,
+	footer: 8,
 	styledText: 16,
 	boxStart: 17,
 	boxEnd: 18,
@@ -18,6 +19,9 @@ const opcode = {
 } as const;
 
 export class ProtocolWriter {
+	private footer = false;
+	private footerWritten = false;
+
 	constructor(private readonly binary: Binary) {}
 
 	header(width: number, height: number, margin: number) {
@@ -31,6 +35,18 @@ export class ProtocolWriter {
 		color: readonly [number, number, number],
 		font: number,
 	) {
+		if (this.footer) {
+			if (this.footerWritten) throw new Error("footer must be a single text line");
+			this.footerWritten = true;
+			this.binary.record(opcode.footer, () => {
+				this.binary.f32(size);
+				this.binary.u8(align === "center" ? 1 : align === "right" ? 2 : 0);
+				for (const channel of color) this.binary.u8(channel);
+				this.binary.u8(font);
+				this.binary.text(value);
+			});
+			return;
+		}
 		if (align === "left" && color[0] === 0 && color[1] === 0 && color[2] === 0 && font === 0)
 			this.binary.record(opcode.text, () => {
 				this.binary.f32(size);
@@ -47,18 +63,22 @@ export class ProtocolWriter {
 	}
 
 	spacer(height: number) {
+		this.body();
 		this.binary.record(opcode.spacer, () => this.binary.f32(height));
 	}
 
 	stackStart(gap: number) {
+		this.body();
 		this.binary.record(opcode.stackStart, () => this.binary.f32(gap));
 	}
 
 	stackEnd() {
+		this.body();
 		this.binary.record(opcode.stackEnd);
 	}
 
 	rowStart(columns: readonly Column[]) {
+		this.body();
 		this.binary.record(opcode.rowStart, () => {
 			this.binary.u16(columns.length);
 			for (const column of columns) {
@@ -69,14 +89,27 @@ export class ProtocolWriter {
 	}
 
 	rowEnd() {
+		this.body();
 		this.binary.record(opcode.rowEnd);
 	}
 
 	pageBreak() {
+		this.body();
 		this.binary.record(opcode.pageBreak);
 	}
 
+	footerStart() {
+		this.footer = true;
+		this.footerWritten = false;
+	}
+
+	footerEnd() {
+		if (!this.footerWritten) throw new Error("footer must be a single text line");
+		this.footer = false;
+	}
+
 	boxStart(box: Box) {
+		this.body();
 		this.binary.record(opcode.boxStart, () => {
 			for (const edge of [...box.margin, ...box.padding, ...box.border]) this.binary.f32(edge);
 			if (box.background) {
@@ -88,10 +121,15 @@ export class ProtocolWriter {
 	}
 
 	boxEnd() {
+		this.body();
 		this.binary.record(opcode.boxEnd);
 	}
 
 	end() {
 		this.binary.record(opcode.end);
+	}
+
+	private body() {
+		if (this.footer) throw new Error("footer must be a single text line");
 	}
 }

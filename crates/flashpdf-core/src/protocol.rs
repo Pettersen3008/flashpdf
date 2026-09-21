@@ -118,7 +118,8 @@ impl Decoder {
             return Err(ProtocolError::DataAfterEnd);
         }
         let mut cursor = Cursor::new(payload);
-        match Opcode::try_from(opcode)? {
+        let opcode = Opcode::try_from(opcode)?;
+        match opcode {
             Opcode::Text => {
                 let size = pt(cursor.positive_f32("font size")?)?;
                 let text = cursor.text()?.to_owned();
@@ -162,7 +163,8 @@ impl Decoder {
                 self.ensure_renderer()?.page_break();
                 Ok(())
             }
-            Opcode::StyledText => {
+            Opcode::StyledText | Opcode::Footer => {
+                let footer = matches!(opcode, Opcode::Footer);
                 let size = pt(cursor.positive_f32("font size")?)?;
                 let align = match cursor.take(1)?[0] {
                     0 => TextAlign::Left,
@@ -181,15 +183,22 @@ impl Decoder {
                 }
                 let text = cursor.text()?.to_owned();
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Text(
-                    text,
-                    TextStyle {
-                        size,
-                        align,
-                        color,
-                        font,
-                    },
-                ))
+                let style = TextStyle {
+                    size,
+                    align,
+                    color,
+                    font,
+                };
+                if footer {
+                    if self.renderer.is_some() || !self.frames.is_empty() {
+                        return Err(ProtocolError::InvalidNesting);
+                    }
+                    self.ensure_renderer()?
+                        .set_footer(text, style)
+                        .map_err(ProtocolError::from)
+                } else {
+                    self.layout_command(OwnedCommand::Text(text, style))
+                }
             }
             Opcode::BoxStart => {
                 let margin = Edges {

@@ -1,4 +1,4 @@
-import { render, type EmbeddedFont } from "@pettersen3008/flashpdf";
+import { PageNumber, render, TotalPages, type EmbeddedFont } from "@pettersen3008/flashpdf";
 
 const invoice = (
 	<main className="invoice" style={{ padding: "18pt", backgroundColor: "#fff" }}>
@@ -20,6 +20,13 @@ void render(invoice, { pageFormat: "A4", margin: 36, stylesheets: [".invoice { c
 void render([invoice]);
 const font: EmbeddedFont = { family: "Invoice", regular: new Uint8Array(), bold: new Uint8Array() };
 void render(invoice, { fonts: [font] });
+void render(invoice, {
+	footer: (
+		<footer>
+			Page <PageNumber /> of <TotalPages />
+		</footer>
+	),
+});
 // @ts-expect-error A PDF document starts with one or more React elements.
 void render("bare text");
 // @ts-expect-error FlashPDF only accepts its documented intrinsic elements.

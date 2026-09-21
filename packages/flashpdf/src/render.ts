@@ -14,6 +14,7 @@ export type RenderOptions = {
 	margin?: number;
 	stylesheets?: readonly string[];
 	fonts?: readonly EmbeddedFont[] | undefined;
+	footer?: Element | undefined;
 };
 
 type LoadWasm = () => Promise<{ memory: { buffer: ArrayBufferLike } }>;
@@ -25,7 +26,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 	): Promise<Uint8Array> {
 		const tree = await resolveTree(document);
 		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
-		const p = props(options ?? {}, ["pageFormat", "margin", "stylesheets", "fonts"]);
+		const p = props(options ?? {}, ["pageFormat", "margin", "stylesheets", "fonts", "footer"]);
 		const format = p.pageFormat === undefined ? "A4" : p.pageFormat;
 		if (format !== "A4" && format !== "Letter") throw new Error("invalid page format");
 		const margin = number(p.margin === undefined ? 36 : p.margin);
@@ -44,6 +45,21 @@ export function createRenderer(loadWasm: LoadWasm) {
 				(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
 			)
 				throw new Error("invalid stylesheets");
+			if (p.footer !== undefined) {
+				const footer = await resolveTree(p.footer);
+				if (footer.length !== 1 || footer[0]?.kind !== "element")
+					throw new Error("footer must resolve to one element");
+				writer.footerStart();
+				compile(
+					resolveStyles(footer, p.stylesheets as readonly string[] | undefined),
+					writer,
+					fonts,
+					undefined,
+					0,
+					true,
+				);
+				writer.footerEnd();
+			}
 			compile(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
 			writer.end();
 			consumed = true;

@@ -43,14 +43,17 @@ impl<'a> Cursor<'a> {
     }
 
     pub(super) fn text(&mut self) -> Result<&'a str, ProtocolError> {
-        let length =
-            usize::try_from(self.u32()?).map_err(|_| ProtocolError::InvalidStringLength)?;
-        let text =
-            std::str::from_utf8(self.take(length)?).map_err(|_| ProtocolError::InvalidUtf8)?;
+        let text = self.utf8_text()?;
         if !valid(text) {
             return Err(ProtocolError::UnsupportedWinAnsi);
         }
         Ok(text)
+    }
+
+    fn utf8_text(&mut self) -> Result<&'a str, ProtocolError> {
+        let length =
+            usize::try_from(self.u32()?).map_err(|_| ProtocolError::InvalidStringLength)?;
+        std::str::from_utf8(self.take(length)?).map_err(|_| ProtocolError::InvalidUtf8)
     }
 
     pub(super) fn columns(&mut self) -> Result<Vec<crate::ColumnWidth>, ProtocolError> {
