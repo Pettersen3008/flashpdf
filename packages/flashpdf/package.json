@@ -1,6 +1,6 @@
 {
 	"name": "@pettersen3008/flashpdf",
-	"version": "0.2.1",
+	"version": "0.2.2",
 	"description": "Render native JSX and a static CSS subset to a PDF, in the browser, Node, or Bun.",
 	"keywords": [
 		"browser",

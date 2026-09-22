@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.2 - 2026-09-22
+
 ### Added
 
 - Repeating `RenderOptions.footer` content with `PageNumber` and `TotalPages` tokens.
