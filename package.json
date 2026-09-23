@@ -18,7 +18,7 @@
 		"@react-pdf/renderer": "4.9.0",
 		"@stylexjs/babel-plugin": "0.19.1",
 		"@tailwindcss/cli": "4.3.3",
-		"@types/node": "26.6.1",
+		"@types/node": "26.6.2",
 		"@types/react": "19.3.0",
 		"binaryen": "132.0.0",
 		"oxfmt": "0.68.0",
