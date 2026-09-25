@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { inflateSync } from "node:zlib";
+import zlib, { inflateSync } from "node:zlib";
 
 import { test } from "vitest";
 
@@ -315,7 +315,8 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
-		[{ height: 40 }, /height \(block height comes from content\) on <main>/],
+		[{ height: 40 }, /height applies only to <img> \(block height comes from content\) on <main>/],
+		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
 		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
@@ -326,6 +327,102 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 			message,
 			JSON.stringify(style),
 		);
+});
+
+/** A PNG built from raw scanlines; `type` 2 is RGB and 6 is RGBA. */
+function png(width, height, type, scanlines) {
+	const chunk = (kind, data) => {
+		const body = Buffer.concat([Buffer.from(kind), data]);
+		const crc = Buffer.alloc(4);
+		crc.writeUInt32BE(zlib.crc32(body));
+		const length = Buffer.alloc(4);
+		length.writeUInt32BE(data.length);
+		return Buffer.concat([length, body, crc]);
+	};
+	const header = Buffer.alloc(13);
+	header.writeUInt32BE(width, 0);
+	header.writeUInt32BE(height, 4);
+	header.set([8, type, 0, 0, 0], 8);
+	return new Uint8Array(
+		Buffer.concat([
+			Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+			chunk("IHDR", header),
+			chunk("IDAT", zlib.deflateSync(Buffer.from(scanlines))),
+			chunk("IEND", Buffer.alloc(0)),
+		]),
+	);
+}
+
+test("given an invoice with a PNG logo on every row and a link, when rendering, then embeds one XObject and annotates the link", async () => {
+	const logo = png(2, 1, 2, [0, 255, 0, 0, 0, 0, 255]);
+	const stamp = png(1, 1, 6, [0, 0, 0, 0, 128]);
+	const document = jsxs("main", {
+		children: [
+			jsx("a", {
+				href: "https://example.com/",
+				children: jsx("img", { src: logo, alt: "Acme", style: { width: 60 } }),
+			}),
+			jsxs("p", {
+				children: [
+					"Pay at ",
+					jsx("a", { href: "https://example.com/pay?id=42", children: "the portal" }),
+				],
+			}),
+			jsxs("table", {
+				children: [
+					jsx("thead", {
+						children: jsxs("tr", {
+							children: [jsx("th", { children: "Item" }), jsx("th", { children: "Seal" })],
+						}),
+					}),
+					jsx("tbody", {
+						children: Array.from({ length: 3 }, (_, index) =>
+							jsxs(
+								"tr",
+								{
+									children: [
+										jsx("td", { children: `Line ${index}` }),
+										jsx("td", { children: jsx("img", { src: stamp, style: { height: "9pt" } }) }),
+									],
+								},
+								index,
+							),
+						),
+					}),
+				],
+			}),
+		],
+	});
+	const pdf = await render(document);
+	assert.deepEqual(pdf, await render(document));
+	const text = string(pdf);
+	assert.equal(text.match(/\/Subtype \/Image/g).length, 3, "logo, stamp, and the stamp's SMask");
+	assert.equal(text.match(/\/Im1 Do/g).length, 1);
+	assert.equal(text.match(/\/Im2 Do/g).length, 3);
+	assert.match(text, /\/Predictor 15/);
+	assert.match(text, /\/SMask \d+ 0 R/);
+	assert.match(text, /\/Subtype \/Link[\s\S]*?\/URI \(https:\/\/example\.com\/\)/);
+	assert.match(text, /\/URI \(https:\/\/example\.com\/pay\?id=42\)/);
+	assert.equal(text.match(/\/Subtype \/Link/g).length, 2);
+	assert.match(text, /0 0 0\.93333334 rg/, "link colour #0000EE");
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-images.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+	await assert.rejects(
+		render(jsx("main", { children: jsx("img", { src: logo, style: { width: 600 } }) })),
+		/the image is wider than its container; reduce width or height on <img> in <main>/,
+	);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("img", { src: logo, style: { width: 10, height: 900 } }) })),
+		/PageOverflow: the image is taller than the page; reduce its height on <img> in <main>/,
+	);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("img", { src: new Uint8Array([1, 2, 3]) }) })),
+		/unsupported image format; pass PNG or JPEG bytes on <img> in <main>/,
+	);
 });
 
 test("given two stylesheets of equal specificity, when rendering, then the later one wins", async () => {

@@ -1,6 +1,6 @@
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { number, props } from "./assert.js";
-import { Binary } from "./binary.js";
+import { asError, Binary } from "./binary.js";
 import { compile } from "./compile.js";
 import { resolveStyles } from "./css.js";
 import type { Element } from "./element.js";
@@ -38,7 +38,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 		let consumed = false;
 		try {
 			const fonts = registerFonts(renderer, p.fonts);
-			const writer = new ProtocolWriter(new Binary(renderer, wasm.memory));
+			const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
 			writer.header(width, height, margin);
 			if (
 				p.stylesheets !== undefined &&
@@ -63,7 +63,11 @@ export function createRenderer(loadWasm: LoadWasm) {
 			compile(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
 			writer.end();
 			consumed = true;
-			return renderer.finish();
+			try {
+				return renderer.finish();
+			} catch (error) {
+				throw asError(error);
+			}
 		} finally {
 			if (!consumed) renderer.free();
 		}

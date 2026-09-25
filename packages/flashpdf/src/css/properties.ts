@@ -1,14 +1,13 @@
 import type { Style } from "../element.js";
 
 export type RejectedProperty =
-	| "height"
 	| "minWidth"
 	| "maxWidth"
 	| "borderRadius"
 	| "lineHeight"
 	| "letterSpacing"
-	| "textDecoration"
 	| "verticalAlign"
+	| "objectFit"
 	| "borderCollapse"
 	| "borderSpacing";
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
@@ -18,6 +17,7 @@ const properties = {
 	flexDirection: { css: "flex-direction" },
 	flex: {},
 	width: {},
+	height: {},
 	margin: {},
 	marginTop: { css: "margin-top" },
 	marginRight: { css: "margin-right" },
@@ -42,11 +42,12 @@ const properties = {
 	fontFamily: { css: "font-family", inherited: true },
 	fontWeight: { css: "font-weight", inherited: true },
 	textAlign: { css: "text-align", inherited: true },
+	// CSS propagates decoration to descendants rather than inheriting it; the effect is the same here.
+	textDecoration: { css: "text-decoration", inherited: true },
 	color: { inherited: true },
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
-	height: { unsupported: "block height comes from content" },
 	minWidth: {
 		css: "min-width",
 		unsupported: "only width on a flex row child is implemented",
@@ -64,9 +65,9 @@ const properties = {
 		css: "letter-spacing",
 		unsupported: "text shaping is not implemented",
 	},
-	textDecoration: {
-		css: "text-decoration",
-		unsupported: "text decoration is not implemented",
+	objectFit: {
+		css: "object-fit",
+		unsupported: "size an image with width and height; it always scales to fill them",
 	},
 	verticalAlign: {
 		css: "vertical-align",

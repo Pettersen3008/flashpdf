@@ -30,6 +30,9 @@ const run = (font, text, extra = {}) => ({
 	color: [0, 0, 0],
 	text,
 	break: false,
+	underline: false,
+	lineThrough: false,
+	link: undefined,
 	...extra,
 });
 
@@ -72,8 +75,48 @@ test("given a padded span in a block, when compiling, then it stays a box beside
 test("given a padded span inside a paragraph, when compiling, then rejects with the element path", async () => {
 	await assert.rejects(
 		compiled(jsx("p", { children: jsx("span", { style: { padding: 2 }, children: "x" }) })),
-		/<p> accepts only text, <br>, and <span>, <b>, <strong> without box styles on <p>/,
+		/<p> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles on <p>/,
 	);
+});
+
+test("given a link inside a paragraph, when compiling, then its runs carry the href, blue, and underline", async () => {
+	const calls = await compiled(
+		jsxs("p", {
+			children: [
+				"See ",
+				jsx("a", { href: "https://example.com/a b", children: "the portal" }),
+				jsx("span", { style: { textDecoration: "line-through" }, children: " old" }),
+			],
+		}),
+	);
+	assert.deepEqual(calls, [
+		[
+			"paragraph",
+			[
+				run(0, "See "),
+				run(0, "the portal", {
+					color: [0, 0, 238],
+					underline: true,
+					link: "https://example.com/a%20b",
+				}),
+				run(0, " old", { lineThrough: true }),
+			],
+			"left",
+		],
+	]);
+});
+
+test("given a link around an image, when compiling, then emits the image record with the href and alt", async () => {
+	const src = new Uint8Array([1, 2, 3]);
+	const calls = await compiled(
+		jsx("a", {
+			href: "mailto:billing@example.com",
+			children: jsx("img", { src, alt: "Logo", style: { width: "50%", height: "16px" } }),
+		}),
+	);
+	assert.deepEqual(calls, [
+		["image", src, { kind: 2, value: 50 }, 12, "Logo", "mailto:billing@example.com"],
+	]);
 });
 
 test("given a table with thead and tbody, when compiling, then emits the container with header count 1 and one row per tr", async () => {

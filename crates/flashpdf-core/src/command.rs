@@ -1,7 +1,7 @@
 use crate::document::{
-    Block, BoxNode, Cell, Document, Element, Paragraph, Row, Spacer, Stack, Table,
+    Block, BoxNode, Cell, Document, Element, ImageNode, Paragraph, Row, Spacer, Stack, Table,
 };
-use crate::{BoxStyle, Fraction, Percent, Pt, TextAlign, TextRun, TextStyle};
+use crate::{BoxStyle, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun, TextStyle};
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
 pub(crate) const MAX_COLUMNS: usize = 256;
@@ -18,6 +18,8 @@ pub enum Command<'a> {
         align: TextAlign,
         text: &'a str,
         runs: &'a [TextRun],
+        /// URIs the runs' `decoration.link` index into.
+        links: &'a [String],
     },
     BoxStart {
         style: BoxStyle,
@@ -39,6 +41,13 @@ pub enum Command<'a> {
     },
     TableEnd,
     PageBreak,
+    /// A registered image as an atomic block box; `height` follows the aspect ratio when absent.
+    Image {
+        slot: u16,
+        width: ImageSize,
+        height: Option<Pt>,
+        link: Option<&'a str>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,7 +59,7 @@ pub enum ColumnWidth {
 
 /// The protocol's decoded form owns data across input chunks.
 pub(crate) enum OwnedCommand {
-    Paragraph(TextAlign, String, Vec<TextRun>),
+    Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>),
     BoxStart(BoxStyle),
     BoxEnd,
     Spacer(Pt),
@@ -60,15 +69,17 @@ pub(crate) enum OwnedCommand {
     RowEnd,
     TableStart(u16, ColumnWidth),
     TableEnd,
+    Image(u16, ImageSize, Option<Pt>, Option<String>),
 }
 
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Paragraph(align, text, runs) => Command::Paragraph {
+            Self::Paragraph(align, text, runs, links) => Command::Paragraph {
                 align: *align,
                 text,
                 runs,
+                links,
             },
             Self::BoxStart(style) => Command::BoxStart { style: *style },
             Self::BoxEnd => Command::BoxEnd,
@@ -82,6 +93,12 @@ impl OwnedCommand {
                 width: *width,
             },
             Self::TableEnd => Command::TableEnd,
+            Self::Image(slot, width, height, link) => Command::Image {
+                slot: *slot,
+                width: *width,
+                height: *height,
+                link: link.as_deref(),
+            },
         }
     }
 }
@@ -167,12 +184,31 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     size: style.size,
                     color: style.color,
                     hard_break: false,
+                    decoration: Default::default(),
                 }],
+                links: &[],
             })),
-            Command::Paragraph { align, text, runs } => Ok(Element::Paragraph(Paragraph {
+            Command::Paragraph {
+                align,
+                text,
+                runs,
+                links,
+            } => Ok(Element::Paragraph(Paragraph {
                 align,
                 text,
                 runs: runs.to_vec(),
+                links,
+            })),
+            Command::Image {
+                slot,
+                width,
+                height,
+                link,
+            } => Ok(Element::Image(ImageNode {
+                slot,
+                width,
+                height,
+                link,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::BoxStart { style } => {
@@ -274,6 +310,6 @@ fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
         Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {
             children.iter().all(|child| uniform_rows(child, columns))
         }
-        Element::Paragraph(_) | Element::Spacer(_) | Element::Table(_) => false,
+        Element::Paragraph(_) | Element::Spacer(_) | Element::Table(_) | Element::Image(_) => false,
     }
 }

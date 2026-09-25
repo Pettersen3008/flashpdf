@@ -1,10 +1,11 @@
 import type { StyledNode } from "./css.js";
 import type { StyledElement } from "./css/cascade.js";
 import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
-import type { ProtocolWriter, Column, Run } from "./protocol.js";
+import type { ProtocolWriter, Column, Dimension, Run } from "./protocol.js";
 import {
 	boxStyle,
 	color,
+	decoration,
 	font,
 	helvetica,
 	point,
@@ -20,6 +21,10 @@ type TextState = {
 	color: [number, number, number];
 	family: FontSlots;
 	bold: boolean;
+	underline: boolean;
+	lineThrough: boolean;
+	/** The nearest enclosing `<a href>`. */
+	link: string | undefined;
 };
 type Context = TextState & { inRow: boolean };
 type Fonts = ReadonlyMap<string, FontSlots>;
@@ -30,19 +35,26 @@ const ROOT: Context = {
 	color: [0, 0, 0],
 	family: helvetica,
 	bold: false,
+	underline: false,
+	lineThrough: false,
+	link: undefined,
 	inRow: false,
 };
 
-const INLINE_TAGS = new Set<string>(["span", "b", "strong", "br"]);
+const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
 
 function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): TextState {
 	const selected = font(style, current.family, current.bold, fonts);
+	const decorated = style.textDecoration === undefined ? current : decoration(style.textDecoration);
 	return {
 		size: style.fontSize === undefined ? current.size : point(style.fontSize, current.size, true),
 		align: style.textAlign ?? current.align,
 		color: style.color === undefined ? current.color : color(style.color),
 		family: selected.family,
 		bold: selected.weight,
+		underline: decorated.underline,
+		lineThrough: decorated.lineThrough,
+		link: current.link,
 	};
 }
 
@@ -53,6 +65,9 @@ function run(state: TextState, text: string, hardBreak = false): Run {
 		color: state.color,
 		text,
 		break: hardBreak,
+		underline: state.underline,
+		lineThrough: state.lineThrough,
+		link: state.link,
 	};
 }
 
@@ -64,6 +79,9 @@ function push(runs: Run[], next: Run) {
 		!last.break &&
 		last.font === next.font &&
 		last.size === next.size &&
+		last.underline === next.underline &&
+		last.lineThrough === next.lineThrough &&
+		last.link === next.link &&
 		last.color.every((channel, index) => channel === next.color[index])
 	) {
 		last.text += next.text;
@@ -87,7 +105,7 @@ function inlineRuns(node: StyledNode, context: Context, fonts: Fonts): Run[] | u
 			return undefined;
 		const next = inherit(style, context, fonts);
 		if (next.align !== context.align) return undefined;
-		return collect(node.children, { ...next, inRow: false }, fonts);
+		return collect(node.children, { ...next, inRow: false, link: node.href ?? next.link }, fonts);
 	} catch (error) {
 		throw locate(error, node.where);
 	}
@@ -191,6 +209,14 @@ function streamMargin(box: Box | undefined, context: Context, style: NormalizedS
 	);
 }
 
+/** An `img` width or height; percent is of the container width. */
+function dimension(value: number | string): Dimension {
+	if (typeof value === "number") return { kind: 1, value };
+	const amount = Number.parseFloat(value);
+	if (value.endsWith("%")) return { kind: 2, value: amount };
+	return { kind: 1, value: value.endsWith("px") ? amount * 0.75 : amount };
+}
+
 function column(value: StyledNode): Column {
 	if (value.kind === "text") return { kind: 1, value: 1 };
 	const { flex, width } = value.style;
@@ -221,6 +247,8 @@ function element(
 	pageTokens: boolean,
 ) {
 	const style = node.style;
+	if (style.height !== undefined && node.tag !== "img")
+		throw new Error("height applies only to <img> (block height comes from content)");
 	switch (node.tag) {
 		case "div":
 		case "main":
@@ -255,6 +283,7 @@ function element(
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 		}
+		case "a":
 		case "span":
 		case "b":
 		case "strong":
@@ -268,12 +297,42 @@ function element(
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
-			const runs = collect(node.children, { ...next, inRow: false }, fonts);
-			if (runs === undefined)
+			const inner = { ...next, inRow: false, link: node.href ?? next.link };
+			const runs = collect(node.children, inner, fonts);
+			// A link around layout nodes (an image, a card) flows them as a block; every run inside links.
+			if (runs === undefined && node.tag !== "a")
 				throw new Error(
-					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong> without box styles`,
+					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles`,
 				);
-			box(writer, boxStyle(style, next.size), () => writeParagraph(writer, runs, next, pageTokens));
+			box(writer, boxStyle(style, next.size), () =>
+				runs === undefined
+					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
+					: writeParagraph(writer, runs, next, pageTokens),
+			);
+			pageBreak(writer, style, "breakAfter", depth);
+			break;
+		}
+		case "img": {
+			if (style.flex !== undefined && !context.inRow)
+				throw new Error("flex applies only to a flex row child");
+			if (typeof style.height === "string" && style.height.endsWith("%"))
+				throw new Error("percent height has no container height; use pt or px, or set width");
+			pageBreak(writer, style, "breakBefore", depth);
+			const next = inherit(style, context, fonts);
+			const width = style.width === undefined ? undefined : dimension(style.width);
+			const height = style.height === undefined ? undefined : dimension(style.height).value;
+			box(writer, boxStyle(style, next.size), () => {
+				try {
+					writer.image(node.src!, width, height, node.alt ?? "", context.link);
+				} catch (error) {
+					if (!(error instanceof Error)) throw error;
+					if (error.message === "PageOverflow")
+						throw new Error("PageOverflow: the image is taller than the page; reduce its height");
+					if (error.message === "ImageTooWide")
+						throw new Error("the image is wider than its container; reduce width or height");
+					throw error;
+				}
+			});
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 		}

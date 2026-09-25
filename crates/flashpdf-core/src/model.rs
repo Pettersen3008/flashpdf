@@ -190,6 +190,24 @@ pub struct TextRun {
     pub color: Rgb,
     /// Ends the line after this run without adding a space.
     pub hard_break: bool,
+    pub decoration: RunDecoration,
+}
+
+/// Underline, strike-through, and link of a run; painted per line segment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunDecoration {
+    pub underline: bool,
+    pub line_through: bool,
+    /// Index into the paragraph's URI table.
+    pub link: Option<u16>,
+}
+
+/// An image's requested width; `Auto` is the intrinsic size at 96 px per inch, capped to the container.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImageSize {
+    Auto,
+    Fixed(Pt),
+    Percent(Percent),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -250,4 +268,5 @@ pub enum RenderError {
     InvalidLayout,
     MissingGlyph,
     DocumentTooLarge,
+    ImageTooWide,
 }

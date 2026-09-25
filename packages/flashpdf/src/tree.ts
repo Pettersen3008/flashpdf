@@ -16,7 +16,7 @@ type Component = { render: Render; name: string };
 export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
 export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
 export const tableTags = ["table", "thead", "tbody", "tfoot", "tr", "th", "td"] as const;
-export const tags = [...blockTags, ...textTags, ...tableTags, "hr", "br"] as const;
+export const tags = [...blockTags, ...textTags, ...tableTags, "a", "img", "hr", "br"] as const;
 export type BlockTag = (typeof blockTags)[number];
 export type TextTag = (typeof textTags)[number];
 export type TableTag = (typeof tableTags)[number];
@@ -30,20 +30,21 @@ export type ElementNode = {
 	readonly classes: readonly string[];
 	readonly style?: Style | string | undefined;
 	readonly children: readonly Node[];
+	readonly src?: Uint8Array | undefined;
+	readonly alt?: string | undefined;
+	readonly href?: string | undefined;
 };
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
 	em: "italic faces are not supported yet; use <span>",
 	i: "italic faces are not supported yet; use <span>",
-	img: "images are not supported yet",
 	colgroup: "column widths come from the first row's <th>/<td> width or flex",
 	col: "column widths come from the first row's <th>/<td> width or flex",
 	caption: "captions are not supported; use a <p> before the table",
 	ul: "lists are not supported yet; use one <p> per item",
 	ol: "lists are not supported yet; use one <p> per item",
 	li: "lists are not supported yet; use one <p> per item",
-	a: "links are not supported; use <span> for the label",
 };
 
 export function label(node: {
@@ -175,6 +176,46 @@ export async function reactTree(value: unknown, depth = 0): Promise<unknown> {
 	return normalize(value, depth);
 }
 
+/** Normalises through WHATWG URL parsing, which also percent-encodes non-ASCII. */
+export function href(value: unknown, where = ""): string {
+	if (typeof value !== "string" || !value)
+		throw new Error(`href must be an absolute http, https, or mailto URL${where}`);
+	if (value.startsWith("#"))
+		throw new Error(`internal anchor links (${value}) are not supported yet${where}`);
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new Error(
+			`href must be an absolute http, https, or mailto URL, not ${JSON.stringify(value)}${where}`,
+		);
+	}
+	if (!["http:", "https:", "mailto:"].includes(url.protocol))
+		throw new Error(
+			`href scheme ${url.protocol} is not allowed; use http, https, or mailto${where}`,
+		);
+	if (!/^[\x21-\x7e]+$/.test(url.href))
+		throw new Error(
+			`href must be printable ASCII; percent-encode ${JSON.stringify(url.href)}${where}`,
+		);
+	return url.href;
+}
+
+function image(input: Record<string, unknown>, where: string) {
+	const { src, alt } = input;
+	if (typeof src === "string")
+		throw new Error(
+			`src must be the image's PNG or JPEG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes${where}`,
+		);
+	if (!(src instanceof Uint8Array) || !src.byteLength)
+		throw new Error(`src must be a non-empty Uint8Array of PNG or JPEG bytes${where}`);
+	if (alt !== undefined && (typeof alt !== "string" || /\p{Cc}/u.test(alt)))
+		throw new Error(`alt must be a string without control characters${where}`);
+	if (input.children !== undefined && input.children !== null)
+		throw new Error(`<img> has no children${where}`);
+	return { src, alt };
+}
+
 function isTag(value: unknown): value is Tag {
 	return typeof value === "string" && (tags as readonly string[]).includes(value);
 }
@@ -205,7 +246,8 @@ function host(value: unknown, depth = 0, chain = ""): Node[] {
 	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
 		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
-	const input = props(element.props, ["children", "id", "className", "style", "ref"]);
+	const own = element.type === "img" ? ["src", "alt"] : element.type === "a" ? ["href"] : [];
+	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
 	if (input.id !== undefined && typeof input.id !== "string")
 		throw new Error(`id must be a string${where}`);
 	if (input.className !== undefined && typeof input.className !== "string")
@@ -225,6 +267,8 @@ function host(value: unknown, depth = 0, chain = ""): Node[] {
 			typeof input.className === "string" ? input.className.split(/\s+/).filter(Boolean) : [],
 		style: input.style as Style | string | undefined,
 		children: [],
+		...(element.type === "img" ? image(input, where) : {}),
+		...(element.type === "a" ? { href: href(input.href, where) } : {}),
 	};
 	const self = label(node);
 	return [

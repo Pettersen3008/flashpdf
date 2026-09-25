@@ -64,4 +64,23 @@ const _table = (
 );
 // @ts-expect-error Spanning cells are not supported yet.
 const _colSpan = <td colSpan={2}>x</td>;
+const _assets = (
+	<main>
+		<a href="https://example.com/">
+			<img src={new Uint8Array()} alt="Logo" style={{ width: 80, height: "20pt" }} />
+		</a>
+		<p>
+			Pay at{" "}
+			<a href="mailto:billing@example.com" style={{ textDecoration: "none" }}>
+				billing
+			</a>
+		</p>
+	</main>
+);
+// @ts-expect-error Image bytes come from the host, never a path or URL.
+const _imgPath = <img src="/logo.png" />;
+// @ts-expect-error A link needs its href.
+const _bareLink = <a>site</a>;
+// @ts-expect-error Images have no children.
+const _imgChildren = <img src={new Uint8Array()}>x</img>;
 void import("@pettersen3008/flashpdf/jsx-runtime");

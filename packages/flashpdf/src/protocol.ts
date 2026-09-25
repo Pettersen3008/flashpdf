@@ -1,7 +1,9 @@
-import { Binary } from "./binary.js";
+import { asError, Binary } from "./binary.js";
 import type { Box } from "./style.js";
 
 export type Column = { kind: 0 | 1 | 2; value: number };
+/** An image dimension: 1 is points, 2 is percent of the container width. */
+export type Dimension = { kind: 1 | 2; value: number };
 /** One styled stretch of a paragraph; `break` ends the line after it. */
 export type Run = {
 	font: number;
@@ -9,6 +11,9 @@ export type Run = {
 	color: readonly [number, number, number];
 	text: string;
 	break: boolean;
+	underline: boolean;
+	lineThrough: boolean;
+	link: string | undefined;
 };
 
 const opcode = {
@@ -22,6 +27,7 @@ const opcode = {
 	paragraph: 9,
 	tableStart: 10,
 	tableEnd: 11,
+	image: 12,
 	boxStart: 17,
 	boxEnd: 18,
 	end: 255,
@@ -30,8 +36,13 @@ const opcode = {
 export class ProtocolWriter {
 	private footer = false;
 	private footerWritten = false;
+	/** Slot per registered byte array, so a logo reused on every row embeds once. */
+	private readonly images = new Map<Uint8Array, number>();
 
-	constructor(private readonly binary: Binary) {}
+	constructor(
+		private readonly binary: Binary,
+		private readonly assets: { add_image(bytes: Uint8Array): number },
+	) {}
 
 	header(width: number, height: number, margin: number) {
 		this.binary.header(width, height, margin);
@@ -43,6 +54,8 @@ export class ProtocolWriter {
 			const [only] = runs;
 			if (this.footerWritten || runs.length !== 1 || only!.break)
 				throw new Error("footer must be a single text line");
+			if (only!.underline || only!.lineThrough || only!.link !== undefined)
+				throw new Error("footer text cannot be underlined or linked");
 			this.footerWritten = true;
 			this.binary.record(opcode.footer, () => {
 				this.binary.f32(only!.size);
@@ -53,15 +66,28 @@ export class ProtocolWriter {
 			});
 			return;
 		}
+		const links: string[] = [];
+		for (const run of runs)
+			if (run.link !== undefined && !links.includes(run.link)) links.push(run.link);
+		if (links.length > 0xffff) throw new Error("paragraph has too many links");
 		try {
 			this.binary.record(opcode.paragraph, () => {
 				this.binary.u8(alignment);
+				this.binary.u16(links.length);
+				for (const link of links) this.binary.text(link);
 				this.binary.u16(runs.length);
 				for (const run of runs) {
 					this.binary.u8(run.font);
 					this.binary.f32(run.size);
 					for (const channel of run.color) this.binary.u8(channel);
-					this.binary.u8(run.break ? 1 : 0);
+					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows.
+					this.binary.u8(
+						(run.break ? 1 : 0) |
+							(run.underline ? 2 : 0) |
+							(run.lineThrough ? 4 : 0) |
+							(run.link === undefined ? 0 : 8),
+					);
+					if (run.link !== undefined) this.binary.u16(links.indexOf(run.link));
 					this.binary.text(run.text);
 				}
 			});
@@ -70,6 +96,43 @@ export class ProtocolWriter {
 				throw new Error("paragraph exceeds 64 KiB; split it into several paragraphs");
 			throw error;
 		}
+	}
+
+	image(
+		src: Uint8Array,
+		width: Dimension | undefined,
+		height: number | undefined,
+		alt: string,
+		link: string | undefined,
+	) {
+		this.body();
+		let slot = this.images.get(src);
+		if (slot === undefined) {
+			try {
+				slot = this.assets.add_image(src);
+			} catch (error) {
+				throw asError(error);
+			}
+			this.images.set(src, slot);
+		}
+		this.binary.record(opcode.image, () => {
+			this.binary.u16(slot);
+			if (width) {
+				this.binary.u8(width.kind);
+				this.binary.f32(width.value);
+			} else this.binary.u8(0);
+			if (height === undefined) this.binary.u8(0);
+			else {
+				this.binary.u8(1);
+				this.binary.f32(height);
+			}
+			if (link === undefined) this.binary.u8(0);
+			else {
+				this.binary.u8(1);
+				this.binary.text(link);
+			}
+			this.binary.text(alt);
+		});
 	}
 
 	spacer(height: number) {

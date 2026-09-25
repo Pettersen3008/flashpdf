@@ -28,12 +28,40 @@ try {
 	writeFileSync(
 		join(work, "consumer.mjs"),
 		`import { readFile } from "node:fs/promises";
+import { deflateSync } from "node:zlib";
 import { jsx, jsxs } from "@pettersen3008/flashpdf/jsx-runtime";
 import { render, stylesheet } from "@pettersen3008/flashpdf";
 
+// A 1x1 grey PNG built by hand, so the packed package proves image XObjects end to end.
+const crc32 = (bytes) => {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+const chunk = (kind, data) => {
+  const body = Buffer.concat([Buffer.from(kind), data]);
+  const bytes = Buffer.alloc(body.length + 8);
+  bytes.writeUInt32BE(data.length, 0);
+  body.copy(bytes, 4);
+  bytes.writeUInt32BE(crc32(body), body.length + 4);
+  return bytes;
+};
+const logo = new Uint8Array(Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  chunk("IHDR", Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0])),
+  chunk("IDAT", deflateSync(Buffer.from([0, 128]))),
+  chunk("IEND", Buffer.alloc(0)),
+]));
 const Invoice = ({ total }) => jsxs("main", {
   style: { fontFamily: "Invoice" },
-  children: [jsx("h1", { children: "Invoice" }), jsx("p", { className: "total", children: total })],
+  children: [
+    jsx("a", { href: "https://example.com/", children: jsx("img", { src: logo, alt: "Logo", style: { width: 24 } }) }),
+    jsx("h1", { children: "Invoice" }),
+    jsx("p", { className: "total", children: total }),
+  ],
 });
 const font = new Uint8Array(await readFile("font.ttf"));
 const pdf = await render(jsx(Invoice, { total: "$100.00" }), {
@@ -45,6 +73,8 @@ const pdf = await render(jsx(Invoice, { total: "$100.00" }), {
 if (!(pdf instanceof Uint8Array)) throw new Error("render must return a Uint8Array");
 if ((Buffer.from(pdf).toString("latin1").match(/\\/Subtype \\/TrueType/g) ?? []).length !== 2)
   throw new Error("embedded regular and bold fonts missing");
+if (!/\\/Subtype \\/Image/.test(Buffer.from(pdf).toString("latin1")) || !/\\/URI/.test(Buffer.from(pdf).toString("latin1")))
+  throw new Error("image XObject or link annotation missing");
 process.stdout.write(Buffer.from(pdf).toString("base64"));
 `,
 	);

@@ -1,4 +1,4 @@
-use crate::{BoxStyle, ColumnWidth, Pt, TextAlign, TextRun};
+use crate::{BoxStyle, ColumnWidth, ImageSize, Pt, TextAlign, TextRun};
 
 pub(crate) struct Document<'a> {
     pub(crate) blocks: Vec<Block<'a>>,
@@ -16,12 +16,21 @@ pub(crate) enum Element<'a> {
     Stack(Stack<'a>),
     Row(Row<'a>),
     Table(Table<'a>),
+    Image(ImageNode<'a>),
 }
 
 pub(crate) struct Paragraph<'a> {
     pub(crate) align: TextAlign,
     pub(crate) text: &'a str,
     pub(crate) runs: Vec<TextRun>,
+    pub(crate) links: &'a [String],
+}
+
+pub(crate) struct ImageNode<'a> {
+    pub(crate) slot: u16,
+    pub(crate) width: ImageSize,
+    pub(crate) height: Option<Pt>,
+    pub(crate) link: Option<&'a str>,
 }
 
 pub(crate) struct Spacer {

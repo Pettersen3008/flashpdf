@@ -128,6 +128,35 @@ test("given a context provider, when normalizing, then renders its children", as
 		);
 });
 
+test("given an img with a string src, when resolving, then rejects with the bytes hint", async () => {
+	await assert.rejects(
+		resolveTree(jsx("main", { children: jsx("img", { src: "/logo.png", alt: "Logo" }) })),
+		/src must be the image's PNG or JPEG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes on <img> in <main>/,
+	);
+	const [main] = await resolveTree(
+		jsx("main", { children: jsx("img", { src: new Uint8Array([1]), alt: "Logo" }) }),
+	);
+	assert.deepEqual(main.children[0].src, new Uint8Array([1]));
+	assert.equal(main.children[0].alt, "Logo");
+});
+
+test("given an a with a javascript: href, when resolving, then rejects naming the scheme", async () => {
+	await assert.rejects(
+		resolveTree(jsx("a", { href: "javascript:alert(1)", children: "x" })),
+		/href scheme javascript: is not allowed; use http, https, or mailto on <a>/,
+	);
+	await assert.rejects(
+		resolveTree(jsx("a", { href: "/invoices/42", children: "x" })),
+		/href must be an absolute http, https, or mailto URL, not "\/invoices\/42" on <a>/,
+	);
+	await assert.rejects(
+		resolveTree(jsx("a", { href: "#total", children: "x" })),
+		/internal anchor links \(#total\) are not supported yet on <a>/,
+	);
+	const [link] = await resolveTree(jsx("a", { href: "https://Example.com/ø", children: "x" }));
+	assert.equal(link.href, "https://example.com/%C3%B8");
+});
+
 test("given ref and key props on a host element, when resolving, then ignores them", async () => {
 	const tree = await resolveTree(jsx("p", { ref: { current: null }, children: "x" }, "k"));
 	assert.deepEqual(tree, [

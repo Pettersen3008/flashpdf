@@ -1,5 +1,5 @@
 use crate::win_ansi::valid;
-use crate::{Fraction, Percent, Rgb, TextAlign};
+use crate::{Fraction, ImageSize, Percent, Rgb, TextAlign};
 
 use super::ProtocolError;
 
@@ -85,6 +85,34 @@ impl<'a> Cursor<'a> {
             1 => crate::ColumnWidth::Fraction(Fraction::new(value)?),
             2 => crate::ColumnWidth::Percent(Percent::new(value)?),
             _ => return Err(ProtocolError::InvalidColumnKind),
+        })
+    }
+
+    /// Hosts percent-encode non-ASCII before sending, so a URI is printable ASCII without spaces.
+    pub(super) fn uri(&mut self) -> Result<&'a str, ProtocolError> {
+        let uri = self.utf8_text()?;
+        if uri.is_empty() || !uri.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+            return Err(ProtocolError::InvalidLink);
+        }
+        Ok(uri)
+    }
+
+    /// Alternative text is stored for accessibility tagging, so it accepts any
+    /// Unicode except control characters.
+    pub(super) fn alt(&mut self) -> Result<&'a str, ProtocolError> {
+        let alt = self.utf8_text()?;
+        if alt.chars().any(char::is_control) {
+            return Err(ProtocolError::InvalidValue("alt text"));
+        }
+        Ok(alt)
+    }
+
+    pub(super) fn image_size(&mut self) -> Result<ImageSize, ProtocolError> {
+        Ok(match self.take(1)?[0] {
+            0 => ImageSize::Auto,
+            1 => ImageSize::Fixed(pt(self.positive_f32("image width")?)?),
+            2 => ImageSize::Percent(Percent::new(self.positive_f32("image width")?)?),
+            _ => return Err(ProtocolError::InvalidValue("image width kind")),
         })
     }
 

@@ -11,6 +11,8 @@ export type Style = {
 	flexDirection?: "row" | "column";
 	flex?: number;
 	width?: Width;
+	/** Only `img` takes a height; block height comes from content. */
+	height?: Width;
 	margin?: Edges;
 	marginTop?: Length;
 	marginRight?: Length;
@@ -35,6 +37,7 @@ export type Style = {
 	fontFamily?: string;
 	fontWeight?: number | "normal" | "bold";
 	textAlign?: "left" | "center" | "right";
+	textDecoration?: "none" | "underline" | "line-through" | "underline line-through";
 	color?: string;
 	breakBefore?: "auto" | "page";
 	breakAfter?: "auto" | "page";
@@ -62,4 +65,8 @@ export type CommonProps = {
 };
 export type BlockProps = CommonProps & { children?: PdfNode | undefined };
 export type VoidProps = CommonProps & { children?: never };
-export type PdfProps = BlockProps | VoidProps;
+/** `src` is the PNG or JPEG file bytes; `alt` is stored for accessibility tagging. */
+export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined };
+/** `href` must be an absolute `http:`, `https:`, or `mailto:` URL. */
+export type LinkProps = BlockProps & { href: string };
+export type PdfProps = BlockProps | VoidProps | ImageProps | LinkProps;

@@ -4,8 +4,9 @@ use crate::command::{CommandParser, OwnedCommand};
 use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout};
+use crate::image::Image;
 use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
-use crate::paint::PdfPainter;
+use crate::paint::{PageLink, PdfPainter};
 use crate::pdf::finish_pdf;
 use crate::{Command, Page, Pt, RenderError, TextStyle};
 
@@ -25,6 +26,10 @@ pub struct Renderer {
     content_bytes: usize,
     cursor: PageCursor,
     fonts: FontBook,
+    images: Vec<Image>,
+    used_images: Vec<bool>,
+    /// Link annotations per page, parallel to `contents`.
+    links: Vec<Vec<PageLink>>,
     layout: LayoutBuffer,
     footer: Option<Footer>,
     footer_height: crate::Pt,
@@ -49,6 +54,9 @@ impl Renderer {
             content_bytes: 0,
             cursor: PageCursor::new(page),
             fonts: FontBook::new(embedded),
+            images: Vec::new(),
+            used_images: Vec::new(),
+            links: vec![Vec::new()],
             layout: LayoutBuffer::default(),
             footer: None,
             footer_height: crate::Pt::ZERO,
@@ -57,6 +65,26 @@ impl Renderer {
 
     pub(crate) fn font_count(&self) -> usize {
         self.fonts.len()
+    }
+
+    /// Images register at any point before the record that paints them.
+    pub(crate) fn add_image(&mut self, image: Image) -> u16 {
+        self.images.push(image);
+        self.used_images.push(false);
+        (self.images.len() - 1) as u16
+    }
+
+    pub(crate) fn image_count(&self) -> usize {
+        self.images.len()
+    }
+
+    fn mark_used(&mut self, layout: &LayoutBuffer) {
+        for font in layout.used_fonts() {
+            self.fonts.mark_used(font);
+        }
+        for image in &layout.images {
+            self.used_images[usize::from(image.slot)] = true;
+        }
     }
 
     #[cfg(test)]
@@ -143,27 +171,34 @@ impl Renderer {
             return self.render_table(table);
         }
         self.layout.clear();
-        let height = LayoutEngine::new(&self.fonts)
+        let height = LayoutEngine::new(&self.fonts, &self.images)
             .layout(
                 element,
                 LayoutArea::root(self.page.content_width()),
                 &mut self.layout,
             )
             .map_err(RenderError::from)?;
-        for font in self.layout.used_fonts() {
-            self.fonts.mark_used(font);
-        }
-        let lines = self.layout.lines.len();
+        let layout = std::mem::take(&mut self.layout);
+        self.mark_used(&layout);
+        let result = self.place(element, &layout, height);
+        self.layout = layout;
+        result
+    }
+
+    fn place(
+        &mut self,
+        element: &Element<'_>,
+        layout: &LayoutBuffer,
+        height: Pt,
+    ) -> Result<(), RenderError> {
+        let lines = layout.lines.len();
         if !splittable(element) {
             self.page.validate_block(height + self.footer_height)?;
             if !self.cursor.fits(height + self.footer_height, self.page) {
                 self.start_page();
             }
-            PdfPainter::new(self.contents.last_mut().unwrap()).paint(
-                &self.layout,
-                0..lines,
-                self.cursor.origin(self.page),
-            );
+            let origin = self.cursor.origin(self.page);
+            self.painter().paint(layout, 0..lines, origin);
             self.cursor.advance(height);
             return Ok(());
         }
@@ -174,8 +209,7 @@ impl Renderer {
         loop {
             let available = self.cursor.remaining(self.page) - self.footer_height;
             let start = index;
-            while self
-                .layout
+            while layout
                 .lines
                 .get(index)
                 .is_some_and(|line| line.bottom - offset <= available)
@@ -189,17 +223,14 @@ impl Renderer {
                 self.start_page();
                 continue;
             }
-            PdfPainter::new(self.contents.last_mut().unwrap()).paint(
-                &self.layout,
-                start..index,
-                self.cursor.origin(self.page).translated(Pt::ZERO, offset),
-            );
+            let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
+            self.painter().paint(layout, start..index, origin);
             if index == lines {
                 let rest = (height - offset).get().min(available.get());
                 self.cursor.advance(Pt(rest.max(0.0)));
                 return Ok(());
             }
-            offset = self.layout.lines[index].top;
+            offset = layout.lines[index].top;
             self.start_page();
         }
     }
@@ -211,15 +242,13 @@ impl Renderer {
         let mut header = LayoutBuffer::default();
         let mut header_height = Pt::ZERO;
         for row in &table.rows[..table.header_rows] {
-            header_height += LayoutEngine::new(&self.fonts).layout(
+            header_height += LayoutEngine::new(&self.fonts, &self.images).layout(
                 row,
                 area.translated(Pt::ZERO, header_height),
                 &mut header,
             )?;
         }
-        for font in header.used_fonts() {
-            self.fonts.mark_used(font);
-        }
+        self.mark_used(&header);
         let reserved = header_height + self.footer_height;
         self.page.validate_block(reserved)?;
         let body = &table.rows[table.header_rows..];
@@ -233,10 +262,10 @@ impl Renderer {
         let mut header_on_page = false;
         for (index, row) in body.iter().enumerate() {
             self.layout.clear();
-            let height = LayoutEngine::new(&self.fonts).layout(row, area, &mut self.layout)?;
-            for font in self.layout.used_fonts() {
-                self.fonts.mark_used(font);
-            }
+            let height =
+                LayoutEngine::new(&self.fonts, &self.images).layout(row, area, &mut self.layout)?;
+            let layout = std::mem::take(&mut self.layout);
+            self.mark_used(&layout);
             if self.page.validate_block(height + reserved).is_err() {
                 return Err(RenderError::TableRowOverflow(table.header_rows + index));
             }
@@ -254,38 +283,38 @@ impl Renderer {
                 self.paint_block(&header, header_height);
                 header_on_page = true;
             }
-            let Self {
-                contents,
-                cursor,
-                layout,
-                page,
-                ..
-            } = self;
-            paint_block(contents, cursor, *page, layout, height);
+            self.paint_block(&layout, height);
+            self.layout = layout;
         }
         Ok(())
     }
 
     fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) {
-        paint_block(
-            &mut self.contents,
-            &mut self.cursor,
-            self.page,
-            layout,
-            height,
-        );
+        let origin = self.cursor.origin(self.page);
+        self.painter().paint(layout, 0..layout.lines.len(), origin);
+        self.cursor.advance(height);
+    }
+
+    fn painter(&mut self) -> PdfPainter<'_> {
+        PdfPainter::new(
+            self.contents.last_mut().unwrap(),
+            self.links.last_mut().unwrap(),
+        )
     }
 
     fn start_page(&mut self) {
         self.content_bytes += self.contents.last().unwrap().len();
         self.contents.push(Content::new());
+        self.links.push(Vec::new());
         self.cursor.reset(self.page);
     }
 
     pub fn finish(mut self) -> Vec<u8> {
         if let Some(footer) = self.footer.take() {
             let total = self.contents.len() as i32;
-            for (index, content) in self.contents.iter_mut().enumerate() {
+            for (index, (content, links)) in
+                self.contents.iter_mut().zip(&mut self.links).enumerate()
+            {
                 let mut page_buffer = itoa::Buffer::new();
                 let mut total_buffer = itoa::Buffer::new();
                 let page_number = page_buffer.format(index as i32 + 1);
@@ -299,7 +328,7 @@ impl Renderer {
                     footer.style,
                 )
                 .unwrap();
-                PdfPainter::new(content).paint_line(
+                PdfPainter::new(content, links).paint_line(
                     &text,
                     footer.style,
                     crate::geometry::Point {
@@ -312,30 +341,23 @@ impl Renderer {
             }
         }
         let (fonts, used) = self.fonts.into_parts();
-        finish_pdf(self.page.page(), self.contents, fonts, used)
+        finish_pdf(
+            self.page.page(),
+            self.contents,
+            fonts,
+            used,
+            self.images,
+            self.used_images,
+            self.links,
+        )
     }
 }
 
-fn paint_block(
-    contents: &mut [Content],
-    cursor: &mut PageCursor,
-    page: PageLayout,
-    layout: &LayoutBuffer,
-    height: Pt,
-) {
-    PdfPainter::new(contents.last_mut().unwrap()).paint(
-        layout,
-        0..layout.lines.len(),
-        cursor.origin(page),
-    );
-    cursor.advance(height);
-}
-
-/// Text and unpainted boxes split across pages. Stack stays atomic: the
+/// Text, images, and unpainted boxes split across pages. Stack stays atomic: the
 /// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
 fn splittable(element: &Element<'_>) -> bool {
     match element {
-        Element::Paragraph(_) => true,
+        Element::Paragraph(_) | Element::Image(_) => true,
         Element::Box(node) => {
             node.style.background.is_none()
                 && node

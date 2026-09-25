@@ -32,6 +32,12 @@ impl PdfRenderer {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    pub fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, JsValue> {
+        self.decoder
+            .add_image(bytes)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     pub fn push(&mut self, length: usize) -> Result<(), JsValue> {
         if length > self.input.len() {
             return Err(JsValue::from_str("input exceeds window"));

@@ -304,6 +304,7 @@ fn run(len: usize, bold: bool, size: f32, hard_break: bool) -> TextRun {
         size: Pt(size),
         color: Rgb::BLACK,
         hard_break,
+        decoration: Default::default(),
     }
 }
 
@@ -318,6 +319,7 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
     // "WWWWW" fits the 100pt line; "WWWW"+"WW" is one 56.64pt word that does not follow it.
     let runs = [run(10, false, 10.0, false), run(2, true, 10.0, false)];
     let pdf = parsed(&[Command::Paragraph {
+        links: &[],
         align: TextAlign::Left,
         text: "WWWWW WWWWWW",
         runs: &runs,
@@ -336,6 +338,7 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
 fn given_a_hard_break_when_laying_out_then_starts_a_new_line_without_a_space() {
     let runs = [run(2, false, 10.0, true), run(1, false, 10.0, false)];
     let pdf = parsed(&[Command::Paragraph {
+        links: &[],
         align: TextAlign::Left,
         text: "a b",
         runs: &runs,
@@ -349,6 +352,7 @@ fn given_mixed_sizes_on_one_line_when_laying_out_then_the_line_takes_the_larger_
     let runs = [run(1, false, 10.0, false), run(1, false, 20.0, false)];
     let pdf = parsed(&[
         Command::Paragraph {
+            links: &[],
             align: TextAlign::Left,
             text: "ab",
             runs: &runs,
@@ -367,6 +371,7 @@ fn given_runs_that_do_not_cover_the_text_when_laying_out_then_rejects() {
         super::render(
             page(),
             &[Command::Paragraph {
+                links: &[],
                 align: TextAlign::Left,
                 text: "ab",
                 runs: &runs,

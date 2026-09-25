@@ -28,6 +28,11 @@ pub enum ProtocolError {
     InvalidRecordLength,
     InvalidValue(&'static str),
     Render(crate::RenderError),
+    InvalidImage(String),
+    ImagesTooLarge,
+    TooManyImages,
+    UnknownImage,
+    InvalidLink,
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -61,6 +66,11 @@ impl std::fmt::Display for ProtocolError {
             Self::InvalidRecordLength => "invalid record length",
             Self::InvalidValue(name) => return write!(formatter, "invalid {name}"),
             Self::Render(error) => return write!(formatter, "{error:?}"),
+            Self::InvalidImage(message) => return formatter.write_str(message),
+            Self::ImagesTooLarge => "images exceed 64 MiB per render",
+            Self::TooManyImages => "too many images",
+            Self::UnknownImage => "unknown image",
+            Self::InvalidLink => "invalid link: URIs must be printable ASCII",
         };
         formatter.write_str(message)
     }

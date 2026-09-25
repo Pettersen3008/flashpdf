@@ -6,6 +6,11 @@ export interface InputWindow {
 	finish(): Uint8Array;
 }
 
+/** wasm-bindgen throws a `JsValue` string; an `Error` lets `locate()` append the element path. */
+export function asError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
+}
+
 export class Binary {
 	private readonly bytes = new Uint8Array(65541);
 	private readonly view = new DataView(this.bytes.buffer);
@@ -51,7 +56,7 @@ export class Binary {
 	}
 	header(width: number, height: number, margin: number) {
 		for (const byte of [70, 80, 68, 70]) this.u8(byte);
-		this.u16(4);
+		this.u16(5);
 		this.f32(width);
 		this.f32(height);
 		this.f32(margin);
@@ -74,7 +79,11 @@ export class Binary {
 				this.input = new Uint8Array(this.memory.buffer, this.inputPtr, this.inputCapacity);
 			const chunk = this.bytes.subarray(offset, Math.min(offset + this.inputCapacity, this.offset));
 			this.input.set(chunk);
-			this.renderer.push(chunk.length);
+			try {
+				this.renderer.push(chunk.length);
+			} catch (error) {
+				throw asError(error);
+			}
 		}
 		this.offset = 0;
 	}

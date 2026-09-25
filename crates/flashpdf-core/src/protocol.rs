@@ -16,7 +16,8 @@ use cursor::{nonnegative_f32, positive_f32, pt, Cursor};
 use opcode::Opcode;
 
 use crate::command::MAX_LAYOUT_DEPTH;
-use crate::{Edges, FontId, OwnedCommand, TextRun, TextStyle};
+use crate::image::MAX_IMAGE_BYTES;
+use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -25,7 +26,7 @@ const MAX_RECORD: usize = 64 * 1024;
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 4;
+const VERSION: u16 = 5;
 
 #[derive(Default)]
 pub struct Decoder {
@@ -37,6 +38,9 @@ pub struct Decoder {
     frames: Vec<Frame>,
     ended: bool,
     fonts: Vec<crate::EmbeddedFont>,
+    /// Images registered before the renderer exists; later ones go straight to it.
+    images: Vec<crate::Image>,
+    image_bytes: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -60,6 +64,30 @@ impl Decoder {
         self.fonts
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
         Ok((self.fonts.len() + 1) as u8)
+    }
+
+    /// Images register at any point before the record that paints them, and are
+    /// held whole until the PDF's XObject streams are written.
+    pub fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+        if self.ended {
+            return Err(ProtocolError::DataAfterEnd);
+        }
+        self.image_bytes = self
+            .image_bytes
+            .checked_add(bytes.len())
+            .filter(|total| *total <= MAX_IMAGE_BYTES)
+            .ok_or(ProtocolError::ImagesTooLarge)?;
+        if self.image_count() >= usize::from(u16::MAX) {
+            return Err(ProtocolError::TooManyImages);
+        }
+        let image = crate::Image::parse(bytes).map_err(ProtocolError::InvalidImage)?;
+        Ok(match &mut self.renderer {
+            Some(renderer) => renderer.add_image(image),
+            None => {
+                self.images.push(image);
+                (self.images.len() - 1) as u16
+            }
+        })
     }
 
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
@@ -194,6 +222,9 @@ impl Decoder {
             }
             Opcode::Paragraph => {
                 let align = cursor.align()?;
+                let links: Vec<String> = (0..cursor.u16()?)
+                    .map(|_| cursor.uri().map(str::to_owned))
+                    .collect::<Result<_, _>>()?;
                 let count = usize::from(cursor.u16()?);
                 let mut text = String::new();
                 let mut runs = Vec::with_capacity(count);
@@ -201,10 +232,18 @@ impl Decoder {
                     let font = self.font(cursor.take(1)?[0])?;
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
-                    let hard_break = match cursor.take(1)?[0] {
-                        0 => false,
-                        1 => true,
-                        _ => return Err(ProtocolError::InvalidValue("run flags")),
+                    // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows.
+                    let flags = cursor.take(1)?[0];
+                    if flags > 0x0f {
+                        return Err(ProtocolError::InvalidValue("run flags"));
+                    }
+                    let link = if flags & 8 != 0 {
+                        Some(cursor.u16()?)
+                            .filter(|index| usize::from(*index) < links.len())
+                            .ok_or(ProtocolError::InvalidValue("link index"))?
+                            .into()
+                    } else {
+                        None
                     };
                     let run = cursor.text(false)?;
                     text.push_str(run);
@@ -213,11 +252,37 @@ impl Decoder {
                         font,
                         size,
                         color,
-                        hard_break,
+                        hard_break: flags & 1 != 0,
+                        decoration: RunDecoration {
+                            underline: flags & 2 != 0,
+                            line_through: flags & 4 != 0,
+                            link,
+                        },
                     });
                 }
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Paragraph(align, text, runs))
+                self.layout_command(OwnedCommand::Paragraph(align, text, runs, links))
+            }
+            Opcode::Image => {
+                let slot = cursor.u16()?;
+                if usize::from(slot) >= self.image_count() {
+                    return Err(ProtocolError::UnknownImage);
+                }
+                let width = cursor.image_size()?;
+                let height = match cursor.take(1)?[0] {
+                    0 => None,
+                    1 => Some(pt(cursor.positive_f32("image height")?)?),
+                    _ => return Err(ProtocolError::InvalidValue("image height kind")),
+                };
+                let link = match cursor.take(1)?[0] {
+                    0 => None,
+                    1 => Some(cursor.uri()?.to_owned()),
+                    _ => return Err(ProtocolError::InvalidValue("image link flag")),
+                };
+                // Alt text rides in the record for a future tagged-PDF pass; nothing reads it yet.
+                cursor.alt()?;
+                cursor.done()?;
+                self.layout_command(OwnedCommand::Image(slot, width, height, link))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -293,23 +358,36 @@ impl Decoder {
         }
     }
 
+    fn image_count(&self) -> usize {
+        self.renderer
+            .as_ref()
+            .map_or(self.images.len(), crate::Renderer::image_count)
+    }
+
     fn ensure_renderer(&mut self) -> Result<&mut crate::Renderer, ProtocolError> {
         let page = self.page.ok_or(ProtocolError::MissingHeader)?;
         if self.renderer.is_none() {
-            self.renderer = Some(crate::Renderer::with_fonts(
-                page,
-                std::mem::take(&mut self.fonts),
-            ));
+            let mut renderer = crate::Renderer::with_fonts(page, std::mem::take(&mut self.fonts));
+            for image in std::mem::take(&mut self.images) {
+                renderer.add_image(image);
+            }
+            self.renderer = Some(renderer);
         }
         Ok(self.renderer.as_mut().unwrap())
     }
 
     fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let payload = match &command {
-            OwnedCommand::Paragraph(_, text, runs) => {
-                text.len() + runs.len() * size_of::<TextRun>()
+            OwnedCommand::Paragraph(_, text, runs, links) => {
+                text.len()
+                    + runs.len() * size_of::<TextRun>()
+                    + links
+                        .iter()
+                        .map(|link| link.len() + size_of::<String>())
+                        .sum::<usize>()
             }
             OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
+            OwnedCommand::Image(_, _, _, link) => link.as_ref().map_or(0, String::len),
             _ => 0,
         };
         self.block_bytes += payload + size_of::<OwnedCommand>();
@@ -364,19 +442,15 @@ impl Decoder {
     }
 
     fn flush_block(&mut self) -> Result<(), ProtocolError> {
-        let page = self.page.ok_or(ProtocolError::MissingHeader)?;
-        let Self {
-            renderer, block, ..
-        } = self;
-        renderer
-            .get_or_insert_with(|| {
-                crate::Renderer::with_fonts(page, std::mem::take(&mut self.fonts))
-            })
-            .push_owned(block)
-            .map_err(ProtocolError::from)?;
-        block.clear();
+        let block = std::mem::take(&mut self.block);
+        let result = self
+            .ensure_renderer()?
+            .push_owned(&block)
+            .map_err(ProtocolError::from);
+        self.block = block;
+        self.block.clear();
         self.block_bytes = 0;
-        Ok(())
+        result
     }
 
     pub fn finish(self) -> Result<Vec<u8>, ProtocolError> {

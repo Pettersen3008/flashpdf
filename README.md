@@ -53,6 +53,20 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 
 `colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
 
+## Images and links
+
+`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. `alt` is stored for accessibility tagging.
+
+```tsx
+const logo = new Uint8Array(await readFile('logo.png'));
+<a href="https://example.com/invoices/42">
+  <img src={logo} alt="Acme Supply Co." style={{ width: 120 }} />
+</a>
+<p>Pay online at <a href="https://example.com/pay">the portal</a>.</p>
+```
+
+PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](./CSS.md).
+
 ## Install
 
 ```sh
@@ -134,7 +148,7 @@ Every target runs the same decoder, so a document that renders in one produces i
 
 ## Assets
 
-v1 embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. There is no image input.
+v1 embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](./CSS.md).
 
