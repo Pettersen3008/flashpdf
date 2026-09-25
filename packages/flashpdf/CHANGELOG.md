@@ -45,7 +45,7 @@
 - Embedded fonts use their PostScript name for `/BaseFont`, OS/2 `sCapHeight` for `/CapHeight`, and a weight-class based `/StemV`.
 - One entry point. The WASM loader is chosen through the `#wasm` imports map with `workerd`, `edge-light`, `browser`, and `default` conditions.
 - `margin` and `padding` types accept one to four lengths, and `RenderOptions` fields accept an explicit `undefined`.
-- The package publishes to npmjs.com with provenance through GitHub Actions trusted publishing instead of GitHub Packages.
+- The package publishes to npmjs.com with provenance instead of GitHub Packages. The first npm publish uses an npm token; trusted publishing can be configured after the package exists.
 - The release workflow refuses tags whose version does not match `package.json` or whose commit is not on `main`.
 - The WASM size gate is 400 KB raw and 200 KB gzipped. Rust is pinned to 1.94.0 through `rust-toolchain.toml`, and CI caches cargo artifacts.
 - The packed-package E2E test validates the Node-rendered PDF with `qpdf --check` and prints a first-page raster hash from `mutool` when those tools are installed.
