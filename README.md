@@ -131,7 +131,9 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 });
 ```
 
-v1 embeds whole TrueType files and keeps the existing WinAnsi text subset. It supports regular and bold faces only, not italic/variable-face selection, OpenType features, or Unicode shaping. Unsupported characters, absent families, and a bold request without a bold file reject clearly.
+Each embedded font is subset to the glyphs the document shows (plus the components of composite glyphs) and written as a Type0/CIDFontType2 font with `Identity-H` encoding and a `ToUnicode` map, so copy-paste and text extraction return the original characters. Any character the TTF has a glyph for renders: Latin extended, Greek, Cyrillic, CJK, symbols, currency, and supplementary-plane characters through cmap formats 4 and 12. A character without a glyph rejects naming the character, its code point, and the element.
+
+Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. There is no shaping, kerning, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. Helvetica and Helvetica-Bold have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Regular and bold faces only; italic and variable-face selection, absent families, and a bold request without a bold file reject clearly.
 
 ## Compatibility
 

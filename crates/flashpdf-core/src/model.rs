@@ -266,7 +266,8 @@ pub enum RenderError {
     /// A table row and its repeated header exceed an empty page; the index is the table child.
     TableRowOverflow(usize),
     InvalidLayout,
-    MissingGlyph,
+    /// The embedded font has no glyph for the character.
+    MissingGlyph(char),
     DocumentTooLarge,
     ImageTooWide,
 }

@@ -71,7 +71,7 @@ const pdf = await render(jsx(Invoice, { total: "$100.00" }), {
   fonts: [{ family: "Invoice", regular: font, bold: font }],
 });
 if (!(pdf instanceof Uint8Array)) throw new Error("render must return a Uint8Array");
-if ((Buffer.from(pdf).toString("latin1").match(/\\/Subtype \\/TrueType/g) ?? []).length !== 2)
+if ((Buffer.from(pdf).toString("latin1").match(/\\/Subtype \\/Type0/g) ?? []).length !== 2)
   throw new Error("embedded regular and bold fonts missing");
 if (!/\\/Subtype \\/Image/.test(Buffer.from(pdf).toString("latin1")) || !/\\/URI/.test(Buffer.from(pdf).toString("latin1")))
   throw new Error("image XObject or link annotation missing");

@@ -1,5 +1,6 @@
 import type { StyledNode } from "./css.js";
 import type { StyledElement } from "./css/cascade.js";
+import { glyphError } from "./fonts.js";
 import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
 import type { ProtocolWriter, Column, Dimension, Run } from "./protocol.js";
 import {
@@ -530,7 +531,7 @@ export function compile(
 		try {
 			element(node, writer, fonts, context, depth, pageTokens);
 		} catch (error) {
-			throw locate(error, node.where);
+			throw locate(glyphError(error), node.where);
 		}
 	}
 }

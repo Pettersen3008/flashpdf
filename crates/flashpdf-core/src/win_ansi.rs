@@ -1,5 +1,6 @@
 use crate::RenderError;
 
+/// The standard-font encoding: Helvetica has no glyphs beyond it.
 pub(crate) fn encode(character: char) -> Result<u8, RenderError> {
     let byte = match character {
         ' '..='~' | '\u{00a0}'..='\u{00ff}' => character as u8,
@@ -35,49 +36,16 @@ pub(crate) fn encode(character: char) -> Result<u8, RenderError> {
     Ok(byte)
 }
 
-/// Accepts exactly what layout will: body text may hold the ASCII whitespace
-/// word splitting consumes; a footer is encoded verbatim plus page sentinels.
+/// Control characters never render; body text may hold the ASCII whitespace
+/// word splitting consumes, a footer only the page sentinels. Whether a
+/// printable character has a glyph is the font's decision at layout.
 pub(crate) fn valid(text: &str, footer: bool) -> bool {
     text.chars().all(|character| {
-        let control = if footer {
-            matches!(character, crate::PAGE_NUMBER | crate::TOTAL_PAGES)
-        } else {
-            character.is_ascii_whitespace()
-        };
-        control || encode(character).is_ok()
-    })
-}
-
-pub(crate) fn decode(byte: u8) -> Option<char> {
-    Some(match byte {
-        32..=126 | 160..=255 => char::from(byte),
-        128 => '\u{20ac}',
-        130 => '\u{201a}',
-        131 => '\u{0192}',
-        132 => '\u{201e}',
-        133 => '\u{2026}',
-        134 => '\u{2020}',
-        135 => '\u{2021}',
-        136 => '\u{02c6}',
-        137 => '\u{2030}',
-        138 => '\u{0160}',
-        139 => '\u{2039}',
-        140 => '\u{0152}',
-        142 => '\u{017d}',
-        145 => '\u{2018}',
-        146 => '\u{2019}',
-        147 => '\u{201c}',
-        148 => '\u{201d}',
-        149 => '\u{2022}',
-        150 => '\u{2013}',
-        151 => '\u{2014}',
-        152 => '\u{02dc}',
-        153 => '\u{2122}',
-        154 => '\u{0161}',
-        155 => '\u{203a}',
-        156 => '\u{0153}',
-        158 => '\u{017e}',
-        159 => '\u{0178}',
-        _ => return None,
+        !character.is_control()
+            || if footer {
+                matches!(character, crate::PAGE_NUMBER | crate::TOTAL_PAGES)
+            } else {
+                character.is_ascii_whitespace()
+            }
     })
 }

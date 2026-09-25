@@ -146,7 +146,8 @@ test("given invalid protocol input, when pushed, then the release WASM reports t
 	const wasm = loadWasm();
 	for (const [stream, message] of [
 		[join(protocolHeader(), record(42)), /unknown opcode/],
-		[join(protocolHeader(), text("🙂")), /unsupported WinAnsi character/],
+		[join(protocolHeader(), text("🙂")), /UnsupportedCharacter\('🙂'\)/],
+		[join(protocolHeader(), text("\u0007")), /unsupported control character/],
 		[
 			join(protocolHeader(), record(3, f32(0)), text("word ".repeat(100)), record(4)),
 			/PageOverflow/,

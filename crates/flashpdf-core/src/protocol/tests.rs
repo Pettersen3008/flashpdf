@@ -203,15 +203,23 @@ fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
     let fonts = document.get_page_fonts(page).unwrap();
     assert_eq!(fonts.len(), 2);
     for font in fonts.values() {
-        assert_eq!(
-            font.get(b"Subtype").unwrap().as_name().unwrap(),
-            b"TrueType"
-        );
-        assert_eq!(
-            font.get(b"BaseFont").unwrap().as_name().unwrap(),
-            b"Abel-Regular"
-        );
-        let descriptor = font.get(b"FontDescriptor").unwrap().as_reference().unwrap();
+        assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
+        assert!(font
+            .get(b"BaseFont")
+            .unwrap()
+            .as_name()
+            .unwrap()
+            .ends_with(b"+Abel-Regular"));
+        let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]
+            .as_reference()
+            .unwrap();
+        let descriptor = document
+            .get_dictionary(descendant)
+            .unwrap()
+            .get(b"FontDescriptor")
+            .unwrap()
+            .as_reference()
+            .unwrap();
         let descriptor = document.get_dictionary(descriptor).unwrap();
         assert_eq!(
             descriptor.get(b"CapHeight").unwrap().as_float().unwrap(),
@@ -223,14 +231,12 @@ fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
             .as_reference()
             .unwrap();
         let file = document.get_object(file).unwrap().as_stream().unwrap();
+        let program = miniz_oxide::inflate::decompress_to_vec_zlib(&file.content).unwrap();
         assert_eq!(
             file.dict.get(b"Length1").unwrap().as_i64().unwrap(),
-            font_bytes.len() as i64
+            program.len() as i64
         );
-        assert_eq!(
-            miniz_oxide::inflate::decompress_to_vec_zlib(&file.content).unwrap(),
-            font_bytes
-        );
+        assert!(program.len() < font_bytes.len(), "{}", program.len());
     }
 }
 
@@ -292,15 +298,16 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     invalid_utf8.extend(plain(&[0xff]));
     assert_eq!(push_error(&invalid_utf8), "invalid UTF-8");
 
-    for control in ["\u{0b}", "\u{1e}", "\u{1f}"] {
+    for control in ["\u{0b}", "\u{1e}", "\u{1f}", "\u{7f}", "\u{85}"] {
         let mut sentinel = header(VERSION, 120.0, 60.0, 10.0);
         sentinel.extend(plain(control.as_bytes()));
-        assert_eq!(push_error(&sentinel), "unsupported WinAnsi character");
+        assert_eq!(push_error(&sentinel), "unsupported control character");
     }
 
+    // Printable text passes the boundary; Helvetica then rejects what WinAnsi lacks.
     let mut unsupported = header(VERSION, 120.0, 60.0, 10.0);
     unsupported.extend(plain("🙂".as_bytes()));
-    assert_eq!(push_error(&unsupported), "unsupported WinAnsi character");
+    assert_eq!(push_error(&unsupported), "UnsupportedCharacter('🙂')");
 
     let mut bad_length = header(VERSION, 120.0, 60.0, 10.0);
     let mut payload = vec![0, 0, 0, 1, 0, 0];

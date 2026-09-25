@@ -1,9 +1,18 @@
-use crate::win_ansi::decode;
+use std::collections::{BTreeMap, BTreeSet};
+
 use pdf_writer::Rect;
+
+use super::{cmap, subset};
+
+pub(super) const INVALID: &str = "invalid TrueType font";
 
 pub(crate) struct EmbeddedFont {
     pub(crate) bytes: Vec<u8>,
-    pub(crate) widths: [Option<u16>; 224],
+    cmap: Vec<cmap::Range>,
+    /// Advance per glyph id in 1/1000 em.
+    advances: Vec<u16>,
+    /// Glyph ids shown so far; the subset and `/W` array cover exactly these.
+    pub(crate) used: BTreeSet<u16>,
     pub(crate) bbox: Rect,
     pub(crate) name: String,
     pub(crate) ascent: f32,
@@ -16,7 +25,7 @@ pub(crate) struct EmbeddedFont {
 impl EmbeddedFont {
     pub(crate) fn parse(bytes: Vec<u8>) -> Result<Self, String> {
         if !bytes.starts_with(&[0, 1, 0, 0]) {
-            return Err("invalid TrueType font".into());
+            return Err(INVALID.into());
         }
         let head = ttf_table(&bytes, b"head")?;
         let hhea = ttf_table(&bytes, b"hhea")?;
@@ -25,25 +34,21 @@ impl EmbeddedFont {
         let cmap = ttf_table(&bytes, b"cmap")?;
         let units = be_u16(head, 18)?;
         if units == 0 {
-            return Err("invalid TrueType font".into());
+            return Err(INVALID.into());
         }
         let metrics = usize::from(be_u16(hhea, 34)?);
-        let glyphs = usize::from(be_u16(maxp, 4)?);
-        if metrics == 0 || metrics > glyphs || hmtx.len() < metrics * 4 {
-            return Err("invalid TrueType font".into());
+        let glyphs = be_u16(maxp, 4)?;
+        if metrics == 0 || metrics > usize::from(glyphs) || hmtx.len() < metrics * 4 {
+            return Err(INVALID.into());
         }
         let scale = 1000.0 / f32::from(units);
-        let mut widths = [None; 224];
-        for (index, width) in widths.iter_mut().enumerate() {
-            let Some(character) = decode((index + 32) as u8) else {
-                continue;
-            };
-            let Some(glyph) = cmap_glyph(cmap, character, glyphs)? else {
-                continue;
-            };
-            let metric = usize::from(glyph).min(metrics - 1);
-            *width = Some((f32::from(be_u16(hmtx, metric * 4)?) * scale).round() as u16);
-        }
+        let cmap = cmap::parse(cmap, glyphs)?;
+        let advances = (0..usize::from(glyphs))
+            .map(|gid| {
+                let advance = be_u16(hmtx, gid.min(metrics - 1) * 4)?;
+                Ok((f32::from(advance) * scale).round() as u16)
+            })
+            .collect::<Result<_, String>>()?;
         let bbox = Rect::new(
             f32::from(be_i16(head, 36)?) * scale,
             f32::from(be_i16(head, 38)?) * scale,
@@ -65,7 +70,7 @@ impl EmbeddedFont {
             line_gap = f32::from(be_i16(os2, 72)?) * scale;
         }
         if ascent <= 0.0 || descent > 0.0 {
-            return Err("invalid TrueType font".into());
+            return Err(INVALID.into());
         }
         let cap_height = os2
             .filter(|os2| be_u16(os2, 0).is_ok_and(|version| version >= 2))
@@ -80,7 +85,9 @@ impl EmbeddedFont {
             .unwrap_or_else(|| "FlashPDF".into());
         Ok(Self {
             bytes,
-            widths,
+            cmap,
+            advances,
+            used: BTreeSet::new(),
             bbox,
             name,
             ascent,
@@ -90,6 +97,30 @@ impl EmbeddedFont {
             // ponytail: PDF has no true stem width without outlines; this is the common weight-class heuristic.
             stem_v: (50.0 + (f32::from(weight) / 65.0).powi(2)).round(),
         })
+    }
+
+    pub(crate) fn glyph(&self, character: char) -> Option<u16> {
+        cmap::lookup(&self.cmap, character)
+    }
+
+    pub(crate) fn advance(&self, gid: u16) -> u16 {
+        self.advances.get(usize::from(gid)).copied().unwrap_or(0)
+    }
+
+    /// Lowest code point per used glyph, for `/ToUnicode`.
+    pub(crate) fn unicode(&self) -> BTreeMap<u16, char> {
+        cmap::reverse(&self.cmap, &self.used)
+    }
+
+    /// The font program to embed: the used-glyph subset, or the whole file
+    /// when a glyph table is malformed in a way parsing did not catch.
+    pub(crate) fn program(&self) -> Vec<u8> {
+        subset::subset(&self.bytes, &self.used).unwrap_or_else(|| self.bytes.clone())
+    }
+
+    /// `/BaseFont` with the PDF subset prefix.
+    pub(crate) fn subset_name(&self) -> String {
+        format!("{}+{}", subset::tag(&self.used), self.name)
     }
 }
 
@@ -135,126 +166,63 @@ fn postscript_name(name: &[u8]) -> Option<String> {
     best.map(|(_, name)| name)
 }
 
-fn be_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
+pub(super) fn be_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
     Ok(u16::from_be_bytes(
         bytes
             .get(offset..offset + 2)
-            .ok_or("invalid TrueType font")?
+            .ok_or(INVALID)?
             .try_into()
             .unwrap(),
     ))
 }
 
-fn be_i16(bytes: &[u8], offset: usize) -> Result<i16, String> {
+pub(super) fn be_i16(bytes: &[u8], offset: usize) -> Result<i16, String> {
     Ok(i16::from_be_bytes(
         bytes
             .get(offset..offset + 2)
-            .ok_or("invalid TrueType font")?
+            .ok_or(INVALID)?
             .try_into()
             .unwrap(),
     ))
 }
 
-fn be_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
+pub(super) fn be_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
     Ok(u32::from_be_bytes(
         bytes
             .get(offset..offset + 4)
-            .ok_or("invalid TrueType font")?
+            .ok_or(INVALID)?
             .try_into()
             .unwrap(),
     ))
 }
 
-fn ttf_table<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Result<&'a [u8], String> {
+pub(super) fn ttf_table<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Result<&'a [u8], String> {
     let count = usize::from(be_u16(bytes, 4)?);
     for index in 0..count {
         let record = 12 + index * 16;
         if bytes.get(record..record + 4) != Some(wanted) {
             continue;
         }
-        let start =
-            usize::try_from(be_u32(bytes, record + 8)?).map_err(|_| "invalid TrueType font")?;
-        let length =
-            usize::try_from(be_u32(bytes, record + 12)?).map_err(|_| "invalid TrueType font")?;
+        let start = usize::try_from(be_u32(bytes, record + 8)?).map_err(|_| INVALID)?;
+        let length = usize::try_from(be_u32(bytes, record + 12)?).map_err(|_| INVALID)?;
         return bytes
-            .get(start..start.checked_add(length).ok_or("invalid TrueType font")?)
-            .ok_or_else(|| "invalid TrueType font".into());
+            .get(start..start.checked_add(length).ok_or(INVALID)?)
+            .ok_or_else(|| INVALID.into());
     }
-    Err("invalid TrueType font".into())
-}
-
-fn cmap_glyph(cmap: &[u8], character: char, glyphs: usize) -> Result<Option<u16>, String> {
-    let count = usize::from(be_u16(cmap, 2)?);
-    let mut selected = None;
-    for index in 0..count {
-        let record = 4 + index * 8;
-        let platform = be_u16(cmap, record)?;
-        let encoding = be_u16(cmap, record + 2)?;
-        if platform != 0 && !(platform == 3 && matches!(encoding, 1 | 10)) {
-            continue;
-        }
-        let offset =
-            usize::try_from(be_u32(cmap, record + 4)?).map_err(|_| "invalid TrueType font")?;
-        let subtable = cmap.get(offset..).ok_or("invalid TrueType font")?;
-        if be_u16(subtable, 0)? == 4 {
-            selected = Some(subtable);
-            break;
-        }
-    }
-    let cmap = selected.ok_or("unsupported TrueType cmap")?;
-    let length = usize::from(be_u16(cmap, 2)?);
-    let cmap = cmap.get(..length).ok_or("invalid TrueType font")?;
-    let segments = usize::from(be_u16(cmap, 6)? / 2);
-    if segments == 0 {
-        return Err("invalid TrueType font".into());
-    }
-    let end_codes = 14;
-    let start_codes = end_codes + segments * 2 + 2;
-    let deltas = start_codes + segments * 2;
-    let offsets = deltas + segments * 2;
-    let code = character as u16;
-    for index in 0..segments {
-        let end = be_u16(cmap, end_codes + index * 2)?;
-        if code > end {
-            continue;
-        }
-        let start = be_u16(cmap, start_codes + index * 2)?;
-        if code < start {
-            return Ok(None);
-        }
-        let delta = be_i16(cmap, deltas + index * 2)? as u16;
-        let range = usize::from(be_u16(cmap, offsets + index * 2)?);
-        let glyph = if range == 0 {
-            code.wrapping_add(delta)
-        } else {
-            let glyph = be_u16(
-                cmap,
-                offsets + index * 2 + range + usize::from(code - start) * 2,
-            )?;
-            if glyph == 0 {
-                return Ok(None);
-            }
-            glyph.wrapping_add(delta)
-        };
-        if glyph == 0 {
-            return Ok(None);
-        }
-        if usize::from(glyph) >= glyphs {
-            return Err("invalid TrueType font".into());
-        }
-        return Ok(Some(glyph));
-    }
-    Ok(None)
+    Err(INVALID.into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{cmap_glyph, EmbeddedFont};
+    use super::{be_u16, be_u32, ttf_table, EmbeddedFont};
+
+    fn abel() -> Vec<u8> {
+        include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf").to_vec()
+    }
 
     #[test]
     fn given_hhea_claiming_no_ascent_when_parsing_a_font_then_rejects_it() {
-        let mut bytes =
-            include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf").to_vec();
+        let mut bytes = abel();
         assert!(EmbeddedFont::parse(bytes.clone()).is_ok());
         let count = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
         let record = (0..count)
@@ -268,63 +236,45 @@ mod tests {
 
     #[test]
     fn given_abel_when_parsing_then_reads_name_cap_height_and_weight_stem() {
-        let font = EmbeddedFont::parse(
-            include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf").to_vec(),
-        )
-        .unwrap();
+        let font = EmbeddedFont::parse(abel()).unwrap();
         assert_eq!(font.name, "Abel-Regular");
         assert_eq!(font.cap_height.round(), 700.0);
         assert_eq!(font.stem_v, 88.0);
         assert!(font.descent < 0.0 && font.line_gap >= 0.0);
     }
 
-    fn cmap(delta: u16) -> Vec<u8> {
-        [
-            &[0, 0, 0, 1, 0, 3, 0, 1, 0, 0, 0, 12][..],
-            &[
-                0,
-                4,
-                0,
-                32,
-                0,
-                0,
-                0,
-                4,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                65,
-                255,
-                255,
-                0,
-                0,
-                0,
-                65,
-                255,
-                255,
-                (delta >> 8) as u8,
-                delta as u8,
-                0,
-                1,
-                0,
-                0,
-                0,
-                0,
-            ],
-        ]
-        .concat()
+    /// Glyph lengths from a font program's `loca`, checking the directory is well formed.
+    fn glyph_lengths(program: &[u8]) -> Vec<usize> {
+        let loca = ttf_table(program, b"loca").unwrap();
+        let glyphs = usize::from(be_u16(ttf_table(program, b"maxp").unwrap(), 4).unwrap());
+        assert_eq!(loca.len(), (glyphs + 1) * 4);
+        let offsets: Vec<usize> = (0..=glyphs)
+            .map(|index| be_u32(loca, index * 4).unwrap() as usize)
+            .collect();
+        assert_eq!(
+            *offsets.last().unwrap(),
+            ttf_table(program, b"glyf").unwrap().len()
+        );
+        offsets.windows(2).map(|pair| pair[1] - pair[0]).collect()
     }
 
     #[test]
-    fn given_a_zero_or_out_of_range_cmap_glyph_when_parsing_then_rejects_it() {
-        assert_eq!(cmap_glyph(&cmap(0xffbf), 'A', 100).unwrap(), None);
-        assert_eq!(
-            cmap_glyph(&cmap(35), 'A', 100),
-            Err("invalid TrueType font".into())
-        );
+    fn given_two_used_glyphs_when_subsetting_then_only_they_keep_outlines_and_the_program_shrinks()
+    {
+        let mut font = EmbeddedFont::parse(abel()).unwrap();
+        let (a, ae) = (font.glyph('A').unwrap(), font.glyph('\u{c6}').unwrap());
+        font.used.extend([a, ae]);
+        let program = font.program();
+        assert!(program.len() < font.bytes.len() / 4, "{}", program.len());
+        let lengths = glyph_lengths(&program);
+        assert_eq!(lengths.len(), usize::from(a.max(ae)) + 1);
+        // Glyph 0 stays too, but Abel's .notdef has no outline of its own.
+        for (gid, length) in lengths.iter().enumerate().skip(1) {
+            let kept = gid == usize::from(a) || gid == usize::from(ae);
+            assert_eq!(*length > 0, kept, "glyph {gid}");
+        }
+        assert_eq!(font.subset_name().len(), 7 + font.name.len());
+        assert!(font.subset_name().ends_with("+Abel-Regular"));
+        assert_eq!(font.program(), program);
     }
 }

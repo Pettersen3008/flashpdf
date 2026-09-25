@@ -82,7 +82,7 @@ test("given registered regular and bold fonts, when fontFamily selects them, the
 		stylesheets: [".invoice { font-family: Abel }"],
 	};
 	const pdf = await render(document, options);
-	assert.equal((string(pdf).match(/\/Subtype \/TrueType/g) ?? []).length, 2);
+	assert.equal((string(pdf).match(/\/Subtype \/Type0/g) ?? []).length, 2);
 	await assert.rejects(
 		render(document, {
 			fonts: [{ family: "Abel", regular: font }],
@@ -93,6 +93,46 @@ test("given registered regular and bold fonts, when fontFamily selects them, the
 	await assert.rejects(
 		render(jsx("main", { style: { fontFamily: "Missing" }, children: "x" })),
 		/unregistered font family/,
+	);
+});
+
+test("given text outside WinAnsi in an embedded font, when rendering, then emits an Identity-H subset with a ToUnicode map that extracts and validates", async () => {
+	// Norwegian plus Polish ł: U+0142 is outside WinAnsi but in Abel.
+	const text = "Blåbærsyltetøy på Ærø – łaskawy 3 €";
+	const options = { fonts: [{ family: "Abel", regular: font }] };
+	const pdf = await render(
+		jsx("main", { style: { fontFamily: "Abel" }, children: jsx("p", { children: text }) }),
+		options,
+	);
+	assert.match(string(pdf), /\/Subtype \/Type0/);
+	assert.match(string(pdf), /\/Encoding \/Identity-H/);
+	assert.match(string(pdf), /\/Subtype \/CIDFontType2/);
+	assert.match(string(pdf), /\/ToUnicode \d+ 0 R/);
+	assert.match(string(pdf), /\/BaseFont \/[A-Z]{6}\+Abel-Regular/);
+	const path = new URL("../../../dist/unicode-abel.pdf", import.meta.url);
+	writeFileSync(path, pdf);
+	const cargo = ["run", "--locked", "-q", "-p", "flashpdf-core", "--example", "validate_pdf"];
+	const parsed = spawnSync("cargo", [...cargo, "--", path.pathname, "1"], {
+		cwd: new URL("../../../", import.meta.url),
+		encoding: "utf8",
+	});
+	assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+	assert.equal(parsed.stdout, text);
+	const qpdf = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+	if (qpdf.error?.code !== "ENOENT") assert.equal(qpdf.status, 0, qpdf.stdout + qpdf.stderr);
+	await assert.rejects(
+		render(
+			jsx("main", {
+				style: { fontFamily: "Abel" },
+				children: jsx("p", { className: "cjk", children: "中" }),
+			}),
+			options,
+		),
+		/the font has no glyph for "中" \(U\+4E2D\) on <p\.cjk> in <main>/,
+	);
+	await assert.rejects(
+		render(jsx("p", { children: "中" })),
+		/Helvetica has no glyph for "中" \(U\+4E2D\); register a font that has it on <p>/,
 	);
 });
 

@@ -79,9 +79,7 @@ impl Renderer {
     }
 
     fn mark_used(&mut self, layout: &LayoutBuffer) {
-        for font in layout.used_fonts() {
-            self.fonts.mark_used(font);
-        }
+        self.fonts.mark_layout(layout);
         for image in &layout.images {
             self.used_images[usize::from(image.slot)] = true;
         }
@@ -115,16 +113,17 @@ impl Renderer {
             .fonts
             .get(style.font)
             .ok_or(RenderError::InvalidLayout)?;
-        let mut digit = b'0';
+        let mut digit = '0';
         let mut width = 0;
-        for candidate in b'0'..b':' {
-            let candidate_width = font.width(candidate)?;
+        let mut scratch = Vec::new();
+        for candidate in '0'..='9' {
+            let candidate_width = font.encode_into(candidate, &mut scratch)?;
             if candidate_width > width {
                 digit = candidate;
                 width = candidate_width;
             }
         }
-        let placeholder = char::from(digit).to_string().repeat(10);
+        let placeholder = digit.to_string().repeat(10);
         let (_, text_width) = footer_line(&template, &placeholder, &placeholder, font, style)?;
         if text_width > self.page.content_width() {
             return Err(RenderError::TextTooWide);
@@ -134,7 +133,7 @@ impl Renderer {
         let ascent = Pt(ascent * scale);
         let height = Pt((ascent.get() - descent * scale + gap * scale).max(0.0));
         self.page.validate_block(height)?;
-        self.fonts.mark_used(style.font);
+        self.fonts.mark_used(style.font, &[]);
         self.footer_height = height;
         self.footer = Some(Footer {
             template,
@@ -328,6 +327,7 @@ impl Renderer {
                     footer.style,
                 )
                 .unwrap();
+                self.fonts.mark_used(footer.style.font, &text);
                 PdfPainter::new(content, links).paint_line(
                     &text,
                     footer.style,
@@ -386,19 +386,15 @@ fn footer_line(
     let mut width = 0_u32;
     for character in text.chars() {
         let token = match character {
-            crate::PAGE_NUMBER => Some(page_number),
-            crate::TOTAL_PAGES => Some(total_pages),
-            _ => None,
-        };
-        if let Some(token) = token {
-            for byte in token.bytes() {
-                width += u32::from(font.width(byte)?);
-                bytes.push(byte);
+            crate::PAGE_NUMBER => page_number,
+            crate::TOTAL_PAGES => total_pages,
+            _ => {
+                width += u32::from(font.encode_into(character, &mut bytes)?);
+                continue;
             }
-        } else {
-            let byte = crate::win_ansi::encode(character)?;
-            width += u32::from(font.width(byte)?);
-            bytes.push(byte);
+        };
+        for digit in token.chars() {
+            width += u32::from(font.encode_into(digit, &mut bytes)?);
         }
     }
     Ok((bytes, Pt(width as f32 * style.size.get() / 1000.0)))
