@@ -25,8 +25,8 @@ fn given_valid_commands_when_rendered_then_pdf_is_valid_and_deterministic() {
         super::render(
             narrow_page,
             &[Command::Text {
-                text: "WW",
-                style: TextStyle::plain(Pt::new(30.0).unwrap()),
+                text: "W",
+                style: TextStyle::plain(Pt::new(60.0).unwrap()),
             }]
         ),
         Err(RenderError::TextTooWide)
@@ -84,6 +84,90 @@ fn given_valid_commands_when_rendered_then_pdf_is_valid_and_deterministic() {
             .unwrap(),
         b"Helvetica"
     );
+}
+
+#[test]
+fn given_a_content_stream_when_inflated_then_yields_the_painted_operators() {
+    let bytes = super::render(Page::A4, &[text("hello")]).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let stream = pdf.get_object((5, 0)).unwrap().as_stream().unwrap();
+    assert_eq!(
+        stream.dict.get(b"Filter").unwrap().as_name().unwrap(),
+        b"FlateDecode"
+    );
+    let inflated = miniz_oxide::inflate::decompress_to_vec_zlib(&stream.content).unwrap();
+    assert_eq!(inflated, stream.decompressed_content().unwrap());
+    assert_eq!(
+        String::from_utf8(inflated).unwrap(),
+        "BT\n0 0 0 rg\n/F1 10 Tf\n36 798.82 Td\n(hello) Tj\nET"
+    );
+}
+
+#[test]
+fn given_content_beyond_the_cap_when_pushing_then_rejects() {
+    let mut renderer = super::Renderer::new(Page::A4);
+    let long = Command::Text {
+        text: &"W ".repeat(30_000),
+        style: TextStyle::plain(Pt(100.0)),
+    };
+    let error = (0..1000)
+        .find_map(|_| renderer.push(&[long]).err())
+        .expect("content must stop growing");
+    assert_eq!(error, RenderError::DocumentTooLarge);
+}
+
+/// xorshift64: enough randomness for mutation tests without a dependency.
+pub(crate) struct XorShift(pub(crate) u64);
+
+impl XorShift {
+    pub(crate) fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    /// One to three random flips, truncations or insertions.
+    pub(crate) fn mutate(&mut self, bytes: &mut Vec<u8>) {
+        for _ in 0..1 + self.next() % 3 {
+            let position = (self.next() as usize) % (bytes.len() + 1);
+            match self.next() % 3 {
+                0 if !bytes.is_empty() => {
+                    let index = position.min(bytes.len() - 1);
+                    bytes[index] ^= 1 << (self.next() % 8);
+                }
+                1 => bytes.truncate(position),
+                _ => bytes.insert(position, self.next() as u8),
+            }
+        }
+    }
+}
+
+#[test]
+fn given_mutated_fonts_when_parsing_and_rendering_then_never_panics() {
+    let original = include_bytes!("../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
+    let mut rng = XorShift(0x9e37_79b9_7f4a_7c15);
+    for round in 0..3000 {
+        let mut bytes = original.to_vec();
+        rng.mutate(&mut bytes);
+        let Ok(font) = super::EmbeddedFont::parse(bytes) else {
+            continue;
+        };
+        // Deflating the font program dominates debug time; one in ten covers pdf.rs.
+        if round % 10 != 0 {
+            continue;
+        }
+        let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
+        let style = TextStyle {
+            font: super::FontId::new(2),
+            ..TextStyle::plain(Pt(12.0))
+        };
+        let _ = renderer.push(&[Command::Text {
+            text: "Fuzzed \u{20ac} text",
+            style,
+        }]);
+        let _ = renderer.finish();
+    }
 }
 
 fn page() -> Page {
@@ -155,6 +239,100 @@ fn given_empty_text_when_at_bottom_then_consumes_no_height() {
     let pdf = parsed(&[Command::Spacer(Pt(40.0)), text(""), text(" \t\n")]);
     assert_eq!(pdf.get_pages().len(), 1);
     assert!(pdf.get_page_content((4, 0)).is_empty());
+}
+
+fn baselines(pdf: &lopdf::Document, page: lopdf::ObjectId) -> Vec<f32> {
+    String::from_utf8(pdf.get_page_content(page))
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_suffix(" Td"))
+        .map(|line| line.split(' ').nth(1).unwrap().parse().unwrap())
+        .collect()
+}
+
+#[test]
+fn given_a_three_hundred_line_paragraph_when_rendered_then_streams_across_pages_without_overlap() {
+    // Each 64pt word fills a 100pt line alone.
+    let words = (1..=300)
+        .map(|n| format!("WWWWW{n:03}"))
+        .collect::<Vec<_>>();
+    let paragraph = words.join(" ");
+    let pdf = parsed(&[text("first"), text(&paragraph), text("last")]);
+    // 40pt of body holds four 9.25pt lines; 301 lines then need 76 pages.
+    let pages = pdf.get_pages();
+    assert_eq!(pages.len(), 76);
+    let mut total = 0;
+    for id in pages.values() {
+        let ys = baselines(&pdf, *id);
+        total += ys.len();
+        assert!(ys.windows(2).all(|pair| pair[0] - pair[1] > 9.2));
+        assert!(ys.iter().all(|y| *y > 12.0));
+    }
+    assert_eq!(total, 302);
+    assert_eq!(
+        pdf.extract_text(&[1]).unwrap().trim(),
+        "first\nWWWWW001\nWWWWW002\nWWWWW003"
+    );
+    assert!(pdf.extract_text(&[76]).unwrap().trim().ends_with("last"));
+}
+
+#[test]
+fn given_a_word_wider_than_the_column_when_wrapping_then_breaks_it_at_the_last_fitting_glyph() {
+    // "i" is 2.22pt, "W" 9.44pt; the run fits 100pt only when split by glyph.
+    let pdf = parsed(&[text(&format!("ab {}WW cd", "i".repeat(50)))]);
+    assert_eq!(
+        pdf.extract_text(&[1]).unwrap().trim(),
+        format!("ab\n{}\n{}WW cd", "i".repeat(45), "i".repeat(5))
+    );
+    let pdf = parsed(&[text(&"W".repeat(25))]);
+    assert_eq!(
+        pdf.extract_text(&[1]).unwrap().trim(),
+        format!("{}\n{}\n{}", "W".repeat(10), "W".repeat(10), "W".repeat(5))
+    );
+}
+
+#[test]
+fn given_a_single_line_taller_than_the_page_when_streaming_then_rejects() {
+    assert_eq!(
+        super::render(
+            page(),
+            &[Command::Text {
+                text: "x",
+                style: TextStyle::plain(Pt(50.0)),
+            }]
+        ),
+        Err(RenderError::PageOverflow)
+    );
+}
+
+#[test]
+fn given_a_bordered_box_taller_than_the_page_when_placed_then_rejects() {
+    let style = super::BoxStyle {
+        margin: Edges::all(Pt(0.0)),
+        padding: Edges::all(Pt(0.0)),
+        border: Edges::all(Pt(1.0)),
+        background: None,
+        border_color: Edges::all(Rgb::BLACK),
+    };
+    let long = "word ".repeat(40);
+    assert_eq!(
+        super::render(
+            page(),
+            &[Command::BoxStart { style }, text(&long), Command::BoxEnd]
+        ),
+        Err(RenderError::PageOverflow)
+    );
+    let plain = super::BoxStyle {
+        border: Edges::all(Pt(0.0)),
+        margin: Edges::all(Pt(2.0)),
+        ..style
+    };
+    let pdf = parsed(&[
+        Command::BoxStart { style: plain },
+        text(&long),
+        Command::BoxEnd,
+    ]);
+    assert_eq!(pdf.get_pages().len(), 3);
 }
 
 #[test]

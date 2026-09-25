@@ -8,11 +8,11 @@ import { registerFonts } from "./fonts.js";
 import { ProtocolWriter } from "./protocol.js";
 import { resolveTree } from "./tree.js";
 
-export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array };
+export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array | undefined };
 export type RenderOptions = {
-	pageFormat?: "A4" | "Letter";
-	margin?: number;
-	stylesheets?: readonly string[];
+	pageFormat?: "A4" | "Letter" | undefined;
+	margin?: number | undefined;
+	stylesheets?: readonly string[] | undefined;
 	fonts?: readonly EmbeddedFont[] | undefined;
 	footer?: Element | undefined;
 };

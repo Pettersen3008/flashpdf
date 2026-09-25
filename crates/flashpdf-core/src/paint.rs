@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use pdf_writer::{Content, Name, Str};
 
 use crate::font::font_name;
@@ -14,9 +16,9 @@ impl<'a> PdfPainter<'a> {
         Self { content }
     }
 
-    pub(crate) fn paint(&mut self, layout: &LayoutBuffer, origin: Point) {
+    pub(crate) fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
         self.paint_boxes(layout, origin);
-        self.paint_text(layout, origin);
+        self.paint_text(layout, lines, origin);
     }
 
     fn paint_boxes(&mut self, layout: &LayoutBuffer, origin: Point) {
@@ -46,8 +48,8 @@ impl<'a> PdfPainter<'a> {
         }
     }
 
-    fn paint_text(&mut self, layout: &LayoutBuffer, origin: Point) {
-        for line in &layout.lines {
+    fn paint_text(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        for line in &layout.lines[lines] {
             self.paint_line(
                 &layout.text[line.text.clone()],
                 line.style,

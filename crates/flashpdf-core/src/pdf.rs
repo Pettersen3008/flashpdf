@@ -1,4 +1,4 @@
-use pdf_writer::{types::FontFlags, Content, Finish, Name, Pdf, Rect, Ref};
+use pdf_writer::{types::FontFlags, Content, Filter, Finish, Name, Pdf, Rect, Ref};
 
 use crate::font::{font_name, Font};
 use crate::{FontId, Page, HELVETICA_BOLD};
@@ -73,7 +73,7 @@ pub(crate) fn finish_pdf(
                     .encoding_predefined(Name(b"WinAnsiEncoding"));
             }
             Font::Embedded(font) => {
-                let name = format!("FlashPDF{}", refs.slot.slot());
+                let name = &font.name;
                 let mut output = pdf.indirect(refs.font).dict();
                 output.pair(Name(b"Type"), Name(b"Font"));
                 output.pair(Name(b"Subtype"), Name(b"TrueType"));
@@ -97,9 +97,12 @@ pub(crate) fn finish_pdf(
                     .ascent(font.ascent)
                     .descent(font.descent)
                     .cap_height(font.cap_height)
-                    .stem_v(80.0)
+                    .stem_v(font.stem_v)
                     .font_file2(refs.file.unwrap());
-                pdf.stream(refs.file.unwrap(), &font.bytes).finish();
+                pdf.stream(refs.file.unwrap(), &deflate(&font.bytes))
+                    .filter(Filter::FlateDecode)
+                    .pair(Name(b"Length1"), font.bytes.len() as i32)
+                    .finish();
             }
         }
     }
@@ -124,8 +127,14 @@ pub(crate) fn finish_pdf(
         resource_fonts.finish();
         resources.finish();
         output_page.finish();
-        pdf.stream(stream_ref, &content.finish());
+        pdf.stream(stream_ref, &deflate(&content.finish()))
+            .filter(Filter::FlateDecode);
     }
 
     pdf.finish()
+}
+
+/// Fixed level keeps the output byte-for-byte deterministic across runs.
+pub(crate) fn deflate(bytes: &[u8]) -> Vec<u8> {
+    miniz_oxide::deflate::compress_to_vec_zlib(bytes, 6)
 }

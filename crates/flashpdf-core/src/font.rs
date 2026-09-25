@@ -57,10 +57,11 @@ impl Font {
         }
     }
 
-    pub(crate) fn metrics(&self) -> (f32, f32) {
+    /// Ascent, descent and line gap per 1000 units; a line is ascent - descent + gap.
+    pub(crate) fn metrics(&self) -> (f32, f32, f32) {
         match self {
-            Self::Helvetica { .. } => (718.0, -207.0),
-            Self::Embedded(font) => (font.ascent, font.descent),
+            Self::Helvetica { .. } => (718.0, -207.0, 0.0),
+            Self::Embedded(font) => (font.ascent, font.descent, font.line_gap),
         }
     }
 }

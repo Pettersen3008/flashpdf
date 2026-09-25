@@ -55,17 +55,14 @@ const properties = {
 	borderRadius: { css: "border-radius", unsupported: "box corners are square" },
 	lineHeight: {
 		css: "line-height",
-		inherited: true,
-		unsupported: "line height is fixed to the font's ascent plus descent",
+		unsupported: "line height is fixed to the font's ascent, descent, and line gap",
 	},
 	letterSpacing: {
 		css: "letter-spacing",
-		inherited: true,
 		unsupported: "text shaping is not implemented",
 	},
 	textDecoration: {
 		css: "text-decoration",
-		inherited: true,
 		unsupported: "text decoration is not implemented",
 	},
 } as const satisfies Record<StyleProperty | RejectedProperty, PropertyDefinition>;

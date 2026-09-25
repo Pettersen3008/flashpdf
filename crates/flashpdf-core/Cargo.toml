@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 itoa = "=1.0.18"
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
 pdf-writer = "=0.15.0"
 
 [dev-dependencies]

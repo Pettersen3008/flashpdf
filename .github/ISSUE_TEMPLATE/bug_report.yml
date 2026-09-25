@@ -1,0 +1,45 @@
+name: Bug report
+description: A render that fails or produces the wrong PDF
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: FlashPDF version
+      placeholder: 0.2.2
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime
+      description: Node, Bun, browser, Cloudflare Workers, or AWS Lambda, with its version
+      placeholder: Node 22.12.0
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal JSX and CSS
+      description: The smallest template and stylesheet that reproduce the problem
+      render: tsx
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: The error message, or what the PDF shows instead
+    validations:
+      required: true
+  - type: textarea
+    id: pdf
+    attributes:
+      label: PDF
+      description: Drag the produced PDF here if render returned one

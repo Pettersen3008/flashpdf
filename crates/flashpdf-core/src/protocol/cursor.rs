@@ -42,9 +42,9 @@ impl<'a> Cursor<'a> {
         nonnegative_f32(self.take(4)?, name)
     }
 
-    pub(super) fn text(&mut self) -> Result<&'a str, ProtocolError> {
+    pub(super) fn text(&mut self, footer: bool) -> Result<&'a str, ProtocolError> {
         let text = self.utf8_text()?;
-        if !valid(text) {
+        if !valid(text, footer) {
             return Err(ProtocolError::UnsupportedWinAnsi);
         }
         Ok(text)
@@ -58,7 +58,7 @@ impl<'a> Cursor<'a> {
 
     pub(super) fn columns(&mut self) -> Result<Vec<crate::ColumnWidth>, ProtocolError> {
         let count = usize::from(self.u16()?);
-        if count == 0 || count > 256 {
+        if count == 0 || count > crate::command::MAX_COLUMNS {
             return Err(ProtocolError::InvalidColumnCount);
         }
         let mut columns = Vec::with_capacity(count);

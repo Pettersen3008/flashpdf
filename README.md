@@ -2,8 +2,6 @@
 
 Render native JSX and a static CSS subset to a PDF. The layout engine is Rust compiled to WebAssembly, so the same code produces the same bytes in a browser, in Node, and in Bun.
 
-Build it from a clone with the commands in [Working on FlashPDF](#working-on-flashpdf).
-
 ## Quickstart
 
 ```tsx
@@ -25,16 +23,13 @@ function Invoice({ total }: { total: string }) {
 const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', margin: 36 });
 ```
 
-## Install from GitHub Packages
+## Install
 
-Configure npm to use GitHub Packages for this scope:
-
-```ini
-@pettersen3008:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```sh
+npm install @pettersen3008/flashpdf
+pnpm add @pettersen3008/flashpdf
+bun add @pettersen3008/flashpdf
 ```
-
-GitHub Packages requires a GitHub token with `read:packages` when installing. Public package visibility is configured on the package page after the first release.
 
 FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImportSource: "@pettersen3008/flashpdf"` to a template-only `tsconfig`, or use the file pragma above in an app that also uses React. FlashPDF also accepts ordinary React host-element trees. It resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
 
@@ -59,14 +54,14 @@ CSS Modules, minification, and syntax transforms belong to the frontend build. L
 
 Runnable Tailwind, StyleX, and styled-components build-step examples live in [`packages/flashpdf/examples/css-integrations`](./packages/flashpdf/examples/css-integrations). They compile or extract static CSS, then pass that string through `render({ stylesheets })`.
 
-FlashPDF rejects any declaration it cannot honour, naming the property, the selector, and the source position. It never silently drops one.
+FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules, and unsupported selectors are skipped.
 
 ## API
 
 | Export | Signature | Notes |
 | --- | --- | --- |
 | `render` | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
-| `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged, for tagging literals at author time. |
+| `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
 | `PageNumber` | `() => Element` | Resolves to the current page number inside `RenderOptions.footer`. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside `RenderOptions.footer`. |
 
@@ -82,7 +77,7 @@ const pdf = await render(<Invoice />, {
 
 ## Embedded fonts
 
-The host provides full TTF bytes for each family. `fontFamily` selects an exact registered family; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
+The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first registered family; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());
@@ -92,19 +87,20 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 });
 ```
 
-v1 embeds whole TrueType files and keeps the existing WinAnsi text subset. It supports regular and bold faces only, not font-family fallback lists, italic/variable-face selection, OpenType features, or Unicode shaping. Unsupported characters, absent families, and a bold request without a bold file reject clearly.
+v1 embeds whole TrueType files and keeps the existing WinAnsi text subset. It supports regular and bold faces only, not italic/variable-face selection, OpenType features, or Unicode shaping. Unsupported characters, absent families, and a bold request without a bold file reject clearly.
 
 ## Compatibility
 
 | Target | `render` |
-| --- | --- | --- |
+| --- | --- |
 | Browser via Vite, webpack, or Rollup | Yes, including host-provided `Uint8Array` TTFs, the bundler emits the WASM as an asset |
-| Node 20+ | Yes, including host-provided `Uint8Array` TTFs |
+| Node 20.19+ | Yes, including host-provided `Uint8Array` TTFs |
 | Bun 1.x | Yes, including host-provided `Uint8Array` TTFs |
-| AWS Lambda Node.js 20+ | Yes, include the package's `wasm/` directory in the deployment artifact |
+| AWS Lambda Node.js 20.19+ | Yes, include the package's `wasm/` directory in the deployment artifact |
 | Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
+| Vercel Edge | Yes, the `edge-light` condition selects the same static WASM import |
 
-Every target runs the same decoder, so a document that renders in one produces identical bytes in the others. `tests/e2e.mjs` proves this against a packed tarball with Node, AWS Lambda handler packaging, Bun, Vite, Chromium, and Wrangler's local Workers runtime. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+Every target runs the same decoder, so a document that renders in one produces identical bytes in the others. Content streams and embedded fonts are Flate-compressed. `tests/e2e.mjs` proves this against a packed tarball with Node, AWS Lambda handler packaging, Bun, Vite, Chromium, and Wrangler's local Workers runtime. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
 
 ## Assets
 
@@ -119,8 +115,7 @@ Supported CSS, the intentional v1 limits, and the reason behind each rejection l
 
 ## Working on FlashPDF
 
-Requirements: Node 22.12+, pnpm, Rust, and `wasm-pack`. Bun 1.x is optional for
-the Bun-specific check.
+Requirements: Node 22.12+, pnpm, Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x is optional for the Bun-specific check, and qpdf is optional for the PDF structure check in `tests/e2e.mjs`. The package itself runs on Node 20.19+.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -128,12 +123,11 @@ pnpm exec playwright install chromium
 sh verify.sh
 ```
 
-That formats and lints the Rust workspace, runs the Vitest unit and integration projects, rebuilds and size-gates the WASM, and finally runs the packed-package E2E test in Node, Bun, and Chromium.
+That formats, lints, and tests the Rust workspace, formats and lints the TypeScript, rebuilds and size-gates the WASM, typechecks, runs the CSS build-step examples, runs the Vitest unit and integration projects, and finally runs the packed-package E2E test in Node, AWS Lambda packaging, Bun, Wrangler, and Chromium.
 
 Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. It reports median cold start, warm render, peak RSS, installed package and WASM size, and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts. Each library uses its native authoring API, so the results compare end-to-end workloads rather than a shared layout implementation.
 
-To publish the verified package, create a GitHub Release with a `v*` tag. The release workflow publishes it to GitHub Packages.
-
+To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version, reruns `verify.sh`, and publishes to npm with provenance through trusted publishing.
 
 `tests/golden/css-invoice.txt` pins the PDF content stream of the CSS invoice: every draw position, colour, font, and page break. Regenerate it with `UPDATE_GOLDEN=1` and review the diff.
 

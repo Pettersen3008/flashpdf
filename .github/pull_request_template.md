@@ -1,0 +1,3 @@
+- [ ] `sh verify.sh` passes
+- [ ] `packages/flashpdf/CHANGELOG.md` has an entry under Unreleased
+- [ ] Docs updated (README.md, CSS.md, or AGENTS.md) where behaviour changed

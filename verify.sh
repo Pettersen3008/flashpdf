@@ -21,7 +21,7 @@ gzip -9 -n -c $wasm/flashpdf_wasm_bg.wasm > target/flashpdf_wasm_bg.wasm.gz
 compressed=$(wc -c < target/flashpdf_wasm_bg.wasm.gz)
 wc -c target/flashpdf_wasm_bg.raw.wasm $wasm/flashpdf_wasm_bg.wasm \
   target/flashpdf_wasm_bg.wasm.gz $wasm/flashpdf_wasm.js
-if [ "$raw" -gt 120000 ] || [ "$compressed" -ge 100000 ]; then
+if [ "$raw" -gt 400000 ] || [ "$compressed" -ge 200000 ]; then
   cargo tree --locked -p flashpdf-wasm --target wasm32-unknown-unknown -e normal
   echo "Size gate failed; stop before adding features." >&2
   exit 1

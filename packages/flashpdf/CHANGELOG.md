@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added
+
+- Long paragraphs and unpainted boxes split across pages line by line instead of failing with `PageOverflow`. Decorated boxes, rows, and `break-inside: avoid` groups still move whole.
+- Words wider than their column break at the last glyph that fits.
+- FlateDecode compression of content streams and embedded font programs.
+- `rgb()`, `rgba()`, `hsl()`, `hsla()`, 4- and 8-digit hex, and all 148 CSS named colours. Alpha other than 1 rejects with "opacity is not supported".
+- `font-family` lists: the first registered family wins, and `Helvetica`, `Arial`, and generic families fall back to Helvetica.
+- The `flex` shorthand (`flex: 1 1 0%`, `flex: none`). Only the grow factor is kept, and grow 0 requires a `width`.
+- `!important` in stylesheets and inline style strings.
+- `stylesheet` accepts a tagged template literal.
+- An `edge-light` export condition for Vercel Edge.
+- Runtime errors name the element and its ancestors, for example `on <span.total> in <div.row> > <main.invoice>`. Unsupported elements suggest a replacement.
+- Component throws are wrapped as `<Name> threw while rendering` with `cause`. React context providers render their children, and `ref` and `key` on host elements are ignored.
+- Input caps of 16 MiB per open container block and 16 MiB of painted content.
+- CONTRIBUTING.md, a bug report issue form, a pull request checklist, and grouped Dependabot updates.
+
+### Changed
+
+- At-rules and rules with unsupported selectors are skipped instead of rejected. Declarations are validated only for rules that match a rendered element. `stylesheet()` still validates every rule with a supported selector.
+- Descendant selectors backtrack, so `div > section p` matches through nested sections. Specificity compares (ids, classes, tags) as a tuple.
+- An undefined `var()` without a fallback rejects instead of resolving to an empty string.
+- Line height includes the font's line gap.
+- Embedded fonts use their PostScript name for `/BaseFont`, OS/2 `sCapHeight` for `/CapHeight`, and a weight-class based `/StemV`.
+- One entry point. The WASM loader is chosen through the `#wasm` imports map with `workerd`, `edge-light`, `browser`, and `default` conditions.
+- `margin` and `padding` types accept one to four lengths, and `RenderOptions` fields accept an explicit `undefined`.
+- The package publishes to npmjs.com with provenance through GitHub Actions trusted publishing instead of GitHub Packages.
+- The release workflow refuses tags whose version does not match `package.json` or whose commit is not on `main`.
+- The WASM size gate is 400 KB raw and 200 KB gzipped. Rust is pinned to 1.94.0 through `rust-toolchain.toml`, and CI caches cargo artifacts.
+- The packed-package E2E test validates the Node-rendered PDF with `qpdf --check` and prints a first-page raster hash from `mutool` when those tools are installed.
+- Runtime support is Node 20.19 or newer. Development needs Node 22.12 or newer.
+
+### Fixed
+
+- FontFile2 streams declare `/Length1`. Fonts with a positive descender are rejected, and degenerate hhea metrics fall back to OS/2 typo metrics when `USE_TYPO_METRICS` is set.
+- Control characters and page-number tokens in body text are rejected at decode time.
+- Node loading no longer uses a variable dynamic import, which removes webpack and Next.js critical-dependency warnings.
+- Border shorthand accepts `rgb()` with spaces.
+
 ## 0.2.2 - 2026-09-22
 
 ### Added

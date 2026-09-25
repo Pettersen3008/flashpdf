@@ -5,7 +5,10 @@ use crate::{BoxStyle, FontId, Pt, TextStyle};
 
 pub(crate) struct PositionedLine {
     pub(crate) text: Range<usize>,
+    /// Baseline; `top..bottom` is the line box the page splitter measures.
     pub(crate) origin: Point,
+    pub(crate) top: Pt,
+    pub(crate) bottom: Pt,
     pub(crate) available_width: Pt,
     pub(crate) text_width: Pt,
     pub(crate) style: TextStyle,

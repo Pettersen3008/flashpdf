@@ -5,9 +5,12 @@ pub(crate) struct EmbeddedFont {
     pub(crate) bytes: Vec<u8>,
     pub(crate) widths: [Option<u16>; 224],
     pub(crate) bbox: Rect,
+    pub(crate) name: String,
     pub(crate) ascent: f32,
     pub(crate) descent: f32,
+    pub(crate) line_gap: f32,
     pub(crate) cap_height: f32,
+    pub(crate) stem_v: f32,
 }
 
 impl EmbeddedFont {
@@ -47,22 +50,89 @@ impl EmbeddedFont {
             f32::from(be_i16(head, 40)?) * scale,
             f32::from(be_i16(head, 42)?) * scale,
         );
-        let ascent = f32::from(be_i16(hhea, 4)?) * scale;
-        let descent = f32::from(be_i16(hhea, 6)?) * scale;
-        // Line height is ascent - descent, so a font claiming ascent <= descent
-        // would stack every line on one baseline and give blocks zero height.
-        if ascent <= 0.0 || ascent <= descent {
+        let os2 = ttf_table(&bytes, b"OS/2").ok();
+        let mut ascent = f32::from(be_i16(hhea, 4)?) * scale;
+        let mut descent = f32::from(be_i16(hhea, 6)?) * scale;
+        let mut line_gap = f32::from(be_i16(hhea, 8)?) * scale;
+        // A positive descender or no ascender would stack lines on one baseline;
+        // when hhea is degenerate, USE_TYPO_METRICS (fsSelection bit 7) says the
+        // OS/2 typo metrics are the ones the designer trusts.
+        if let Some(os2) = os2.filter(|os2| {
+            (ascent <= 0.0 || descent > 0.0) && be_u16(os2, 62).is_ok_and(|bits| bits & 0x80 != 0)
+        }) {
+            ascent = f32::from(be_i16(os2, 68)?) * scale;
+            descent = f32::from(be_i16(os2, 70)?) * scale;
+            line_gap = f32::from(be_i16(os2, 72)?) * scale;
+        }
+        if ascent <= 0.0 || descent > 0.0 {
             return Err("invalid TrueType font".into());
         }
+        let cap_height = os2
+            .filter(|os2| be_u16(os2, 0).is_ok_and(|version| version >= 2))
+            .and_then(|os2| be_i16(os2, 88).ok())
+            .map(|value| f32::from(value) * scale)
+            .filter(|value| *value > 0.0)
+            .unwrap_or(ascent);
+        let weight = os2.and_then(|os2| be_u16(os2, 4).ok()).unwrap_or(400);
+        let name = ttf_table(&bytes, b"name")
+            .ok()
+            .and_then(postscript_name)
+            .unwrap_or_else(|| "FlashPDF".into());
         Ok(Self {
             bytes,
             widths,
             bbox,
+            name,
             ascent,
             descent,
-            cap_height: ascent,
+            line_gap: line_gap.max(0.0),
+            cap_height,
+            // ponytail: PDF has no true stem width without outlines; this is the common weight-class heuristic.
+            stem_v: (50.0 + (f32::from(weight) / 65.0).powi(2)).round(),
         })
     }
+}
+
+/// nameID 6 (PostScript), else 4 (full) or 1 (family), reduced to the characters a PostScript name allows.
+fn postscript_name(name: &[u8]) -> Option<String> {
+    let count = be_u16(name, 2).ok()?;
+    let strings = usize::from(be_u16(name, 4).ok()?);
+    let mut best: Option<(u8, String)> = None;
+    for index in 0..usize::from(count) {
+        let record = 6 + index * 12;
+        let rank = match be_u16(name, record + 6).ok()? {
+            6 => 0,
+            4 => 1,
+            1 => 2,
+            _ => continue,
+        };
+        if best.as_ref().is_some_and(|(previous, _)| *previous <= rank) {
+            continue;
+        }
+        let start = strings + usize::from(be_u16(name, record + 10).ok()?);
+        let data = name.get(start..start + usize::from(be_u16(name, record + 8).ok()?))?;
+        let text: String = match (be_u16(name, record).ok()?, be_u16(name, record + 2).ok()?) {
+            (1, 0) => data.iter().map(|byte| char::from(*byte)).collect(),
+            (0, _) | (3, 1) | (3, 10) => char::decode_utf16(
+                data.chunks_exact(2)
+                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]])),
+            )
+            .filter_map(Result::ok)
+            .collect(),
+            _ => continue,
+        };
+        let text: String = text
+            .chars()
+            .filter(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '+')
+            })
+            .take(63)
+            .collect();
+        if !text.is_empty() {
+            best = Some((rank, text));
+        }
+    }
+    best.map(|(_, name)| name)
 }
 
 fn be_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
@@ -194,6 +264,18 @@ mod tests {
         let hhea = u32::from_be_bytes(bytes[record + 8..record + 12].try_into().unwrap()) as usize;
         bytes[hhea + 4..hhea + 8].fill(0);
         assert!(EmbeddedFont::parse(bytes).is_err());
+    }
+
+    #[test]
+    fn given_abel_when_parsing_then_reads_name_cap_height_and_weight_stem() {
+        let font = EmbeddedFont::parse(
+            include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf").to_vec(),
+        )
+        .unwrap();
+        assert_eq!(font.name, "Abel-Regular");
+        assert_eq!(font.cap_height.round(), 700.0);
+        assert_eq!(font.stem_v, 88.0);
+        assert!(font.descent < 0.0 && font.line_gap >= 0.0);
     }
 
     fn cmap(delta: u16) -> Vec<u8> {

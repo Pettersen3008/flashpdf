@@ -61,6 +61,7 @@ export class Binary {
 		this.u8(opcode);
 		this.u32(0);
 		payload();
+		// flush() empties the buffer after every record, so the length field always sits at byte 1.
 		this.view.setUint32(1, this.offset - 5, true);
 		this.flush();
 	}

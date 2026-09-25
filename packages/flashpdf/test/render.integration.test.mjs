@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { inflateSync } from "node:zlib";
 
 import { test } from "vitest";
 
 import { PageNumber, render, stylesheet, TotalPages } from "../dist/index.js";
 import { Fragment, jsx, jsxs } from "../dist/jsx-runtime.js";
 
-const string = (pdf) => Buffer.from(pdf).toString("latin1");
+/** Latin-1 view of the PDF with FlateDecode streams inflated so content operators are greppable. */
+const string = (pdf) =>
+	Buffer.from(pdf)
+		.toString("latin1")
+		.replace(/stream\r?\n([\s\S]*?)\r?\nendstream/g, (match, body) => {
+			try {
+				return `stream\n${inflateSync(Buffer.from(body, "latin1")).toString("latin1")}\nendstream`;
+			} catch {
+				return match;
+			}
+		});
 const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", import.meta.url)));
 
 test("given the package entry point, when importing it, then exposes only the renderer and stylesheet validator", async () => {
@@ -189,7 +200,34 @@ test("given an hr border, when rendering, then uses the author rule", async () =
 });
 
 test("given non-native JSX, when rendering, then rejects it", async () => {
-	await assert.rejects(render({ type: "table", props: {} }), /unsupported element/);
+	await assert.rejects(
+		render({ type: "table", props: {} }),
+		/unsupported element <table>: tables are not supported yet/,
+	);
+});
+
+test("given an unpaintable color deep in the tree, when rendering, then names the element and its ancestors", async () => {
+	const document = jsx("main", {
+		className: "invoice",
+		children: jsx("div", {
+			className: "row",
+			children: jsx("span", {
+				className: "total",
+				style: { color: "oklch(50% 0.1 20)" },
+				children: "x",
+			}),
+		}),
+	});
+	await assert.rejects(
+		render(document),
+		/unsupported color: oklch\(50% 0.1 20\) on <span\.total> in <div\.row> > <main\.invoice>/,
+	);
+	await assert.rejects(
+		render(jsx("p", { className: "text-red-500", children: "x" }), {
+			stylesheets: [".text-red-500 { color: oklch(63.7% 0.237 25.331) }"],
+		}),
+		/unsupported color: oklch\(63.7% 0.237 25.331\) on <p\.text-red-500>/,
+	);
 });
 
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
@@ -198,7 +236,7 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
-		[{ width: "40pt" }, /width applies only to a flex row child, not <main>/],
+		[{ width: "40pt" }, /width applies only to a flex row child on <main>/],
 	])
 		await assert.rejects(
 			render(jsx("main", { style, children: "x" })),

@@ -35,6 +35,8 @@ const _unsupported = <button>Print</button>;
 const _unknownProperty = <main potato={1}>Invoice</main>;
 // @ts-expect-error Grid is not part of FlashPDF's supported CSS subset.
 const _grid = <main style={{ display: "grid" }}>Invoice</main>;
+// @ts-expect-error Margin and padding take one to four lengths, never "auto".
+const _auto = <main style={{ margin: "auto" }}>Invoice</main>;
 // @ts-expect-error Text elements accept scalar text children only.
 const _nestedBlock = <p children={<div>Invoice</div>} />;
 void import("@pettersen3008/flashpdf/jsx-runtime");

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 
-import { Component, forwardRef, memo } from "react";
+import { Component, createContext, forwardRef, memo, useState } from "react";
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 import { test } from "vitest";
 
-import { reactTree } from "../dist/tree.js";
+import { reactTree, resolveTree } from "../dist/tree.js";
 
 test("given React components and fragments, when normalizing, then returns host elements", async () => {
 	const calls = [];
@@ -99,4 +99,49 @@ test("given multi-child nesting, when normalizing, then 64 element levels fit an
 
 	await assert.doesNotReject(() => reactTree(nest(63)));
 	await assert.rejects(() => reactTree(nest(64)), /nesting exceeds 64/);
+});
+
+test("given a component that throws, when normalizing, then names the component and keeps the cause", async () => {
+	const Hooked = () => {
+		const [label] = useState("x");
+		return jsx("p", { children: label });
+	};
+	const rejected = reactTree(jsx(Hooked, {}));
+	await assert.rejects(
+		rejected,
+		/<Hooked> threw while rendering: .*hooks and context values are not available/,
+	);
+	await assert.rejects(rejected, (error) => error.cause instanceof Error);
+	const Async = async () => {
+		throw new Error("boom");
+	};
+	await assert.rejects(reactTree(jsx(Async, {})), /<Async> threw while rendering: boom/);
+});
+
+test("given a context provider, when normalizing, then renders its children", async () => {
+	const Theme = createContext("light");
+	const legacyProvider = { $$typeof: Symbol.for("react.provider"), _context: Theme };
+	for (const type of [Theme, Theme.Provider, legacyProvider])
+		assert.deepEqual(
+			await reactTree(jsx(type, { value: "dark", children: jsx("p", { children: "x" }) })),
+			{ type: "p", props: { children: "x" } },
+		);
+});
+
+test("given ref and key props on a host element, when resolving, then ignores them", async () => {
+	const tree = await resolveTree(jsx("p", { ref: { current: null }, children: "x" }, "k"));
+	assert.deepEqual(tree, [
+		{
+			kind: "element",
+			tag: "p",
+			id: undefined,
+			classes: [],
+			style: undefined,
+			children: [{ kind: "text", value: "x" }],
+		},
+	]);
+	await assert.rejects(
+		resolveTree(jsx("main", { children: { type: "table", props: {} } })),
+		/unsupported element <table> in <main>: tables are not supported yet; use flex rows/,
+	);
 });

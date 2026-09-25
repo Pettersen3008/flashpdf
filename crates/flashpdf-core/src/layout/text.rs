@@ -20,9 +20,10 @@ impl<'a> TextLayouter<'a> {
         let font = fonts
             .get(style.font)
             .ok_or(LayoutError::UnknownFont(style.font))?;
-        let (ascent, descent) = font.metrics();
-        let ascent = ascent * style.size.get() / 1000.0;
-        let line_height = (ascent - descent * style.size.get() / 1000.0).max(0.0);
+        let (ascent, descent, gap) = font.metrics();
+        let scale = style.size.get() / 1000.0;
+        let ascent = ascent * scale;
+        let line_height = (ascent - descent * scale + gap * scale).max(0.0);
         Ok(Self {
             font,
             style,
@@ -55,8 +56,34 @@ impl<'a> TextLayouter<'a> {
             }
             let word_width = Pt(advance as f32 * self.style.size.get() / 1000.0);
             if word_width > area.width {
-                output.text.truncate(previous_end);
-                return Err(LayoutError::TextTooWide);
+                if has_word {
+                    self.push_line(output, line_start..previous_end, area, height, used);
+                    height += self.line_height;
+                }
+                // Character-level fallback: break after the last glyph that fits.
+                let mut start = word_start;
+                let mut fragment = Pt::ZERO;
+                for position in word_start..output.text.len() {
+                    let glyph = Pt(f32::from(
+                        self.font.width(output.text[position]).map_err(text_error)?,
+                    ) * self.style.size.get()
+                        / 1000.0);
+                    if glyph > area.width {
+                        output.text.truncate(previous_end);
+                        return Err(LayoutError::TextTooWide);
+                    }
+                    if fragment + glyph > area.width {
+                        self.push_line(output, start..position, area, height, fragment);
+                        height += self.line_height;
+                        start = position;
+                        fragment = Pt::ZERO;
+                    }
+                    fragment += glyph;
+                }
+                line_start = start;
+                used = fragment;
+                has_word = true;
+                continue;
             }
             let space = if has_word {
                 Pt(
@@ -100,6 +127,8 @@ impl<'a> TextLayouter<'a> {
                 x: area.origin.x,
                 y: area.origin.y + height + self.ascent,
             },
+            top: area.origin.y + height,
+            bottom: area.origin.y + height + self.line_height,
             available_width: area.width,
             text_width,
             style: self.style,

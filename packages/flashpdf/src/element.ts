@@ -1,17 +1,22 @@
 export type Length = number | "0" | `${number}${"pt" | "px" | "em" | "rem"}`;
 export type Width = number | `${number}${"pt" | "px" | "%"}`;
+export type Edges =
+	| Length
+	| `${Length} ${Length}`
+	| `${Length} ${Length} ${Length}`
+	| `${Length} ${Length} ${Length} ${Length}`;
 
 export type Style = {
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
 	flex?: number;
 	width?: Width;
-	margin?: number | string;
+	margin?: Edges;
 	marginTop?: Length;
 	marginRight?: Length;
 	marginBottom?: Length;
 	marginLeft?: Length;
-	padding?: number | string;
+	padding?: Edges;
 	paddingTop?: Length;
 	paddingRight?: Length;
 	paddingBottom?: Length;

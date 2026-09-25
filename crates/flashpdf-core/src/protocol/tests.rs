@@ -107,10 +107,10 @@ fn push_error(bytes: &[u8]) -> String {
 
 #[test]
 fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
-    let font = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
+    let font_bytes = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
     let mut decoder = Decoder::default();
-    assert_eq!(decoder.add_font(font.to_vec()).unwrap(), 2);
-    assert_eq!(decoder.add_font(font.to_vec()).unwrap(), 3);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 2);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 3);
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
     for slot in [2, 3] {
         let mut styled = 10.0_f32.to_le_bytes().to_vec();
@@ -130,11 +130,30 @@ fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
             font.get(b"Subtype").unwrap().as_name().unwrap(),
             b"TrueType"
         );
+        assert_eq!(
+            font.get(b"BaseFont").unwrap().as_name().unwrap(),
+            b"Abel-Regular"
+        );
         let descriptor = font.get(b"FontDescriptor").unwrap().as_reference().unwrap();
-        assert!(document
-            .get_dictionary(descriptor)
+        let descriptor = document.get_dictionary(descriptor).unwrap();
+        assert_eq!(
+            descriptor.get(b"CapHeight").unwrap().as_float().unwrap(),
+            700.1953
+        );
+        let file = descriptor
+            .get(b"FontFile2")
             .unwrap()
-            .has(b"FontFile2"));
+            .as_reference()
+            .unwrap();
+        let file = document.get_object(file).unwrap().as_stream().unwrap();
+        assert_eq!(
+            file.dict.get(b"Length1").unwrap().as_i64().unwrap(),
+            font_bytes.len() as i64
+        );
+        assert_eq!(
+            miniz_oxide::inflate::decompress_to_vec_zlib(&file.content).unwrap(),
+            font_bytes
+        );
     }
 }
 
@@ -191,6 +210,12 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     payload.extend(text(&[0xff]));
     invalid_utf8.extend(record(1, &payload));
     assert_eq!(push_error(&invalid_utf8), "invalid UTF-8");
+
+    for control in ["\u{0b}", "\u{1e}", "\u{1f}"] {
+        let mut sentinel = header(VERSION, 120.0, 60.0, 10.0);
+        sentinel.extend(plain(control.as_bytes()));
+        assert_eq!(push_error(&sentinel), "unsupported WinAnsi character");
+    }
 
     let mut unsupported = header(VERSION, 120.0, 60.0, 10.0);
     let mut payload = 10.0_f32.to_le_bytes().to_vec();
@@ -253,7 +278,33 @@ fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
     bad_layout_row.extend(record(6, &[]));
     assert_eq!(push_error(&bad_layout_row), "row cell count mismatch");
 
+    let mut unbounded = header(VERSION, 120.0, 60.0, 10.0);
+    unbounded.extend(record(3, &0.0_f32.to_le_bytes()));
+    let mut decoder = Decoder::default();
+    decoder.push(&unbounded).unwrap();
+    let chunk = plain(&[b'x'; 60_000]);
+    let error = (0..300)
+        .find_map(|_| decoder.push(&chunk).err())
+        .expect("open stack must stop buffering");
+    assert_eq!(error.to_string(), "block exceeds 16 MiB");
+
     let mut oversized = header(VERSION, 120.0, 60.0, 10.0);
+    oversized.extend(record(3, &0.0_f32.to_le_bytes()));
     oversized.extend(plain("word ".repeat(100).as_bytes()));
+    oversized.extend(record(4, &[]));
     assert_eq!(push_error(&oversized), "PageOverflow");
+}
+
+#[test]
+fn given_mutated_protocol_streams_when_decoding_then_never_panics() {
+    let original = representative();
+    let mut rng = crate::tests::XorShift(0x2545_f491_4f6c_dd1d);
+    for _ in 0..3000 {
+        let mut bytes = original.clone();
+        rng.mutate(&mut bytes);
+        let mut decoder = Decoder::default();
+        if decoder.push(&bytes).is_ok() {
+            let _ = decoder.finish();
+        }
+    }
 }

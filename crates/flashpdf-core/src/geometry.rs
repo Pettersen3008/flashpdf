@@ -99,6 +99,14 @@ impl PageCursor {
         height <= self.y - page.margin()
     }
 
+    pub(crate) fn remaining(&self, page: PageLayout) -> Pt {
+        self.y - page.margin()
+    }
+
+    pub(crate) fn at_top(&self, page: PageLayout) -> bool {
+        self.y == page.top()
+    }
+
     pub(crate) fn origin(&self, page: PageLayout) -> Point {
         Point {
             x: page.margin(),

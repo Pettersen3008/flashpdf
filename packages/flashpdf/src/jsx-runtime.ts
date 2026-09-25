@@ -1,4 +1,5 @@
 import type { BlockProps, Element, HrProps, PdfProps, TextProps } from "./element.js";
+import type { BlockTag, TextTag } from "./tree.js";
 
 export const Fragment = Symbol.for("flashpdf.fragment");
 
@@ -12,28 +13,15 @@ export const jsxDEV = jsx;
 
 export namespace JSX {
 	export type Element = import("./element.js").Element;
-	export type ElementType = string | ((props: any) => any);
+	export type ElementType = string | ((props: never) => unknown);
 	export interface ElementChildrenAttribute {
 		children: unknown;
 	}
 	export interface IntrinsicAttributes {
 		key?: string | number;
 	}
-	export interface IntrinsicElements {
-		main: BlockProps;
-		div: BlockProps;
-		section: BlockProps;
-		article: BlockProps;
-		header: BlockProps;
-		footer: BlockProps;
-		p: TextProps;
-		span: TextProps;
-		h1: TextProps;
-		h2: TextProps;
-		h3: TextProps;
-		h4: TextProps;
-		h5: TextProps;
-		h6: TextProps;
+	export interface IntrinsicElements
+		extends Record<BlockTag, BlockProps>, Record<TextTag, TextProps> {
 		hr: HrProps;
 	}
 }

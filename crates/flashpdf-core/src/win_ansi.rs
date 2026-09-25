@@ -35,12 +35,16 @@ pub(crate) fn encode(character: char) -> Result<u8, RenderError> {
     Ok(byte)
 }
 
-pub(crate) fn valid(text: &str) -> bool {
+/// Accepts exactly what layout will: body text may hold the ASCII whitespace
+/// word splitting consumes; a footer is encoded verbatim plus page sentinels.
+pub(crate) fn valid(text: &str, footer: bool) -> bool {
     text.chars().all(|character| {
-        matches!(
-            character,
-            '\t'..='\r' | crate::PAGE_NUMBER | crate::TOTAL_PAGES
-        ) || encode(character).is_ok()
+        let control = if footer {
+            matches!(character, crate::PAGE_NUMBER | crate::TOTAL_PAGES)
+        } else {
+            character.is_ascii_whitespace()
+        };
+        control || encode(character).is_ok()
     })
 }
 

@@ -236,4 +236,5 @@ pub enum RenderError {
     PageOverflow,
     InvalidLayout,
     MissingGlyph,
+    DocumentTooLarge,
 }

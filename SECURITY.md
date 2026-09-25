@@ -12,5 +12,13 @@ submitting.
 
 ## Support window
 
-Security fixes target the latest `main` commit and the latest published
-package release. The npm package is not published yet.
+Security fixes target the latest `@pettersen3008/flashpdf` release on npm and
+the latest `main` commit. Older releases receive no fixes.
+
+## Untrusted input
+
+FlashPDF treats CSS strings, JSX props, and font bytes as untrusted. The
+TypeScript layer validates them before encoding the layout protocol, and the
+Rust core validates the protocol and TrueType tables again. The WASM module
+aborts on panic instead of continuing with corrupt state. Mutation tests cover
+the protocol decoder and the TrueType parser.

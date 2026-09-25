@@ -135,7 +135,10 @@ test("given invalid protocol input, when pushed, then the release WASM reports t
 	for (const [stream, message] of [
 		[join(protocolHeader(), record(42)), /unknown opcode/],
 		[join(protocolHeader(), text("🙂")), /unsupported WinAnsi character/],
-		[join(protocolHeader(), text("word ".repeat(100))), /PageOverflow/],
+		[
+			join(protocolHeader(), record(3, f32(0)), text("word ".repeat(100)), record(4)),
+			/PageOverflow/,
+		],
 		[join(encoder.encode("XPDF"), u16(2), f32(120), f32(60), f32(10)), /invalid magic/],
 	]) {
 		assert.throws(() => renderProtocol(wasm, [stream]), message);

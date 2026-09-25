@@ -9,6 +9,9 @@ use crate::paint::PdfPainter;
 use crate::pdf::finish_pdf;
 use crate::{Command, Page, Pt, RenderError, TextStyle};
 
+/// Total content-stream bytes a document may paint before `finish`.
+pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
+
 pub fn render(page: Page, commands: &[Command<'_>]) -> Result<Vec<u8>, RenderError> {
     let mut renderer = Renderer::new(page);
     renderer.push(commands)?;
@@ -18,6 +21,8 @@ pub fn render(page: Page, commands: &[Command<'_>]) -> Result<Vec<u8>, RenderErr
 pub struct Renderer {
     page: PageLayout,
     contents: Vec<Content>,
+    /// Bytes in every page except the open last one.
+    content_bytes: usize,
     cursor: PageCursor,
     fonts: FontBook,
     layout: LayoutBuffer,
@@ -41,6 +46,7 @@ impl Renderer {
         Self {
             page,
             contents: vec![Content::new()],
+            content_bytes: 0,
             cursor: PageCursor::new(page),
             fonts: FontBook::new(embedded),
             layout: LayoutBuffer::default(),
@@ -90,16 +96,15 @@ impl Renderer {
                 width = candidate_width;
             }
         }
-        let placeholder = [digit; 10];
-        // SAFETY: every byte is an ASCII digit selected above.
-        let placeholder = unsafe { std::str::from_utf8_unchecked(&placeholder) };
-        let (_, text_width) = footer_line(&template, placeholder, placeholder, font, style)?;
+        let placeholder = char::from(digit).to_string().repeat(10);
+        let (_, text_width) = footer_line(&template, &placeholder, &placeholder, font, style)?;
         if text_width > self.page.content_width() {
             return Err(RenderError::TextTooWide);
         }
-        let (ascent, descent) = font.metrics();
-        let ascent = Pt(ascent * style.size.get() / 1000.0);
-        let height = Pt((ascent.get() - descent * style.size.get() / 1000.0).max(0.0));
+        let (ascent, descent, gap) = font.metrics();
+        let scale = style.size.get() / 1000.0;
+        let ascent = Pt(ascent * scale);
+        let height = Pt((ascent.get() - descent * scale + gap * scale).max(0.0));
         self.page.validate_block(height)?;
         self.fonts.mark_used(style.font);
         self.footer_height = height;
@@ -123,6 +128,9 @@ impl Renderer {
             Block::PageBreak => self.start_page(),
             Block::Element(element) => self.render_element(element)?,
         }
+        if self.content_bytes + self.contents.last().unwrap().len() > MAX_CONTENT_BYTES {
+            return Err(RenderError::DocumentTooLarge);
+        }
         Ok(())
     }
 
@@ -139,20 +147,62 @@ impl Renderer {
                 &mut self.layout,
             )
             .map_err(RenderError::from)?;
-        self.page.validate_block(height + self.footer_height)?;
-        if !self.cursor.fits(height + self.footer_height, self.page) {
-            self.start_page();
-        }
         for font in self.layout.used_fonts() {
             self.fonts.mark_used(font);
         }
-        PdfPainter::new(self.contents.last_mut().unwrap())
-            .paint(&self.layout, self.cursor.origin(self.page));
-        self.cursor.advance(height);
-        Ok(())
+        let lines = self.layout.lines.len();
+        if !splittable(element) {
+            self.page.validate_block(height + self.footer_height)?;
+            if !self.cursor.fits(height + self.footer_height, self.page) {
+                self.start_page();
+            }
+            PdfPainter::new(self.contents.last_mut().unwrap()).paint(
+                &self.layout,
+                0..lines,
+                self.cursor.origin(self.page),
+            );
+            self.cursor.advance(height);
+            return Ok(());
+        }
+        // Stream positioned lines page by page; `offset` is the block y where
+        // the current page starts, so gaps straddling a break collapse.
+        let mut offset = Pt::ZERO;
+        let mut index = 0;
+        loop {
+            let available = self.cursor.remaining(self.page) - self.footer_height;
+            let start = index;
+            while self
+                .layout
+                .lines
+                .get(index)
+                .is_some_and(|line| line.bottom - offset <= available)
+            {
+                index += 1;
+            }
+            if index == start && index < lines {
+                if self.cursor.at_top(self.page) {
+                    return Err(RenderError::PageOverflow);
+                }
+                self.start_page();
+                continue;
+            }
+            PdfPainter::new(self.contents.last_mut().unwrap()).paint(
+                &self.layout,
+                start..index,
+                self.cursor.origin(self.page).translated(Pt::ZERO, offset),
+            );
+            if index == lines {
+                let rest = (height - offset).get().min(available.get());
+                self.cursor.advance(Pt(rest.max(0.0)));
+                return Ok(());
+            }
+            offset = self.layout.lines[index].top;
+            self.start_page();
+        }
     }
 
     fn start_page(&mut self) {
+        self.content_bytes += self.contents.last().unwrap().len();
         self.contents.push(Content::new());
         self.cursor.reset(self.page);
     }
@@ -188,6 +238,28 @@ impl Renderer {
         }
         let (fonts, used) = self.fonts.into_parts();
         finish_pdf(self.page.page(), self.contents, fonts, used)
+    }
+}
+
+/// Text and unpainted boxes split across pages. Stack stays atomic: the
+/// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
+fn splittable(element: &Element<'_>) -> bool {
+    match element {
+        Element::Text(_) => true,
+        Element::Box(node) => {
+            node.style.background.is_none()
+                && node
+                    .style
+                    .padding
+                    .iter()
+                    .chain(node.style.border.iter())
+                    .all(|edge| *edge == Pt::ZERO)
+                && node
+                    .children
+                    .iter()
+                    .all(|child| matches!(child, Element::Spacer(_)) || splittable(child))
+        }
+        Element::Spacer(_) | Element::Stack(_) | Element::Row(_) => false,
     }
 }
 

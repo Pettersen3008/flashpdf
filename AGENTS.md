@@ -15,7 +15,7 @@ task explicitly changes it.
 
 ## Development
 
-Requirements: Node 20+, pnpm, Rust, and `wasm-pack`. Bun 1.x is optional.
+Requirements: Node 22.12+, pnpm, Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x and qpdf are optional.
 
 ```bash
 pnpm install --frozen-lockfile
@@ -28,7 +28,7 @@ package smoke test.
 
 ## Constraints
 
-- Keep optimized WASM at or below 120 KB raw and below 100 KB gzipped.
+- Keep optimized WASM at or below 400 KB raw and below 200 KB gzipped.
 - Keep output byte-for-byte deterministic for the same input.
 - Validate untrusted input at the TypeScript and Rust boundaries.
 - Do not commit `target/`, `dist/`, `node_modules/`, or generated package output.

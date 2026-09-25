@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -51,6 +52,19 @@ process.stdout.write(Buffer.from(pdf).toString("base64"));
 	const nodePdf = run(process.execPath, ["consumer.mjs"]);
 	if (!nodePdf.startsWith("JVBER")) throw new Error("Node did not render a PDF");
 	console.log("node: ok");
+
+	const pdfPath = join(work, "consumer.pdf");
+	writeFileSync(pdfPath, Buffer.from(nodePdf, "base64"));
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		run("qpdf", ["--check", pdfPath]);
+		console.log("qpdf --check: ok");
+	} else console.warn("qpdf not installed; PDF structure is unchecked");
+	if (spawnSync("mutool", ["-v"]).status === 0) {
+		const png = join(work, "page1.png");
+		run("mutool", ["draw", "-q", "-r", "72", "-o", png, pdfPath, "1"]);
+		const sha = createHash("sha256").update(readFileSync(png)).digest("hex");
+		console.log(`mutool page 1 sha256: ${sha}`);
+	} else console.warn("mutool not installed; first page is not rasterised");
 
 	writeFileSync(
 		join(work, "lambda.mjs"),

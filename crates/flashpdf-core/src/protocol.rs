@@ -15,11 +15,14 @@ pub use error::ProtocolError;
 use cursor::{nonnegative_f32, positive_f32, pt, Cursor};
 use opcode::Opcode;
 
+use crate::command::MAX_LAYOUT_DEPTH;
 use crate::{Edges, FontId, OwnedCommand, Rgb, TextAlign, TextStyle};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
+/// An open Stack, Box or Row buffers its commands until it closes; this bounds that buffer.
+pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
 const VERSION: u16 = 2;
@@ -30,6 +33,7 @@ pub struct Decoder {
     page: Option<crate::Page>,
     renderer: Option<crate::Renderer>,
     block: Vec<OwnedCommand>,
+    block_bytes: usize,
     frames: Vec<Frame>,
     ended: bool,
     fonts: Vec<crate::EmbeddedFont>,
@@ -122,7 +126,7 @@ impl Decoder {
         match opcode {
             Opcode::Text => {
                 let size = pt(cursor.positive_f32("font size")?)?;
-                let text = cursor.text()?.to_owned();
+                let text = cursor.text(false)?.to_owned();
                 cursor.done()?;
                 self.layout_command(OwnedCommand::Text(text, TextStyle::plain(size)))
             }
@@ -181,7 +185,7 @@ impl Decoder {
                 if font.index() >= font_count {
                     return Err(ProtocolError::UnknownFont);
                 }
-                let text = cursor.text()?.to_owned();
+                let text = cursor.text(footer)?.to_owned();
                 cursor.done()?;
                 let style = TextStyle {
                     size,
@@ -271,8 +275,22 @@ impl Decoder {
         Ok(self.renderer.as_mut().unwrap())
     }
 
-    fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
+    fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
+        let payload = match &command {
+            OwnedCommand::Text(text, _) => text.len(),
+            OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
+            _ => 0,
+        };
+        self.block_bytes += payload + size_of::<OwnedCommand>();
+        if self.block_bytes > MAX_BLOCK_BYTES {
+            return Err(ProtocolError::BlockTooLarge);
+        }
         self.block.push(command);
+        Ok(())
+    }
+
+    fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
+        self.push_command(command)?;
         self.complete_child()?;
         if self.frames.is_empty() {
             self.flush_block()?;
@@ -281,10 +299,10 @@ impl Decoder {
     }
 
     fn open(&mut self, frame: Frame, command: OwnedCommand) -> Result<(), ProtocolError> {
-        if self.frames.len() >= 64 {
+        if self.frames.len() >= MAX_LAYOUT_DEPTH {
             return Err(ProtocolError::NestingTooDeep);
         }
-        self.block.push(command);
+        self.push_command(command)?;
         self.frames.push(frame);
         Ok(())
     }
@@ -297,7 +315,7 @@ impl Decoder {
             (true, Frame::Row { .. }) => return Err(ProtocolError::RowCellCountMismatch),
             _ => return Err(ProtocolError::InvalidNesting),
         }
-        self.block.push(command);
+        self.push_command(command)?;
         self.complete_child()?;
         if self.frames.is_empty() {
             self.flush_block()?;
@@ -309,7 +327,7 @@ impl Decoder {
         if !matches!(self.frames.pop(), Some(Frame::Box)) {
             return Err(ProtocolError::InvalidNesting);
         }
-        self.block.push(OwnedCommand::BoxEnd);
+        self.push_command(OwnedCommand::BoxEnd)?;
         self.complete_child()?;
         if self.frames.is_empty() {
             self.flush_block()?;
@@ -339,6 +357,7 @@ impl Decoder {
             .push_owned(block)
             .map_err(ProtocolError::from)?;
         block.clear();
+        self.block_bytes = 0;
         Ok(())
     }
 

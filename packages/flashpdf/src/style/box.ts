@@ -9,19 +9,11 @@ export function edges(
 ): [number, number, number, number] {
 	const shorthand = s[name];
 	const values =
-		shorthand === undefined ? [] : edgeValues(shorthand, name).map((value) => point(value, parent));
-	const expanded =
-		values.length === 1
-			? [values[0], values[0], values[0], values[0]]
-			: values.length === 2
-				? [values[0], values[1], values[0], values[1]]
-				: values.length === 3
-					? [values[0], values[1], values[2], values[1]]
-					: values.length === 4
-						? values
-						: [0, 0, 0, 0];
+		shorthand === undefined
+			? [0, 0, 0, 0]
+			: edgeValues(shorthand, name).map((value) => point(value, parent));
 	return SIDES.map((side, index) =>
-		s[`${name}${side}`] === undefined ? expanded[index] : point(s[`${name}${side}`], parent),
+		s[`${name}${side}`] === undefined ? values[index] : point(s[`${name}${side}`], parent),
 	) as [number, number, number, number];
 }
 
