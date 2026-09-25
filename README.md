@@ -69,6 +69,15 @@ PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and base
 
 ## Install
 
+Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
+
+```ini
+@pettersen3008:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```
+
+Then install:
+
 ```sh
 npm install @pettersen3008/flashpdf
 pnpm add @pettersen3008/flashpdf
@@ -178,7 +187,7 @@ That formats, lints, and tests the Rust workspace, formats and lints the TypeScr
 
 Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. Every library renders the same fixture: A4 page, 36pt margins, 10pt body text, a 24pt heading, and a 70pt right-aligned amount column, so the comparison is fair even though each library uses its native authoring API. It reports median and p95 cold start and warm render, peak RSS, package size (`installBytes` adds every transitive runtime dependency, deduped by real path), and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts.
 
-To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version, reruns `verify.sh`, and publishes to npm with provenance. The first npm publish uses the repository's `NPM_TOKEN` secret; configure trusted publishing after the package exists.
+To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version, reruns `verify.sh`, and publishes to GitHub Packages with `GITHUB_TOKEN`.
 
 `tests/golden/css-invoice.txt` pins the PDF content stream of the CSS invoice: every draw position, colour, font, and page break. Regenerate it with `UPDATE_GOLDEN=1` and review the diff.
 

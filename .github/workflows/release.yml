@@ -3,10 +3,16 @@ name: Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
-  id-token: write
+  packages: write
 
 jobs:
   npm:
@@ -14,18 +20,21 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-      # Node 24.21.0 bundles npm 11.19.0; trusted publishing needs npm 11.5.1 or newer.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24.21.0
-          registry-url: https://registry.npmjs.org
+          registry-url: https://npm.pkg.github.com
+          scope: '@pettersen3008'
           package-manager-cache: false
       - name: Check release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          test "v$(node -p 'require("./packages/flashpdf/package.json").version')" = "$GITHUB_REF_NAME"
+          test "v$(node -p 'require("./packages/flashpdf/package.json").version')" = "$RELEASE_TAG"
           git fetch origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          git merge-base --is-ancestor HEAD origin/main
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 2026-09-16
         with:
           toolchain: 1.94.0
@@ -48,6 +57,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y qpdf
       - run: pnpm exec playwright install --with-deps chromium
       - run: sh verify.sh
-      - run: npm publish ./packages/flashpdf --access public --provenance
+      - run: npm publish ./packages/flashpdf --access public
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
