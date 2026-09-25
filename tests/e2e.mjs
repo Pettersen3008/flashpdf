@@ -254,6 +254,27 @@ document.querySelector("#out").textContent = new TextDecoder().decode(pdf.subarr
 				document.querySelector("#out")?.textContent?.startsWith("%PDF-"),
 			);
 			console.log(`browser: ${await page.locator("#out").textContent()}`);
+
+			const playground = join(repo, "packages/playground");
+			await build({ root: playground, logLevel: "error" });
+			const playgroundServer = await preview({
+				root: playground,
+				logLevel: "error",
+				preview: { host: "127.0.0.1", port: 0 },
+			});
+			try {
+				const playgroundPage = await browser.newPage();
+				await playgroundPage.goto(`http://127.0.0.1:${playgroundServer.httpServer.address().port}`);
+				await playgroundPage.locator("iframe").waitFor();
+				const source = await playgroundPage.locator("#tsx").inputValue();
+				await playgroundPage.locator("#tsx").fill("export default <div>");
+				await playgroundPage.getByRole("alert").waitFor();
+				await playgroundPage.locator("#tsx").fill(source);
+				await playgroundPage.getByRole("alert").waitFor({ state: "hidden" });
+				console.log("playground: render error recovers after editing");
+			} finally {
+				playgroundServer.httpServer.close();
+			}
 		} finally {
 			await browser.close();
 			server.httpServer.close();
