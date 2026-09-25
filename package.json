@@ -20,11 +20,11 @@
 		"@react-pdf/renderer": "4.9.0",
 		"@stylexjs/babel-plugin": "0.19.1",
 		"@tailwindcss/cli": "4.3.3",
-		"@types/node": "26.6.1",
+		"@types/node": "26.6.2",
 		"@types/react": "19.3.0",
 		"binaryen": "132.0.0",
-		"oxfmt": "0.68.0",
-		"oxlint": "1.83.0",
+		"oxfmt": "0.70.0",
+		"oxlint": "1.85.0",
 		"pdfkit": "0.20.2",
 		"playwright": "1.63.0",
 		"react": "19.3.0",
@@ -35,7 +35,7 @@
 		"typescript": "7.0.2",
 		"vite": "8.3.0",
 		"vitest": "5.0.1",
-		"wrangler": "4.134.0"
+		"wrangler": "4.136.3"
 	},
 	"engines": {
 		"node": ">=22.12"
