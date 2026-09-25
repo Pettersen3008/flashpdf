@@ -1,18 +1,34 @@
-use crate::document::{Block, BoxNode, Cell, Document, Element, Row, Spacer, Stack, TextNode};
-use crate::{BoxStyle, Fraction, Percent, Pt, TextStyle};
+use crate::document::{Block, BoxNode, Cell, Document, Element, Paragraph, Row, Spacer, Stack};
+use crate::{BoxStyle, Fraction, Percent, Pt, TextAlign, TextRun, TextStyle};
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
 pub(crate) const MAX_COLUMNS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command<'a> {
-    Text { text: &'a str, style: TextStyle },
-    BoxStart { style: BoxStyle },
+    /// One run in one style; the parser lowers it to a one-run `Paragraph`.
+    Text {
+        text: &'a str,
+        style: TextStyle,
+    },
+    /// `runs` slice `text` consecutively and must cover it exactly on char boundaries.
+    Paragraph {
+        align: TextAlign,
+        text: &'a str,
+        runs: &'a [TextRun],
+    },
+    BoxStart {
+        style: BoxStyle,
+    },
     BoxEnd,
     Spacer(Pt),
-    StackStart { gap: Pt },
+    StackStart {
+        gap: Pt,
+    },
     StackEnd,
-    RowStart { columns: &'a [ColumnWidth] },
+    RowStart {
+        columns: &'a [ColumnWidth],
+    },
     RowEnd,
     PageBreak,
 }
@@ -26,7 +42,7 @@ pub enum ColumnWidth {
 
 /// The protocol's decoded form owns data across input chunks.
 pub(crate) enum OwnedCommand {
-    Text(String, TextStyle),
+    Paragraph(TextAlign, String, Vec<TextRun>),
     BoxStart(BoxStyle),
     BoxEnd,
     Spacer(Pt),
@@ -39,9 +55,10 @@ pub(crate) enum OwnedCommand {
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Text(text, style) => Command::Text {
+            Self::Paragraph(align, text, runs) => Command::Paragraph {
+                align: *align,
                 text,
-                style: *style,
+                runs,
             },
             Self::BoxStart(style) => Command::BoxStart { style: *style },
             Self::BoxEnd => Command::BoxEnd,
@@ -125,7 +142,22 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
 
     fn parse_element(&mut self, depth: usize) -> Result<Element<'a>, CommandParseError> {
         match self.next()? {
-            Command::Text { text, style } => Ok(Element::Text(TextNode { text, style })),
+            Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
+                align: style.align,
+                text,
+                runs: vec![TextRun {
+                    len: text.len(),
+                    font: style.font,
+                    size: style.size,
+                    color: style.color,
+                    hard_break: false,
+                }],
+            })),
+            Command::Paragraph { align, text, runs } => Ok(Element::Paragraph(Paragraph {
+                align,
+                text,
+                runs: runs.to_vec(),
+            })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::BoxStart { style } => {
                 self.check_depth(depth)?;

@@ -16,9 +16,13 @@ export function cssInvoice(invoice: Invoice) {
 			<header className={styles.header}>
 				<div>
 					<h1>{invoice.title}</h1>
-					<p className={styles.muted}>Invoice #{invoice.number}</p>
+					<p className={styles.muted}>
+						Invoice <b>#{invoice.number}</b>
+					</p>
 				</div>
-				<p style={{ textAlign: "right", fontSize: 12 }}>Due {invoice.dueDate}</p>
+				<p style={{ textAlign: "right", fontSize: 12 }}>
+					Due <b>{invoice.dueDate}</b>
+				</p>
 			</header>
 			<section className={styles.items}>
 				{invoice.items.map((item) => (

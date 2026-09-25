@@ -172,6 +172,20 @@ test("given adjacent text and plain spans, when rendering, then keeps them in on
 	assert.match(string(pdf), /\(Label: value\)/);
 });
 
+test("given inline bold inside a paragraph, when rendering, then paints both fonts in one text object", async () => {
+	const pdf = await render(
+		jsxs("p", { children: ["Hello ", jsx("b", { children: "World" }), " again"] }),
+	);
+	const objects = string(pdf)
+		.split("ET")
+		.filter((object) => object.includes("Tj"));
+	assert.equal(objects.length, 1, objects.join("\n"));
+	assert.match(
+		objects[0],
+		/\/F1 12 Tf\n[\d.]+ [\d.]+ Td\n\(Hello \) Tj\n\/F2 12 Tf\n[\d.]+ 0 Td\n\(World\) Tj\n\/F1 12 Tf\n[\d.]+ 0 Td\n\( again\) Tj/,
+	);
+});
+
 test("given a long margin-only wrapper, when rendering, then it paginates", async () => {
 	const pdf = await render(
 		jsx("main", {

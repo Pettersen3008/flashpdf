@@ -6,7 +6,6 @@
 .header {
 	display: flex;
 	flex-direction: row;
-	font-weight: bold;
 }
 .muted {
 	color: var(--muted);

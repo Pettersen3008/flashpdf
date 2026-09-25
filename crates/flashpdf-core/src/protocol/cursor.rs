@@ -1,5 +1,5 @@
 use crate::win_ansi::valid;
-use crate::{Fraction, Percent};
+use crate::{Fraction, Percent, Rgb, TextAlign};
 
 use super::ProtocolError;
 
@@ -40,6 +40,19 @@ impl<'a> Cursor<'a> {
 
     pub(super) fn nonnegative_f32(&mut self, name: &'static str) -> Result<f32, ProtocolError> {
         nonnegative_f32(self.take(4)?, name)
+    }
+
+    pub(super) fn align(&mut self) -> Result<TextAlign, ProtocolError> {
+        Ok(match self.take(1)?[0] {
+            0 => TextAlign::Left,
+            1 => TextAlign::Center,
+            2 => TextAlign::Right,
+            _ => return Err(ProtocolError::InvalidTextAlignment),
+        })
+    }
+
+    pub(super) fn rgb(&mut self) -> Result<Rgb, ProtocolError> {
+        Ok(Rgb::from(<[u8; 3]>::try_from(self.take(3)?).unwrap()))
     }
 
     pub(super) fn text(&mut self, footer: bool) -> Result<&'a str, ProtocolError> {

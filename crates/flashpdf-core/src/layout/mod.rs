@@ -2,7 +2,7 @@ mod output;
 mod row;
 mod text;
 
-pub(crate) use output::LayoutBuffer;
+pub(crate) use output::{LayoutBuffer, Segment};
 
 use crate::document::{BoxNode, Element, Row, Stack};
 use crate::font::FontBook;
@@ -21,6 +21,7 @@ pub(crate) enum LayoutError {
     InvalidBox,
     InvalidColumnWidth,
     ColumnsOverflow,
+    InvalidRuns,
 }
 
 impl From<LayoutError> for RenderError {
@@ -34,7 +35,8 @@ impl From<LayoutError> for RenderError {
             | LayoutError::UnknownFont(_)
             | LayoutError::InvalidBox
             | LayoutError::InvalidColumnWidth
-            | LayoutError::ColumnsOverflow => Self::InvalidLayout,
+            | LayoutError::ColumnsOverflow
+            | LayoutError::InvalidRuns => Self::InvalidLayout,
         }
     }
 }
@@ -58,8 +60,9 @@ impl<'a> LayoutEngine<'a> {
             return Err(LayoutError::InvalidWidth);
         }
         match element {
-            Element::Text(text) => text::TextLayouter::new(self.fonts, text.style)?
-                .layout_into(text.text, area, output),
+            Element::Paragraph(paragraph) => {
+                text::ParagraphLayouter::layout(self.fonts, paragraph, area, output)
+            }
             Element::Box(node) => self.layout_box(node, area, output),
             Element::Spacer(spacer) => Ok(spacer.height),
             Element::Stack(stack) => self.layout_stack(stack, area, output),

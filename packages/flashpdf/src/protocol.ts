@@ -2,9 +2,16 @@ import { Binary } from "./binary.js";
 import type { Box } from "./style.js";
 
 export type Column = { kind: 0 | 1 | 2; value: number };
+/** One styled stretch of a paragraph; `break` ends the line after it. */
+export type Run = {
+	font: number;
+	size: number;
+	color: readonly [number, number, number];
+	text: string;
+	break: boolean;
+};
 
 const opcode = {
-	text: 1,
 	spacer: 2,
 	stackStart: 3,
 	stackEnd: 4,
@@ -12,7 +19,7 @@ const opcode = {
 	rowEnd: 6,
 	pageBreak: 7,
 	footer: 8,
-	styledText: 16,
+	paragraph: 9,
 	boxStart: 17,
 	boxEnd: 18,
 	end: 255,
@@ -28,38 +35,39 @@ export class ProtocolWriter {
 		this.binary.header(width, height, margin);
 	}
 
-	text(
-		value: string,
-		size: number,
-		align: string,
-		color: readonly [number, number, number],
-		font: number,
-	) {
+	paragraph(runs: readonly Run[], align: string) {
+		const alignment = align === "center" ? 1 : align === "right" ? 2 : 0;
 		if (this.footer) {
-			if (this.footerWritten) throw new Error("footer must be a single text line");
+			const [only] = runs;
+			if (this.footerWritten || runs.length !== 1 || only!.break)
+				throw new Error("footer must be a single text line");
 			this.footerWritten = true;
 			this.binary.record(opcode.footer, () => {
-				this.binary.f32(size);
-				this.binary.u8(align === "center" ? 1 : align === "right" ? 2 : 0);
-				for (const channel of color) this.binary.u8(channel);
-				this.binary.u8(font);
-				this.binary.text(value);
+				this.binary.f32(only!.size);
+				this.binary.u8(alignment);
+				for (const channel of only!.color) this.binary.u8(channel);
+				this.binary.u8(only!.font);
+				this.binary.text(only!.text);
 			});
 			return;
 		}
-		if (align === "left" && color[0] === 0 && color[1] === 0 && color[2] === 0 && font === 0)
-			this.binary.record(opcode.text, () => {
-				this.binary.f32(size);
-				this.binary.text(value);
+		try {
+			this.binary.record(opcode.paragraph, () => {
+				this.binary.u8(alignment);
+				this.binary.u16(runs.length);
+				for (const run of runs) {
+					this.binary.u8(run.font);
+					this.binary.f32(run.size);
+					for (const channel of run.color) this.binary.u8(channel);
+					this.binary.u8(run.break ? 1 : 0);
+					this.binary.text(run.text);
+				}
 			});
-		else
-			this.binary.record(opcode.styledText, () => {
-				this.binary.f32(size);
-				this.binary.u8(align === "center" ? 1 : align === "right" ? 2 : 0);
-				for (const channel of color) this.binary.u8(channel);
-				this.binary.u8(font);
-				this.binary.text(value);
-			});
+		} catch (error) {
+			if (error instanceof Error && error.message === "record too large")
+				throw new Error("paragraph exceeds 64 KiB; split it into several paragraphs");
+			throw error;
+		}
 	}
 
 	spacer(height: number) {

@@ -1,4 +1,4 @@
-use crate::{BoxStyle, ColumnWidth, Pt, TextStyle};
+use crate::{BoxStyle, ColumnWidth, Pt, TextAlign, TextRun};
 
 pub(crate) struct Document<'a> {
     pub(crate) blocks: Vec<Block<'a>>,
@@ -10,16 +10,17 @@ pub(crate) enum Block<'a> {
 }
 
 pub(crate) enum Element<'a> {
-    Text(TextNode<'a>),
+    Paragraph(Paragraph<'a>),
     Box(BoxNode<'a>),
     Spacer(Spacer),
     Stack(Stack<'a>),
     Row(Row<'a>),
 }
 
-pub(crate) struct TextNode<'a> {
+pub(crate) struct Paragraph<'a> {
+    pub(crate) align: TextAlign,
     pub(crate) text: &'a str,
-    pub(crate) style: TextStyle,
+    pub(crate) runs: Vec<TextRun>,
 }
 
 pub(crate) struct Spacer {

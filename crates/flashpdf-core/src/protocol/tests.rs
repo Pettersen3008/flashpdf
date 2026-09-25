@@ -32,10 +32,24 @@ fn columns(values: &[(u8, f32)]) -> Vec<u8> {
     bytes
 }
 
+/// `(font, size, colour, flags, text)`.
+type Run<'a> = (u8, f32, [u8; 3], u8, &'a [u8]);
+
+fn paragraph(align: u8, runs: &[Run<'_>]) -> Vec<u8> {
+    let mut payload = vec![align];
+    payload.extend((runs.len() as u16).to_le_bytes());
+    for (font, size, color, flags, value) in runs {
+        payload.push(*font);
+        payload.extend(size.to_le_bytes());
+        payload.extend(color);
+        payload.push(*flags);
+        payload.extend(text(value));
+    }
+    record(9, &payload)
+}
+
 fn plain(value: &[u8]) -> Vec<u8> {
-    let mut payload = 10.0_f32.to_le_bytes().to_vec();
-    payload.extend(text(value));
-    record(1, &payload)
+    paragraph(0, &[(0, 10.0, [0, 0, 0], 0, value)])
 }
 
 fn box_start() -> Vec<u8> {
@@ -64,10 +78,7 @@ fn representative() -> Vec<u8> {
     bytes.extend(record(3, &0.0_f32.to_le_bytes()));
     bytes.extend(plain(b"Stacked"));
     bytes.extend(record(4, &[]));
-    let mut styled = 10.0_f32.to_le_bytes().to_vec();
-    styled.extend([1, 0xcc, 0x00, 0x00, 1]);
-    styled.extend(text(b"Styled"));
-    bytes.extend(record(16, &styled));
+    bytes.extend(paragraph(1, &[(1, 10.0, [0xcc, 0, 0], 0, b"Styled")]));
     bytes.extend(record(7, &[]));
     bytes.extend(plain(b"After"));
     bytes.extend(record(255, &[]));
@@ -100,6 +111,29 @@ fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
     );
 }
 
+#[test]
+fn given_a_paragraph_with_bold_and_break_runs_when_decoding_then_paints_one_line_in_two_fonts() {
+    let mut bytes = header(VERSION, 595.0, 842.0, 36.0);
+    bytes.extend(paragraph(
+        0,
+        &[
+            (0, 10.0, [0, 0, 0], 0, b"Hello "),
+            (1, 10.0, [0xcc, 0, 0], 1, b"World"),
+            (0, 10.0, [0, 0, 0], 0, b"again"),
+        ],
+    ));
+    bytes.extend(record(255, &[]));
+    let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "Hello World\nagain");
+    let page = *pdf.get_pages().values().next().unwrap();
+    let content = String::from_utf8(pdf.get_page_content(page)).unwrap();
+    let objects: Vec<&str> = content.split("ET").collect();
+    assert_eq!(objects.len(), 3, "{content}");
+    assert!(objects[0].contains("/F1 10 Tf") && objects[0].contains("/F2 10 Tf"));
+    assert!(objects[0].contains("0.8 0 0 rg"), "{content}");
+    assert!(objects[1].contains("(again) Tj"), "{content}");
+}
+
 fn push_error(bytes: &[u8]) -> String {
     let mut decoder = Decoder::default();
     decoder.push(bytes).unwrap_err().to_string()
@@ -113,10 +147,7 @@ fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
     assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 3);
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
     for slot in [2, 3] {
-        let mut styled = 10.0_f32.to_le_bytes().to_vec();
-        styled.extend([0, 0, 0, 0, slot]);
-        styled.extend(text(b"Font"));
-        bytes.extend(record(16, &styled));
+        bytes.extend(paragraph(0, &[(slot, 10.0, [0, 0, 0], 0, b"Font")]));
     }
     bytes.extend(record(255, &[]));
     decoder.push(&bytes).unwrap();
@@ -196,9 +227,11 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     unknown.extend(record(42, &[]));
     assert_eq!(push_error(&unknown), "unknown opcode");
 
-    let mut legacy_font = header(VERSION, 120.0, 60.0, 10.0);
-    legacy_font.extend(record(19, &[]));
-    assert_eq!(push_error(&legacy_font), "unknown opcode");
+    for legacy in [1, 16, 19] {
+        let mut removed = header(VERSION, 120.0, 60.0, 10.0);
+        removed.extend(record(legacy, &[]));
+        assert_eq!(push_error(&removed), "unknown opcode");
+    }
 
     let mut oversized_record = header(VERSION, 120.0, 60.0, 10.0);
     oversized_record.push(1);
@@ -206,9 +239,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&oversized_record), "record too large");
 
     let mut invalid_utf8 = header(VERSION, 120.0, 60.0, 10.0);
-    let mut payload = 10.0_f32.to_le_bytes().to_vec();
-    payload.extend(text(&[0xff]));
-    invalid_utf8.extend(record(1, &payload));
+    invalid_utf8.extend(plain(&[0xff]));
     assert_eq!(push_error(&invalid_utf8), "invalid UTF-8");
 
     for control in ["\u{0b}", "\u{1e}", "\u{1f}"] {
@@ -218,17 +249,29 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     }
 
     let mut unsupported = header(VERSION, 120.0, 60.0, 10.0);
-    let mut payload = 10.0_f32.to_le_bytes().to_vec();
-    payload.extend(text("🙂".as_bytes()));
-    unsupported.extend(record(1, &payload));
+    unsupported.extend(plain("🙂".as_bytes()));
     assert_eq!(push_error(&unsupported), "unsupported WinAnsi character");
 
     let mut bad_length = header(VERSION, 120.0, 60.0, 10.0);
-    let mut payload = 10.0_f32.to_le_bytes().to_vec();
+    let mut payload = vec![0, 1, 0, 0];
+    payload.extend(10.0_f32.to_le_bytes());
+    payload.extend([0, 0, 0, 0]);
     payload.extend(4_u32.to_le_bytes());
     payload.push(b'x');
-    bad_length.extend(record(1, &payload));
+    bad_length.extend(record(9, &payload));
     assert_eq!(push_error(&bad_length), "truncated record");
+
+    let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
+    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 2, b"x")]));
+    assert_eq!(push_error(&bad_flags), "invalid run flags");
+
+    let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);
+    bad_align.extend(paragraph(3, &[(0, 10.0, [0, 0, 0], 0, b"x")]));
+    assert_eq!(push_error(&bad_align), "invalid text alignment");
+
+    let mut unknown_font = header(VERSION, 120.0, 60.0, 10.0);
+    unknown_font.extend(paragraph(0, &[(2, 10.0, [0, 0, 0], 0, b"x")]));
+    assert_eq!(push_error(&unknown_font), "unknown font");
 }
 
 #[test]
@@ -243,9 +286,7 @@ fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
     );
 
     let mut zero_size = header(VERSION, 120.0, 60.0, 10.0);
-    let mut payload = 0.0_f32.to_le_bytes().to_vec();
-    payload.extend(text(b"x"));
-    zero_size.extend(record(1, &payload));
+    zero_size.extend(paragraph(0, &[(0, 0.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&zero_size), "invalid font size");
 
     let mut infinite_column = header(VERSION, 120.0, 60.0, 10.0);
@@ -272,9 +313,7 @@ fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
 
     let mut bad_layout_row = header(VERSION, 120.0, 60.0, 10.0);
     bad_layout_row.extend(record(5, &columns(&[(0, 50.0), (1, 1.0)])));
-    let mut payload = 10.0_f32.to_le_bytes().to_vec();
-    payload.extend(text(b"one"));
-    bad_layout_row.extend(record(1, &payload));
+    bad_layout_row.extend(plain(b"one"));
     bad_layout_row.extend(record(6, &[]));
     assert_eq!(push_error(&bad_layout_row), "row cell count mismatch");
 

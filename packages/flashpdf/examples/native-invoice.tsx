@@ -81,7 +81,9 @@ export function nativeInvoice(invoice: Invoice, options?: Pick<RenderOptions, "f
 					<h1>Invoice</h1>
 				</div>
 				<div style={{ width: "170pt" }}>
-					<p style={{ textAlign: "right", fontWeight: "bold" }}>{invoice.number}</p>
+					<p style={{ textAlign: "right" }}>
+						No. <b>{invoice.number}</b>
+					</p>
 					<p style={{ textAlign: "right", color: muted }}>Issued {invoice.issued}</p>
 					<p style={{ textAlign: "right", color: muted }}>Due {invoice.due}</p>
 				</div>

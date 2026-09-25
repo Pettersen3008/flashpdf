@@ -181,6 +181,17 @@ impl TextStyle {
     }
 }
 
+/// One styled slice of a paragraph's text; `len` bytes follow the previous run's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextRun {
+    pub len: usize,
+    pub font: FontId,
+    pub size: Pt,
+    pub color: Rgb,
+    /// Ends the line after this run without adding a space.
+    pub hard_break: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxStyle {
     pub margin: Edges<Pt>,

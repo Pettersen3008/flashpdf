@@ -1,7 +1,7 @@
 import type { StyledNode } from "./css.js";
 import type { StyledElement } from "./css/cascade.js";
 import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
-import type { ProtocolWriter, Column } from "./protocol.js";
+import type { ProtocolWriter, Column, Run } from "./protocol.js";
 import {
 	boxStyle,
 	color,
@@ -33,6 +33,8 @@ const ROOT: Context = {
 	inRow: false,
 };
 
+const INLINE_TAGS = new Set<string>(["span", "b", "strong", "br"]);
+
 function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): TextState {
 	const selected = font(style, current.family, current.bold, fonts);
 	return {
@@ -44,16 +46,76 @@ function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): Text
 	};
 }
 
-function writeText(writer: ProtocolWriter, value: string, state: TextState, pageTokens: boolean) {
-	if (!pageTokens && (value.includes(PAGE_NUMBER) || value.includes(TOTAL_PAGES)))
+function run(state: TextState, text: string, hardBreak = false): Run {
+	return {
+		font: state.bold ? state.family.bold! : state.family.regular,
+		size: state.size,
+		color: state.color,
+		text,
+		break: hardBreak,
+	};
+}
+
+/** Appends a run, merging it into the previous one when nothing about its paint differs. */
+function push(runs: Run[], next: Run) {
+	const last = runs.at(-1);
+	if (
+		last &&
+		!last.break &&
+		last.font === next.font &&
+		last.size === next.size &&
+		last.color.every((channel, index) => channel === next.color[index])
+	) {
+		last.text += next.text;
+		last.break = next.break;
+	} else runs.push(next);
+}
+
+/** Runs of an inline node; undefined for a layout node (box, page break, or its own alignment). */
+function inlineRuns(node: StyledNode, context: Context, fonts: Fonts): Run[] | undefined {
+	if (node.kind === "text") return [run(context, node.value)];
+	if (!INLINE_TAGS.has(node.tag)) return undefined;
+	if (node.tag === "br") return [run(context, "", true)];
+	try {
+		const style = node.style;
+		rowOnly(style, context.inRow);
+		if (
+			boxStyle(style, context.size) ||
+			style.breakBefore === "page" ||
+			style.breakAfter === "page"
+		)
+			return undefined;
+		const next = inherit(style, context, fonts);
+		if (next.align !== context.align) return undefined;
+		return collect(node.children, { ...next, inRow: false }, fonts);
+	} catch (error) {
+		throw locate(error, node.where);
+	}
+}
+
+/** Runs of consecutive inline children; undefined as soon as one is a layout node. */
+function collect(children: readonly StyledNode[], context: Context, fonts: Fonts) {
+	const runs: Run[] = [];
+	for (const child of children) {
+		const part = inlineRuns(child, context, fonts);
+		if (part === undefined) return undefined;
+		for (const item of part) push(runs, item);
+	}
+	return runs;
+}
+
+function writeParagraph(
+	writer: ProtocolWriter,
+	runs: readonly Run[],
+	state: TextState,
+	pageTokens: boolean,
+) {
+	if (
+		!pageTokens &&
+		runs.some(({ text }) => text.includes(PAGE_NUMBER) || text.includes(TOTAL_PAGES))
+	)
 		throw new Error("page tokens are only valid in a footer");
-	writer.text(
-		value,
-		state.size,
-		state.align,
-		state.color,
-		state.bold ? state.family.bold! : state.family.regular,
-	);
+	writer.paragraph(runs, state.align);
 }
 
 function pageBreak(
@@ -82,64 +144,38 @@ function box(writer: ProtocolWriter, value: Box | undefined, body: () => void) {
 	}
 }
 
-function textOnly(children: readonly StyledNode[]): string {
-	let value = "";
-	for (const child of children) {
-		if (child.kind !== "text") throw new Error("text elements only accept text children");
-		value += child.value;
-	}
-	return value;
-}
-
-/** Text of a span that changes nothing about how its text paints, so it can join the parent's run. */
-function inlineText(value: StyledNode, inherited: Context, fonts: Fonts): string | undefined {
-	if (value.kind === "text") return value.value;
-	if (value.tag !== "span") return undefined;
-	try {
-		const style = value.style;
-		rowOnly(style, inherited.inRow);
-		if (
-			boxStyle(style, inherited.size) ||
-			style.breakBefore === "page" ||
-			style.breakAfter === "page"
-		)
-			return undefined;
-		const next = inherit(style, inherited, fonts);
-		if (
-			next.size !== inherited.size ||
-			next.align !== inherited.align ||
-			next.bold !== inherited.bold ||
-			next.family !== inherited.family ||
-			next.color.some((channel, index) => channel !== inherited.color[index])
-		)
-			return undefined;
-		let result = "";
-		for (const child of value.children) {
-			const text = inlineText(child, inherited, fonts);
-			if (text === undefined) return undefined;
-			result += text;
-		}
-		return result;
-	} catch (error) {
-		throw locate(error, value.where);
-	}
-}
-
-/** Merges plain inline children from `start` into one text run; undefined when `start` is a layout node. */
-function inlineRun(
+/** Block flow: consecutive inline children form one paragraph; layout nodes stand alone. */
+function flow(
 	children: readonly StyledNode[],
-	start: number,
-	context: Context,
+	writer: ProtocolWriter,
 	fonts: Fonts,
-): { text: string; end: number } | undefined {
-	let text = "";
-	let end = start;
-	for (; end < children.length; end++) {
-		const part = inlineText(children[end]!, context, fonts);
-		if (part === undefined) break;
-		text += part;
+	context: Context,
+	depth: number,
+	pageTokens: boolean,
+	gap: number,
+) {
+	let count = 0;
+	const separate = () => {
+		if (count++ && gap) writer.spacer(gap);
+	};
+	let runs: Run[] = [];
+	const flush = () => {
+		if (!runs.length) return;
+		separate();
+		writeParagraph(writer, runs, context, pageTokens);
+		runs = [];
+	};
+	for (const child of children) {
+		const part = inlineRuns(child, context, fonts);
+		if (part) {
+			for (const item of part) push(runs, item);
+			continue;
+		}
+		flush();
+		separate();
+		compile([child], writer, fonts, context, depth, pageTokens);
 	}
-	return end === start ? undefined : { text, end };
+	flush();
 }
 
 function streamMargin(box: Box | undefined, context: Context, style: NormalizedStyle): boolean {
@@ -201,36 +237,25 @@ function element(
 			box(writer, streamed ? undefined : paint, () => {
 				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
 				const inner = { ...next, inRow: false };
+				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
 				if (row && node.children.length) {
-					if (style.gap !== undefined && point(style.gap, next.size) !== 0)
-						throw new Error("row gap is not implemented");
+					if (gap !== 0) throw new Error("row gap is not implemented");
 					writer.rowStart(node.children.map(column));
 					compile(node.children, writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
 					writer.rowEnd();
 				} else if (context.inRow || style.breakInside === "avoid") {
-					writer.stackStart(style.gap === undefined ? 0 : point(style.gap, next.size));
-					compile(node.children, writer, fonts, inner, depth + 1, pageTokens);
+					writer.stackStart(gap);
+					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
 					writer.stackEnd();
-				} else {
-					const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
-					for (let index = 0; index < node.children.length;) {
-						if (index && gap) writer.spacer(gap);
-						const run = inlineRun(node.children, index, inner, fonts);
-						if (run) {
-							writeText(writer, run.text, next, pageTokens);
-							index = run.end;
-						} else {
-							compile([node.children[index]!], writer, fonts, inner, depth, pageTokens);
-							index++;
-						}
-					}
-				}
+				} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
 			});
 			if (streamed && paint?.margin[2]) writer.spacer(paint.margin[2]);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 		}
 		case "span":
+		case "b":
+		case "strong":
 		case "p":
 		case "h1":
 		case "h2":
@@ -241,12 +266,18 @@ function element(
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
-			box(writer, boxStyle(style, next.size), () =>
-				writeText(writer, textOnly(node.children), next, pageTokens),
-			);
+			const runs = collect(node.children, { ...next, inRow: false }, fonts);
+			if (runs === undefined)
+				throw new Error(
+					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong> without box styles`,
+				);
+			box(writer, boxStyle(style, next.size), () => writeParagraph(writer, runs, next, pageTokens));
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 		}
+		case "br":
+			writeParagraph(writer, [run(context, "", true)], context, pageTokens);
+			break;
 		case "hr": {
 			const next = inherit(style, context, fonts);
 			const rule =
@@ -273,7 +304,7 @@ export function compile(
 ): void {
 	for (const node of nodes) {
 		if (node.kind === "text") {
-			writeText(writer, node.value, context, pageTokens);
+			writeParagraph(writer, [run(context, node.value)], context, pageTokens);
 			continue;
 		}
 		try {

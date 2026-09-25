@@ -16,7 +16,7 @@ use cursor::{nonnegative_f32, positive_f32, pt, Cursor};
 use opcode::Opcode;
 
 use crate::command::MAX_LAYOUT_DEPTH;
-use crate::{Edges, FontId, OwnedCommand, Rgb, TextAlign, TextStyle};
+use crate::{Edges, FontId, OwnedCommand, TextRun, TextStyle};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -25,7 +25,7 @@ const MAX_RECORD: usize = 64 * 1024;
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 2;
+const VERSION: u16 = 3;
 
 #[derive(Default)]
 pub struct Decoder {
@@ -124,12 +124,6 @@ impl Decoder {
         let mut cursor = Cursor::new(payload);
         let opcode = Opcode::try_from(opcode)?;
         match opcode {
-            Opcode::Text => {
-                let size = pt(cursor.positive_f32("font size")?)?;
-                let text = cursor.text(false)?.to_owned();
-                cursor.done()?;
-                self.layout_command(OwnedCommand::Text(text, TextStyle::plain(size)))
-            }
             Opcode::Spacer => {
                 let space = pt(cursor.nonnegative_f32("spacer")?)?;
                 cursor.done()?;
@@ -167,42 +161,52 @@ impl Decoder {
                 self.ensure_renderer()?.page_break();
                 Ok(())
             }
-            Opcode::StyledText | Opcode::Footer => {
-                let footer = matches!(opcode, Opcode::Footer);
+            Opcode::Footer => {
                 let size = pt(cursor.positive_f32("font size")?)?;
-                let align = match cursor.take(1)?[0] {
-                    0 => TextAlign::Left,
-                    1 => TextAlign::Center,
-                    2 => TextAlign::Right,
-                    _ => return Err(ProtocolError::InvalidTextAlignment),
-                };
-                let color = Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap());
-                let font = FontId::new(cursor.take(1)?[0]);
-                let font_count = self
-                    .renderer
-                    .as_ref()
-                    .map_or(self.fonts.len() + 2, crate::Renderer::font_count);
-                if font.index() >= font_count {
-                    return Err(ProtocolError::UnknownFont);
-                }
-                let text = cursor.text(footer)?.to_owned();
+                let align = cursor.align()?;
+                let color = cursor.rgb()?;
+                let font = self.font(cursor.take(1)?[0])?;
+                let text = cursor.text(true)?.to_owned();
                 cursor.done()?;
+                if self.renderer.is_some() || !self.frames.is_empty() {
+                    return Err(ProtocolError::InvalidNesting);
+                }
                 let style = TextStyle {
                     size,
                     align,
                     color,
                     font,
                 };
-                if footer {
-                    if self.renderer.is_some() || !self.frames.is_empty() {
-                        return Err(ProtocolError::InvalidNesting);
-                    }
-                    self.ensure_renderer()?
-                        .set_footer(text, style)
-                        .map_err(ProtocolError::from)
-                } else {
-                    self.layout_command(OwnedCommand::Text(text, style))
+                self.ensure_renderer()?
+                    .set_footer(text, style)
+                    .map_err(ProtocolError::from)
+            }
+            Opcode::Paragraph => {
+                let align = cursor.align()?;
+                let count = usize::from(cursor.u16()?);
+                let mut text = String::new();
+                let mut runs = Vec::with_capacity(count);
+                for _ in 0..count {
+                    let font = self.font(cursor.take(1)?[0])?;
+                    let size = pt(cursor.positive_f32("font size")?)?;
+                    let color = cursor.rgb()?;
+                    let hard_break = match cursor.take(1)?[0] {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(ProtocolError::InvalidValue("run flags")),
+                    };
+                    let run = cursor.text(false)?;
+                    text.push_str(run);
+                    runs.push(TextRun {
+                        len: run.len(),
+                        font,
+                        size,
+                        color,
+                        hard_break,
+                    });
                 }
+                cursor.done()?;
+                self.layout_command(OwnedCommand::Paragraph(align, text, runs))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -225,14 +229,14 @@ impl Decoder {
                 };
                 let background = match cursor.take(1)?[0] {
                     0 => None,
-                    1 => Some(Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap())),
+                    1 => Some(cursor.rgb()?),
                     _ => return Err(ProtocolError::InvalidBackground),
                 };
                 let border_color = Edges {
-                    top: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
-                    right: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
-                    bottom: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
-                    left: Rgb::from(<[u8; 3]>::try_from(cursor.take(3)?).unwrap()),
+                    top: cursor.rgb()?,
+                    right: cursor.rgb()?,
+                    bottom: cursor.rgb()?,
+                    left: cursor.rgb()?,
                 };
                 cursor.done()?;
                 self.open(
@@ -264,6 +268,20 @@ impl Decoder {
         }
     }
 
+    /// Slots 0 and 1 are Helvetica; the rest are registered fonts.
+    fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
+        let font = FontId::new(slot);
+        let count = self
+            .renderer
+            .as_ref()
+            .map_or(self.fonts.len() + 2, crate::Renderer::font_count);
+        if font.index() < count {
+            Ok(font)
+        } else {
+            Err(ProtocolError::UnknownFont)
+        }
+    }
+
     fn ensure_renderer(&mut self) -> Result<&mut crate::Renderer, ProtocolError> {
         let page = self.page.ok_or(ProtocolError::MissingHeader)?;
         if self.renderer.is_none() {
@@ -277,7 +295,9 @@ impl Decoder {
 
     fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let payload = match &command {
-            OwnedCommand::Text(text, _) => text.len(),
+            OwnedCommand::Paragraph(_, text, runs) => {
+                text.len() + runs.len() * size_of::<TextRun>()
+            }
             OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
             _ => 0,
         };

@@ -54,14 +54,6 @@ export type PdfNode =
 	| null
 	| undefined
 	| readonly PdfNode[];
-export type TextChildren =
-	| string
-	| number
-	| bigint
-	| boolean
-	| null
-	| undefined
-	| readonly TextChildren[];
 export type CommonProps = {
 	key?: string | number | undefined;
 	id?: string | undefined;
@@ -69,6 +61,5 @@ export type CommonProps = {
 	style?: StyleInput | undefined;
 };
 export type BlockProps = CommonProps & { children?: PdfNode | undefined };
-export type TextProps = CommonProps & { children?: TextChildren | undefined };
-export type HrProps = CommonProps & { children?: never };
-export type PdfProps = BlockProps | TextProps | HrProps;
+export type VoidProps = CommonProps & { children?: never };
+export type PdfProps = BlockProps | VoidProps;

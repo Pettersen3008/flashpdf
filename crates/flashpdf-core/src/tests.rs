@@ -1,6 +1,6 @@
 use super::{
     Command, Edges, Fraction as FractionValue, Page, Percent as PercentValue, Pt, RenderError, Rgb,
-    TextStyle,
+    TextAlign, TextRun, TextStyle,
 };
 
 #[test]
@@ -241,12 +241,14 @@ fn given_empty_text_when_at_bottom_then_consumes_no_height() {
     assert!(pdf.get_page_content((4, 0)).is_empty());
 }
 
+/// Line starts only; a later segment on the same line moves with `dx 0 Td`.
 fn baselines(pdf: &lopdf::Document, page: lopdf::ObjectId) -> Vec<f32> {
     String::from_utf8(pdf.get_page_content(page))
         .unwrap()
         .lines()
         .filter_map(|line| line.strip_suffix(" Td"))
         .map(|line| line.split(' ').nth(1).unwrap().parse().unwrap())
+        .filter(|y| *y != 0.0)
         .collect()
 }
 
@@ -288,6 +290,89 @@ fn given_a_word_wider_than_the_column_when_wrapping_then_breaks_it_at_the_last_f
     assert_eq!(
         pdf.extract_text(&[1]).unwrap().trim(),
         format!("{}\n{}\n{}", "W".repeat(10), "W".repeat(10), "W".repeat(5))
+    );
+}
+
+fn run(len: usize, bold: bool, size: f32, hard_break: bool) -> TextRun {
+    TextRun {
+        len,
+        font: if bold {
+            super::HELVETICA_BOLD
+        } else {
+            super::HELVETICA
+        },
+        size: Pt(size),
+        color: Rgb::BLACK,
+        hard_break,
+    }
+}
+
+fn content(pdf: &lopdf::Document) -> String {
+    let page = *pdf.get_pages().values().next().unwrap();
+    String::from_utf8(pdf.get_page_content(page)).unwrap()
+}
+
+#[test]
+fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_both_fonts_in_one_text_object(
+) {
+    // "WWWWW" fits the 100pt line; "WWWW"+"WW" is one 56.64pt word that does not follow it.
+    let runs = [run(10, false, 10.0, false), run(2, true, 10.0, false)];
+    let pdf = parsed(&[Command::Paragraph {
+        align: TextAlign::Left,
+        text: "WWWWW WWWWWW",
+        runs: &runs,
+    }]);
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "WWWWW\nWWWWWW");
+    let content = content(&pdf);
+    let objects: Vec<&str> = content.split("ET").collect();
+    assert_eq!(objects.len(), 3, "{content}");
+    assert_eq!(
+        objects[1].trim(),
+        "BT\n0 0 0 rg\n/F1 10 Tf\n10 33.57 Td\n(WWWW) Tj\n/F2 10 Tf\n37.76 0 Td\n(WW) Tj"
+    );
+}
+
+#[test]
+fn given_a_hard_break_when_laying_out_then_starts_a_new_line_without_a_space() {
+    let runs = [run(2, false, 10.0, true), run(1, false, 10.0, false)];
+    let pdf = parsed(&[Command::Paragraph {
+        align: TextAlign::Left,
+        text: "a b",
+        runs: &runs,
+    }]);
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "a\nb");
+    assert_eq!(baselines(&pdf, (4, 0)), [42.82, 33.57]);
+}
+
+#[test]
+fn given_mixed_sizes_on_one_line_when_laying_out_then_the_line_takes_the_larger_metrics() {
+    let runs = [run(1, false, 10.0, false), run(1, false, 20.0, false)];
+    let pdf = parsed(&[
+        Command::Paragraph {
+            align: TextAlign::Left,
+            text: "ab",
+            runs: &runs,
+        },
+        text("c"),
+    ]);
+    // Baseline sits at the 20pt ascent (14.36); the next block starts after the 20pt line height (18.5).
+    assert_eq!(baselines(&pdf, (4, 0)), [35.64, 24.32]);
+    assert!(content(&pdf).contains("/F1 20 Tf\n5.56 0 Td\n(b) Tj"));
+}
+
+#[test]
+fn given_runs_that_do_not_cover_the_text_when_laying_out_then_rejects() {
+    let runs = [run(1, false, 10.0, false)];
+    assert_eq!(
+        super::render(
+            page(),
+            &[Command::Paragraph {
+                align: TextAlign::Left,
+                text: "ab",
+                runs: &runs,
+            }]
+        ),
+        Err(RenderError::InvalidLayout)
     );
 }
 

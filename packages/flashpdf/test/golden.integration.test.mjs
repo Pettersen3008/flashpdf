@@ -32,12 +32,15 @@ function document_() {
 					jsxs("div", {
 						children: [
 							jsx("h1", { children: invoice.title }),
-							jsx("p", { className: "muted", children: `Invoice #${invoice.number}` }),
+							jsxs("p", {
+								className: "muted",
+								children: ["Invoice ", jsx("b", { children: `#${invoice.number}` })],
+							}),
 						],
 					}),
-					jsx("p", {
+					jsxs("p", {
 						style: { textAlign: "right", fontSize: 12 },
-						children: `Due ${invoice.dueDate}`,
+						children: ["Due ", jsx("b", { children: invoice.dueDate })],
 					}),
 				],
 			}),

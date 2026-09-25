@@ -1,4 +1,4 @@
-import type { BlockProps, Element, HrProps, PdfProps, TextProps } from "./element.js";
+import type { BlockProps, Element, PdfProps, VoidProps } from "./element.js";
 import type { BlockTag, TextTag } from "./tree.js";
 
 export const Fragment = Symbol.for("flashpdf.fragment");
@@ -20,8 +20,8 @@ export namespace JSX {
 	export interface IntrinsicAttributes {
 		key?: string | number;
 	}
-	export interface IntrinsicElements
-		extends Record<BlockTag, BlockProps>, Record<TextTag, TextProps> {
-		hr: HrProps;
+	export interface IntrinsicElements extends Record<BlockTag | TextTag, BlockProps> {
+		hr: VoidProps;
+		br: VoidProps;
 	}
 }

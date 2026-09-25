@@ -37,6 +37,13 @@ const _unknownProperty = <main potato={1}>Invoice</main>;
 const _grid = <main style={{ display: "grid" }}>Invoice</main>;
 // @ts-expect-error Margin and padding take one to four lengths, never "auto".
 const _auto = <main style={{ margin: "auto" }}>Invoice</main>;
-// @ts-expect-error Text elements accept scalar text children only.
-const _nestedBlock = <p children={<div>Invoice</div>} />;
+const _rich = (
+	<p>
+		Hello <b>World</b>
+		<br />
+		<strong style={{ color: "#c00" }}>again</strong>
+	</p>
+);
+// @ts-expect-error Line breaks have no children.
+const _brChildren = <br>x</br>;
 void import("@pettersen3008/flashpdf/jsx-runtime");

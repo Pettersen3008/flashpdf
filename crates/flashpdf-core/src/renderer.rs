@@ -245,7 +245,7 @@ impl Renderer {
 /// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
 fn splittable(element: &Element<'_>) -> bool {
     match element {
-        Element::Text(_) => true,
+        Element::Paragraph(_) => true,
         Element::Box(node) => {
             node.style.background.is_none()
                 && node

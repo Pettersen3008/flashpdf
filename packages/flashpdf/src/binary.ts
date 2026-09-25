@@ -51,7 +51,7 @@ export class Binary {
 	}
 	header(width: number, height: number, margin: number) {
 		for (const byte of [70, 80, 68, 70]) this.u8(byte);
-		this.u16(2);
+		this.u16(3);
 		this.f32(width);
 		this.f32(height);
 		this.f32(margin);

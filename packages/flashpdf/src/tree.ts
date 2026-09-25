@@ -14,8 +14,8 @@ type Render = (props: Record<string, unknown>) => unknown;
 type Component = { render: Render; name: string };
 
 export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
-export const textTags = ["p", "span", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
-export const tags = [...blockTags, ...textTags, "hr"] as const;
+export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
+export const tags = [...blockTags, ...textTags, "hr", "br"] as const;
 export type BlockTag = (typeof blockTags)[number];
 export type TextTag = (typeof textTags)[number];
 export type Tag = (typeof tags)[number];
@@ -32,8 +32,6 @@ export type ElementNode = {
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
-	b: "use <span style={{ fontWeight: 'bold' }}>",
-	strong: "use <span style={{ fontWeight: 'bold' }}>",
 	em: "italic faces are not supported yet; use <span>",
 	i: "italic faces are not supported yet; use <span>",
 	img: "images are not supported yet",
@@ -42,7 +40,6 @@ const HINTS: Record<string, string> = {
 	ol: "lists are not supported yet; use one <p> per item",
 	li: "lists are not supported yet; use one <p> per item",
 	a: "links are not supported; use <span> for the label",
-	br: "line breaks are not supported; use one <p> per line",
 };
 
 export function label(node: {

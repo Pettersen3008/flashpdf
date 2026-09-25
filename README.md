@@ -12,6 +12,7 @@ function Invoice({ total }: { total: string }) {
   return (
     <main style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <h1>Invoice</h1>
+      <p>Due in <b>14 days</b></p>
       <div style={{ display: 'flex', flexDirection: 'row' }}>
         <span style={{ flex: 1 }}>Consulting</span>
         <span style={{ width: '90pt', textAlign: 'right' }}>{total}</span>
@@ -125,7 +126,7 @@ sh verify.sh
 
 That formats, lints, and tests the Rust workspace, formats and lints the TypeScript, rebuilds and size-gates the WASM, typechecks, runs the CSS build-step examples, runs the Vitest unit and integration projects, and finally runs the packed-package E2E test in Node, AWS Lambda packaging, Bun, Wrangler, and Chromium.
 
-Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. It reports median cold start, warm render, peak RSS, installed package and WASM size, and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts. Each library uses its native authoring API, so the results compare end-to-end workloads rather than a shared layout implementation.
+Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. Every library renders the same fixture: A4 page, 36pt margins, 10pt body text, a 24pt heading, and a 70pt right-aligned amount column, so the comparison is fair even though each library uses its native authoring API. It reports median and p95 cold start and warm render, peak RSS, package size (`installBytes` adds every transitive runtime dependency, deduped by real path), and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts.
 
 To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version, reruns `verify.sh`, and publishes to npm with provenance through trusted publishing.
 

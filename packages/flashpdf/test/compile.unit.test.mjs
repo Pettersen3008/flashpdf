@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+
+import { jsx, jsxs } from "react/jsx-runtime";
+import { test } from "vitest";
+
+import { compile } from "../dist/compile.js";
+import { resolveStyles } from "../dist/css.js";
+import { helvetica } from "../dist/style.js";
+import { resolveTree } from "../dist/tree.js";
+
+/** Records protocol calls instead of encoding them. */
+async function compiled(element) {
+	const calls = [];
+	const writer = new Proxy(
+		{},
+		{
+			get:
+				(_, method) =>
+				(...args) =>
+					calls.push([method, ...args]),
+		},
+	);
+	compile(resolveStyles(await resolveTree(element)), writer, new Map([["Helvetica", helvetica]]));
+	return calls;
+}
+
+const run = (font, text, extra = {}) => ({
+	font,
+	size: 12,
+	color: [0, 0, 0],
+	text,
+	break: false,
+	...extra,
+});
+
+test("given text with an inline bold child, when compiling, then emits one paragraph with two runs", async () => {
+	const calls = await compiled(
+		jsxs("p", { children: ["Hello ", jsx("b", { children: "World" })] }),
+	);
+	assert.deepEqual(calls, [["paragraph", [run(0, "Hello "), run(1, "World")], "left"]]);
+});
+
+test("given a br between text, when compiling, then flags a hard break on the preceding run", async () => {
+	const calls = await compiled(
+		jsxs("div", { children: ["one", jsx("br", {}), jsx("br", {}), "two"] }),
+	);
+	assert.deepEqual(calls, [
+		[
+			"paragraph",
+			[run(0, "one", { break: true }), run(0, "", { break: true }), run(0, "two")],
+			"left",
+		],
+	]);
+});
+
+test("given a padded span in a block, when compiling, then it stays a box beside the paragraph", async () => {
+	const calls = await compiled(
+		jsxs("div", {
+			children: [
+				"Total",
+				jsx("span", { style: { padding: 2, fontWeight: "bold" }, children: "$1" }),
+			],
+		}),
+	);
+	assert.deepEqual(
+		calls.map(([method]) => method),
+		["paragraph", "boxStart", "paragraph", "boxEnd"],
+	);
+	assert.deepEqual(calls[2][1], [run(1, "$1")]);
+});
+
+test("given a padded span inside a paragraph, when compiling, then rejects with the element path", async () => {
+	await assert.rejects(
+		compiled(jsx("p", { children: jsx("span", { style: { padding: 2 }, children: "x" }) })),
+		/<p> accepts only text, <br>, and <span>, <b>, <strong> without box styles on <p>/,
+	);
+});
