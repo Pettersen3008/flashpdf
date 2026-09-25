@@ -24,3 +24,24 @@ export function registerFonts(renderer: PdfRenderer, value: unknown): Map<string
 	}
 	return result;
 }
+
+/** The core reports a glyph it cannot show as `UnsupportedCharacter('x')` (Helvetica, WinAnsi
+ *  only) or `MissingGlyph('x')` (the embedded font lacks it), with the character in Rust's
+ *  debug escaping; this names the character and code point and says which font to blame. */
+export function glyphError(error: unknown): unknown {
+	if (!(error instanceof Error)) return error;
+	const match = /^(UnsupportedCharacter|MissingGlyph)\('(.+)'\)$/su.exec(error.message);
+	if (!match) return error;
+	const escaped = match[2]!;
+	const character = escaped.startsWith("\\u{")
+		? String.fromCodePoint(Number.parseInt(escaped.slice(3, -1), 16))
+		: escaped.length === 2 && escaped.startsWith("\\")
+			? escaped.slice(1)
+			: escaped;
+	const codePoint = `U+${character.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
+	return new Error(
+		match[1] === "MissingGlyph"
+			? `the font has no glyph for "${character}" (${codePoint})`
+			: `Helvetica has no glyph for "${character}" (${codePoint}); register a font that has it`,
+	);
+}

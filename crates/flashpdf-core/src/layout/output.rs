@@ -46,10 +46,6 @@ impl LayoutBuffer {
         self.boxes.clear();
     }
 
-    pub(crate) fn used_fonts(&self) -> impl Iterator<Item = FontId> + '_ {
-        self.segments.iter().map(|segment| segment.font)
-    }
-
     #[cfg(test)]
     pub(crate) fn capacity(&self) -> usize {
         self.lines.capacity() * std::mem::size_of::<PositionedLine>()

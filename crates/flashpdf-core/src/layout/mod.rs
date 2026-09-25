@@ -17,7 +17,7 @@ pub(crate) enum LayoutError {
     UnknownFont(FontId),
     InvalidFontSize,
     UnsupportedCharacter(char),
-    MissingGlyph,
+    MissingGlyph(char),
     TextTooWide,
     InvalidBox,
     InvalidColumnWidth,
@@ -30,7 +30,7 @@ impl From<LayoutError> for RenderError {
         match error {
             LayoutError::InvalidFontSize => Self::InvalidFontSize,
             LayoutError::UnsupportedCharacter(character) => Self::UnsupportedCharacter(character),
-            LayoutError::MissingGlyph => Self::MissingGlyph,
+            LayoutError::MissingGlyph(character) => Self::MissingGlyph(character),
             LayoutError::TextTooWide => Self::TextTooWide,
             LayoutError::InvalidWidth
             | LayoutError::UnknownFont(_)

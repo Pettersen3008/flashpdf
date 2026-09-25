@@ -150,9 +150,12 @@ fn given_mutated_fonts_when_parsing_and_rendering_then_never_panics() {
     for round in 0..3000 {
         let mut bytes = original.to_vec();
         rng.mutate(&mut bytes);
-        let Ok(font) = super::EmbeddedFont::parse(bytes) else {
+        let Ok(mut font) = super::EmbeddedFont::parse(bytes) else {
             continue;
         };
+        // Subsetting walks glyf/loca, which parsing does not validate; every round covers it.
+        font.used.extend([1, 7, 40, 200]);
+        let _ = font.program();
         // Deflating the font program dominates debug time; one in ten covers pdf.rs.
         if round % 10 != 0 {
             continue;
@@ -645,12 +648,8 @@ fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint
 #[test]
 fn given_bold_helvetica_when_measuring_then_uses_bold_widths() {
     assert_ne!(
-        super::font::Font::Helvetica { bold: false }
-            .width(b'A')
-            .unwrap(),
-        super::font::Font::Helvetica { bold: true }
-            .width(b'A')
-            .unwrap(),
+        super::font::Font::Helvetica { bold: false }.advance(b"A"),
+        super::font::Font::Helvetica { bold: true }.advance(b"A"),
     );
 }
 
@@ -741,5 +740,89 @@ fn given_invalid_containers_when_measured_then_rejects() {
     assert_eq!(
         super::render(page(), &deep),
         Err(RenderError::InvalidLayout)
+    );
+}
+
+const ABEL: &[u8] = include_bytes!("../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
+
+fn abel_text(text: &str) -> Result<Vec<u8>, RenderError> {
+    let font = super::EmbeddedFont::parse(ABEL.to_vec()).unwrap();
+    let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
+    renderer.push(&[Command::Text {
+        text,
+        style: TextStyle {
+            font: super::FontId::new(2),
+            ..TextStyle::plain(Pt(12.0))
+        },
+    }])?;
+    Ok(renderer.finish())
+}
+
+#[test]
+fn given_abel_and_text_outside_winansi_when_rendered_then_emits_a_subset_type0_font_whose_text_round_trips(
+) {
+    let text = "Ærø – 3 € ł";
+    let bytes = abel_text(text).unwrap();
+    assert_eq!(bytes, abel_text(text).unwrap());
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), text);
+    let page = *pdf.get_pages().values().next().unwrap();
+    let font = &pdf.get_page_fonts(page).unwrap()[b"F3".as_slice()];
+    assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
+    assert_eq!(
+        font.get(b"Encoding").unwrap().as_name().unwrap(),
+        b"Identity-H"
+    );
+    let base_font = font.get(b"BaseFont").unwrap().as_name().unwrap();
+    assert!(
+        base_font.len() == 19 && base_font.ends_with(b"+Abel-Regular"),
+        "{}",
+        String::from_utf8_lossy(base_font)
+    );
+    assert!(font.get(b"ToUnicode").unwrap().as_reference().is_ok());
+    let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]
+        .as_reference()
+        .unwrap();
+    let descendant = pdf.get_dictionary(descendant).unwrap();
+    assert_eq!(
+        descendant.get(b"Subtype").unwrap().as_name().unwrap(),
+        b"CIDFontType2"
+    );
+    assert_eq!(
+        descendant.get(b"CIDToGIDMap").unwrap().as_name().unwrap(),
+        b"Identity"
+    );
+    // Ten distinct glyphs: one `/W` group per run of consecutive ids, each a start and an array.
+    let widths = descendant.get(b"W").unwrap().as_array().unwrap();
+    assert!(
+        widths.len().is_multiple_of(2) && widths.len() <= 20,
+        "{widths:?}"
+    );
+    let descriptor = descendant
+        .get(b"FontDescriptor")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let file = pdf
+        .get_dictionary(descriptor)
+        .unwrap()
+        .get(b"FontFile2")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let file = pdf.get_object(file).unwrap().as_stream().unwrap();
+    let program = file.decompressed_content().unwrap();
+    assert_eq!(
+        file.dict.get(b"Length1").unwrap().as_i64().unwrap(),
+        program.len() as i64
+    );
+    assert!(program.len() < ABEL.len() / 3, "{}", program.len());
+}
+
+#[test]
+fn given_a_character_abel_lacks_when_rendered_then_rejects_naming_it() {
+    assert_eq!(
+        abel_text("\u{4e2d}").unwrap_err(),
+        RenderError::MissingGlyph('\u{4e2d}')
     );
 }

@@ -5,7 +5,6 @@ use crate::font::{Font, FontBook};
 use crate::geometry::{LayoutArea, Point};
 use crate::layout::output::{LayoutBuffer, PositionedLine, Segment};
 use crate::layout::LayoutError;
-use crate::win_ansi::encode;
 use crate::{FontId, Pt, RenderError, Rgb, TextAlign};
 
 struct RunMetrics<'a> {
@@ -18,9 +17,18 @@ struct RunMetrics<'a> {
 }
 
 impl RunMetrics<'_> {
-    fn glyph(&self, byte: u8) -> Result<Pt, LayoutError> {
-        let width = self.font.width(byte).map_err(text_error)?;
-        Ok(Pt(f32::from(width) * self.size.get() / 1000.0))
+    fn scaled(&self, advance: u16) -> Pt {
+        Pt(f32::from(advance) * self.size.get() / 1000.0)
+    }
+
+    /// Appends the character's show-string code and returns its advance.
+    fn encode(&self, character: char, out: &mut Vec<u8>) -> Result<Pt, LayoutError> {
+        let advance = self.font.encode_into(character, out).map_err(text_error)?;
+        Ok(self.scaled(advance))
+    }
+
+    fn advance(&self, code: &[u8]) -> Pt {
+        self.scaled(self.font.advance(code))
     }
 }
 
@@ -33,9 +41,17 @@ struct Piece {
     width: Pt,
 }
 
+/// The collapsed space before the pending word: its run, encoded bytes and width.
+struct Space {
+    run: usize,
+    text: Range<usize>,
+    width: Pt,
+}
+
 /// Greedy word wrap over runs. Words are ASCII-whitespace delimited and may
 /// span runs; whitespace collapses to one space owned by the run it first
-/// appears in, and lines trim it at both ends.
+/// appears in, and lines trim it at both ends. CJK characters are words of
+/// their own, so unspaced ideographic text breaks between any two of them.
 pub(crate) struct ParagraphLayouter<'a> {
     runs: Vec<RunMetrics<'a>>,
     align: TextAlign,
@@ -47,8 +63,7 @@ pub(crate) struct ParagraphLayouter<'a> {
     line_height: Pt,
     has_word: bool,
     pieces: Vec<Piece>,
-    /// Run and byte position of the collapsed space before the pending word.
-    space: Option<(usize, usize)>,
+    space: Option<Space>,
 }
 
 impl<'a> ParagraphLayouter<'a> {
@@ -125,22 +140,35 @@ impl<'a> ParagraphLayouter<'a> {
                 self.pieces.extend(piece.take());
                 self.word(output)?;
                 if self.has_word && self.space.is_none() {
-                    self.space = Some((index, output.text.len()));
-                    output.text.push(b' ');
+                    let start = output.text.len();
+                    let width = self.runs[index].encode(' ', &mut output.text)?;
+                    self.space = Some(Space {
+                        run: index,
+                        text: start..output.text.len(),
+                        width,
+                    });
                 }
                 continue;
             }
-            let byte = encode(character).map_err(text_error)?;
-            let width = self.runs[index].glyph(byte)?;
-            output.text.push(byte);
-            let piece = piece.get_or_insert(Piece {
+            let ideograph = ideograph(character);
+            if ideograph {
+                self.pieces.extend(piece.take());
+                self.word(output)?;
+            }
+            let start = output.text.len();
+            let width = self.runs[index].encode(character, &mut output.text)?;
+            let slot = piece.get_or_insert(Piece {
                 run: index,
-                start: output.text.len() - 1,
-                end: output.text.len() - 1,
+                start,
+                end: start,
                 width: Pt::ZERO,
             });
-            piece.end += 1;
-            piece.width += width;
+            slot.end = output.text.len();
+            slot.width += width;
+            if ideograph {
+                self.pieces.extend(piece.take());
+                self.word(output)?;
+            }
         }
         self.pieces.extend(piece);
         Ok(())
@@ -162,25 +190,27 @@ impl<'a> ParagraphLayouter<'a> {
                 self.push_line(output);
             }
             for piece in &pieces {
-                for position in piece.start..piece.end {
-                    let glyph = self.runs[piece.run].glyph(output.text[position])?;
+                let stride = self.runs[piece.run].font.stride();
+                let mut position = piece.start;
+                while position < piece.end {
+                    let code = position..position + stride;
+                    let glyph = self.runs[piece.run].advance(&output.text[code.clone()]);
                     if glyph > self.area.width {
                         return Err(LayoutError::TextTooWide);
                     }
                     if self.used + glyph > self.area.width {
                         self.push_line(output);
                     }
-                    self.append(piece.run, position..position + 1, glyph, output);
+                    self.append(piece.run, code, glyph, output);
+                    position += stride;
                 }
             }
         } else {
-            if let Some((run, position)) = space {
-                let space_width = self.runs[run].glyph(b' ')?;
-                if self.used + space_width + width > self.area.width {
-                    self.push_line(output);
-                } else {
-                    self.append(run, position..position + 1, space_width, output);
-                }
+            let gap = space.as_ref().map_or(Pt::ZERO, |space| space.width);
+            if self.has_word && self.used + gap + width > self.area.width {
+                self.push_line(output);
+            } else if let Some(space) = space {
+                self.append(space.run, space.text, space.width, output);
             }
             for piece in &pieces {
                 self.append(piece.run, piece.start..piece.end, piece.width, output);
@@ -253,12 +283,45 @@ impl<'a> ParagraphLayouter<'a> {
     }
 }
 
+/// A line may break before and after these: CJK scripts do not separate words
+/// with spaces. Covers the ideographic space and CJK punctuation, kana, Hangul,
+/// the unified ideographs with their extensions, and the full-width forms.
+/// ponytail: no kinsoku, so a line may start with a closing bracket or full stop.
+fn ideograph(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3000..=0x30ff
+            | 0x3400..=0x4dbf
+            | 0x4e00..=0x9fff
+            | 0xac00..=0xd7af
+            | 0xf900..=0xfaff
+            | 0xff00..=0xffef
+            | 0x20000..=0x3134f
+    )
+}
+
 fn text_error(error: RenderError) -> LayoutError {
     match error {
         RenderError::UnsupportedCharacter(character) => {
             LayoutError::UnsupportedCharacter(character)
         }
-        RenderError::MissingGlyph => LayoutError::MissingGlyph,
+        RenderError::MissingGlyph(character) => LayoutError::MissingGlyph(character),
         _ => unreachable!("text primitives return only character and glyph errors"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ideograph;
+
+    #[test]
+    fn given_cjk_and_latin_code_points_when_asked_for_break_opportunities_then_only_cjk_break_anywhere(
+    ) {
+        for character in ['中', 'あ', 'カ', '한', '\u{3000}', '。', '\u{20000}'] {
+            assert!(ideograph(character), "{character:?}");
+        }
+        for character in ['a', 'Æ', 'α', 'Д', '\u{a0}', '-', '\u{2013}'] {
+            assert!(!ideograph(character), "{character:?}");
+        }
     }
 }

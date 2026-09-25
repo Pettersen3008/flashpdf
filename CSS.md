@@ -70,7 +70,7 @@ Normal block children stream independently, so long `<main>` documents paginate 
 ## Intentional v1 limits
 
 - Helvetica and Helvetica-Bold are the fallback. Registered host-provided TTF families support regular and optional bold files. Italic/other faces, OpenType features, shaping, `line-height` (fixed to the font's ascent, descent, and line gap), letter-spacing, and text decoration reject.
-- Text remains Latin/WinAnsi. Unsupported Unicode characters reject even when the embedded TTF contains them.
+- Text in an embedded TTF renders any character the font has a glyph for, including CJK and supplementary-plane characters; a character without a glyph rejects, naming it and its code point. There is no shaping, kerning, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and right-to-left text comes out in logical order. Helvetica and Helvetica-Bold stay WinAnsi standard fonts, so non-Latin text needs an embedded font. Lines break at ASCII whitespace and between CJK characters; U+00A0 does not break.
 - No image component yet. Hosts must keep logos outside the generated PDF until a bounded image-byte protocol lands.
 - No border radius, gradients, `height`, `min-width`, or `max-width`. `border-top`, `border-right`, `border-bottom`, and `border-left` accept the same solid syntax as `border`; `<hr>` renders a one-point bottom rule.
 - `gap` on a flex row rejects. Use a fixed-width spacer column.

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Unicode text through embedded fonts: any character the TTF has a glyph for renders, including CJK and supplementary-plane characters (cmap formats 4 and 12), as a Type0/CIDFontType2 font with `Identity-H` and a `ToUnicode` map. Lines break between CJK characters as well as at ASCII whitespace. A character without a glyph rejects naming it, its code point, and the element. No shaping, kerning, ligatures, or bidi.
 - Tables: `table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, and `td`. Columns come from the first row's `width`/`flex`, rows split across pages with the `thead` repainted on every continuation page, cells stretch to the row height, `th` is bold, and `tr` takes a background. `colSpan`, `rowSpan`, `vertical-align`, `border-collapse`, and `border-spacing` reject with a reason; mismatched cell counts and a row taller than a page reject naming the `tr`.
 - Inline rich text: `span`, `b`, and `strong` inside a paragraph become runs that wrap together, each with its own font, weight, size, and colour, and `br` forces a line break.
 - Long paragraphs and unpainted boxes split across pages line by line instead of failing with `PageOverflow`. Decorated boxes, rows, and `break-inside: avoid` groups still move whole.
@@ -22,6 +23,8 @@
 
 ### Changed
 
+- Embedded font programs are subset to the glyphs a document uses. Glyph ids are kept, unused outlines drop out, `cmap` and `OS/2` are omitted, and `/BaseFont` carries a deterministic six-letter subset tag.
+- The TypeScript and protocol boundaries reject only control characters, lone surrogates, and page tokens outside a footer. Whether a printable character renders is decided per font at layout; Helvetica and Helvetica-Bold still reject characters outside WinAnsi.
 - Flex-row cells stretch to the row height, so a shorter cell's background and borders now cover the whole row.
 - The binary protocol adds `TableStart`/`TableEnd` records and moves to version 4.
 - Styled spans no longer break the paragraph. A span keeps its own line only when it has box properties, `width`, `flex`, or its own `text-align`. The binary protocol replaces the `Text` and `StyledText` records with one `Paragraph` record and moves to version 3.
@@ -40,6 +43,7 @@
 
 ### Fixed
 
+- Fonts whose `cmap` has only a format 12 (platform 3, encoding 10) subtable are accepted instead of rejected as unsupported.
 - FontFile2 streams declare `/Length1`. Fonts with a positive descender are rejected, and degenerate hhea metrics fall back to OS/2 typo metrics when `USE_TYPO_METRICS` is set.
 - Control characters and page-number tokens in body text are rejected at decode time.
 - Node loading no longer uses a variable dynamic import, which removes webpack and Next.js critical-dependency warnings.

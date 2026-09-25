@@ -1,6 +1,6 @@
-use pdf_writer::{types::FontFlags, Content, Filter, Finish, Name, Pdf, Rect, Ref};
+use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 
-use crate::font::{font_name, Font};
+use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
 use crate::{FontId, Page, HELVETICA_BOLD};
 
 pub(crate) fn finish_pdf(
@@ -40,6 +40,8 @@ pub(crate) fn finish_pdf(
         font: Ref,
         descriptor: Option<Ref>,
         file: Option<Ref>,
+        descendant: Option<Ref>,
+        to_unicode: Option<Ref>,
     }
     let font_refs: Vec<_> = used
         .iter()
@@ -51,6 +53,8 @@ pub(crate) fn finish_pdf(
                 font,
                 descriptor: embedded.then(&mut allocate),
                 file: embedded.then(&mut allocate),
+                descendant: embedded.then(&mut allocate),
+                to_unicode: embedded.then(&mut allocate),
             }
         })
         .collect();
@@ -72,38 +76,17 @@ pub(crate) fn finish_pdf(
                     }))
                     .encoding_predefined(Name(b"WinAnsiEncoding"));
             }
-            Font::Embedded(font) => {
-                let name = &font.name;
-                let mut output = pdf.indirect(refs.font).dict();
-                output.pair(Name(b"Type"), Name(b"Font"));
-                output.pair(Name(b"Subtype"), Name(b"TrueType"));
-                output.pair(Name(b"BaseFont"), Name(name.as_bytes()));
-                output.pair(Name(b"FirstChar"), 32);
-                output.pair(Name(b"LastChar"), 255);
-                output.insert(Name(b"Widths")).array().items(
-                    font.widths
-                        .iter()
-                        .map(|width| i32::from(width.unwrap_or(0))),
-                );
-                output.pair(Name(b"FontDescriptor"), refs.descriptor.unwrap());
-                output.pair(Name(b"Encoding"), Name(b"WinAnsiEncoding"));
-                output.finish();
-
-                pdf.font_descriptor(refs.descriptor.unwrap())
-                    .name(Name(name.as_bytes()))
-                    .flags(FontFlags::NON_SYMBOLIC)
-                    .bbox(font.bbox)
-                    .italic_angle(0.0)
-                    .ascent(font.ascent)
-                    .descent(font.descent)
-                    .cap_height(font.cap_height)
-                    .stem_v(font.stem_v)
-                    .font_file2(refs.file.unwrap());
-                pdf.stream(refs.file.unwrap(), &deflate(&font.bytes))
-                    .filter(Filter::FlateDecode)
-                    .pair(Name(b"Length1"), font.bytes.len() as i32)
-                    .finish();
-            }
+            Font::Embedded(font) => write_embedded(
+                &mut pdf,
+                EmbeddedRefs {
+                    font: refs.font,
+                    descendant: refs.descendant.unwrap(),
+                    descriptor: refs.descriptor.unwrap(),
+                    file: refs.file.unwrap(),
+                    to_unicode: refs.to_unicode.unwrap(),
+                },
+                font,
+            ),
         }
     }
     drop(fonts);

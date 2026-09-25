@@ -74,7 +74,12 @@ export class Binary {
 				this.input = new Uint8Array(this.memory.buffer, this.inputPtr, this.inputCapacity);
 			const chunk = this.bytes.subarray(offset, Math.min(offset + this.inputCapacity, this.offset));
 			this.input.set(chunk);
-			this.renderer.push(chunk.length);
+			try {
+				this.renderer.push(chunk.length);
+			} catch (error) {
+				// wasm-bindgen throws the core's message as a bare string; callers match on `.message`.
+				throw error instanceof Error ? error : new Error(String(error));
+			}
 		}
 		this.offset = 0;
 	}

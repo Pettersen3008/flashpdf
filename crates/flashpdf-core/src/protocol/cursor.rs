@@ -58,7 +58,7 @@ impl<'a> Cursor<'a> {
     pub(super) fn text(&mut self, footer: bool) -> Result<&'a str, ProtocolError> {
         let text = self.utf8_text()?;
         if !valid(text, footer) {
-            return Err(ProtocolError::UnsupportedWinAnsi);
+            return Err(ProtocolError::ControlCharacter);
         }
         Ok(text)
     }
