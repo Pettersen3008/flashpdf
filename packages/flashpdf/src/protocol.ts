@@ -24,6 +24,8 @@ const opcode = {
 	rowEnd: 6,
 	pageBreak: 7,
 	footer: 8,
+	header: 13,
+	metadata: 14,
 	paragraph: 9,
 	tableStart: 10,
 	tableEnd: 11,
@@ -34,8 +36,8 @@ const opcode = {
 } as const;
 
 export class ProtocolWriter {
-	private footer = false;
-	private footerWritten = false;
+	private repeating: "header" | "footer" | undefined;
+	private repeatWritten = false;
 	/** Slot per registered byte array, so a logo reused on every row embeds once. */
 	private readonly images = new Map<Uint8Array, number>();
 
@@ -48,16 +50,24 @@ export class ProtocolWriter {
 		this.binary.header(width, height, margin);
 	}
 
+	metadata(value: Record<string, unknown>, tagged: boolean) {
+		this.binary.record(opcode.metadata, () => {
+			this.binary.u8(tagged ? 1 : 0);
+			for (const key of ["title", "author", "subject", "keywords", "language"])
+				this.binary.text((value[key] as string | undefined) ?? "");
+		});
+	}
+
 	paragraph(runs: readonly Run[], align: string) {
 		const alignment = align === "center" ? 1 : align === "right" ? 2 : 0;
-		if (this.footer) {
+		if (this.repeating) {
 			const [only] = runs;
-			if (this.footerWritten || runs.length !== 1 || only!.break)
-				throw new Error("footer must be a single text line");
+			if (this.repeatWritten || runs.length !== 1 || only!.break)
+				throw new Error(`${this.repeating} must be a single text line`);
 			if (only!.underline || only!.lineThrough || only!.link !== undefined)
-				throw new Error("footer text cannot be underlined or linked");
-			this.footerWritten = true;
-			this.binary.record(opcode.footer, () => {
+				throw new Error(`${this.repeating} text cannot be underlined or linked`);
+			this.repeatWritten = true;
+			this.binary.record(opcode[this.repeating], () => {
 				this.binary.f32(only!.size);
 				this.binary.u8(alignment);
 				for (const channel of only!.color) this.binary.u8(channel);
@@ -187,14 +197,14 @@ export class ProtocolWriter {
 		this.binary.record(opcode.pageBreak);
 	}
 
-	footerStart() {
-		this.footer = true;
-		this.footerWritten = false;
+	repeatStart(position: "header" | "footer") {
+		this.repeating = position;
+		this.repeatWritten = false;
 	}
 
-	footerEnd() {
-		if (!this.footerWritten) throw new Error("footer must be a single text line");
-		this.footer = false;
+	repeatEnd() {
+		if (!this.repeatWritten) throw new Error(`${this.repeating} must be a single text line`);
+		this.repeating = undefined;
 	}
 
 	boxStart(box: Box) {
@@ -219,6 +229,6 @@ export class ProtocolWriter {
 	}
 
 	private body() {
-		if (this.footer) throw new Error("footer must be a single text line");
+		if (this.repeating) throw new Error(`${this.repeating} must be a single text line`);
 	}
 }

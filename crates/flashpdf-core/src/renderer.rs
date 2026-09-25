@@ -6,8 +6,8 @@ use crate::font::{EmbeddedFont, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout};
 use crate::image::Image;
 use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
-use crate::paint::{PageLink, PdfPainter};
-use crate::pdf::finish_pdf;
+use crate::paint::{PageLink, PageTag, PdfPainter};
+use crate::pdf::{finish_pdf, Metadata};
 use crate::{Command, Page, Pt, RenderError, TextStyle};
 
 /// Total content-stream bytes a document may paint before `finish`.
@@ -30,9 +30,13 @@ pub struct Renderer {
     used_images: Vec<bool>,
     /// Link annotations per page, parallel to `contents`.
     links: Vec<Vec<PageLink>>,
+    tags: Vec<Vec<PageTag>>,
     layout: LayoutBuffer,
     footer: Option<Footer>,
     footer_height: crate::Pt,
+    header: Option<Footer>,
+    header_height: crate::Pt,
+    metadata: Metadata,
 }
 
 struct Footer {
@@ -57,9 +61,13 @@ impl Renderer {
             images: Vec::new(),
             used_images: Vec::new(),
             links: vec![Vec::new()],
+            tags: vec![Vec::new()],
             layout: LayoutBuffer::default(),
             footer: None,
             footer_height: crate::Pt::ZERO,
+            header: None,
+            header_height: crate::Pt::ZERO,
+            metadata: Metadata::default(),
         }
     }
 
@@ -109,6 +117,9 @@ impl Renderer {
         template: String,
         style: TextStyle,
     ) -> Result<(), RenderError> {
+        if self.footer.is_some() {
+            return Err(RenderError::InvalidLayout);
+        }
         let font = self
             .fonts
             .get(style.font)
@@ -132,7 +143,7 @@ impl Renderer {
         let scale = style.size.get() / 1000.0;
         let ascent = Pt(ascent * scale);
         let height = Pt((ascent.get() - descent * scale + gap * scale).max(0.0));
-        self.page.validate_block(height)?;
+        self.page.validate_block(height + self.header_height)?;
         self.fonts.mark_used(style.font, &[]);
         self.footer_height = height;
         self.footer = Some(Footer {
@@ -141,6 +152,52 @@ impl Renderer {
             baseline: height - ascent,
         });
         Ok(())
+    }
+
+    pub(crate) fn set_header(
+        &mut self,
+        template: String,
+        style: TextStyle,
+    ) -> Result<(), RenderError> {
+        if self.header.is_some() {
+            return Err(RenderError::InvalidLayout);
+        }
+        let font = self
+            .fonts
+            .get(style.font)
+            .ok_or(RenderError::InvalidLayout)?;
+        let mut digit = '0';
+        let mut width = 0;
+        let mut scratch = Vec::new();
+        for candidate in '0'..='9' {
+            let candidate_width = font.encode_into(candidate, &mut scratch)?;
+            if candidate_width > width {
+                digit = candidate;
+                width = candidate_width;
+            }
+        }
+        let placeholder = digit.to_string().repeat(10);
+        let (_, text_width) = footer_line(&template, &placeholder, &placeholder, font, style)?;
+        if text_width > self.page.content_width() {
+            return Err(RenderError::TextTooWide);
+        }
+        let (ascent, descent, gap) = font.metrics();
+        let scale = style.size.get() / 1000.0;
+        let height = Pt(((ascent - descent + gap) * scale).max(0.0));
+        self.page.validate_block(height + self.footer_height)?;
+        self.fonts.mark_used(style.font, &[]);
+        self.header_height = height;
+        self.cursor.advance(height);
+        self.header = Some(Footer {
+            template,
+            style,
+            baseline: Pt(ascent * scale),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn set_metadata(&mut self, metadata: Metadata) {
+        self.metadata = metadata;
     }
 
     fn push_document(&mut self, document: &Document<'_>) -> Result<(), RenderError> {
@@ -298,6 +355,7 @@ impl Renderer {
         PdfPainter::new(
             self.contents.last_mut().unwrap(),
             self.links.last_mut().unwrap(),
+            self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
         )
     }
 
@@ -305,10 +363,47 @@ impl Renderer {
         self.content_bytes += self.contents.last().unwrap().len();
         self.contents.push(Content::new());
         self.links.push(Vec::new());
+        self.tags.push(Vec::new());
         self.cursor.reset(self.page);
+        self.cursor.advance(self.header_height);
     }
 
     pub fn finish(mut self) -> Vec<u8> {
+        if let Some(header) = self.header.take() {
+            let total = self.contents.len() as i32;
+            for (index, (content, links)) in
+                self.contents.iter_mut().zip(&mut self.links).enumerate()
+            {
+                let mut page_buffer = itoa::Buffer::new();
+                let mut total_buffer = itoa::Buffer::new();
+                let font = self.fonts.get(header.style.font).unwrap();
+                let (text, width) = footer_line(
+                    &header.template,
+                    page_buffer.format(index as i32 + 1),
+                    total_buffer.format(total),
+                    font,
+                    header.style,
+                )
+                .unwrap();
+                self.fonts.mark_used(header.style.font, &text);
+                if self.metadata.tagged {
+                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                }
+                PdfPainter::new(content, links, None).paint_line(
+                    &text,
+                    header.style,
+                    crate::geometry::Point {
+                        x: self.page.margin(),
+                        y: self.page.top() - header.baseline,
+                    },
+                    self.page.content_width(),
+                    width,
+                );
+                if self.metadata.tagged {
+                    content.end_marked_content();
+                }
+            }
+        }
         if let Some(footer) = self.footer.take() {
             let total = self.contents.len() as i32;
             for (index, (content, links)) in
@@ -328,7 +423,10 @@ impl Renderer {
                 )
                 .unwrap();
                 self.fonts.mark_used(footer.style.font, &text);
-                PdfPainter::new(content, links).paint_line(
+                if self.metadata.tagged {
+                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                }
+                PdfPainter::new(content, links, None).paint_line(
                     &text,
                     footer.style,
                     crate::geometry::Point {
@@ -338,6 +436,9 @@ impl Renderer {
                     self.page.content_width(),
                     text_width,
                 );
+                if self.metadata.tagged {
+                    content.end_marked_content();
+                }
             }
         }
         let (fonts, used) = self.fonts.into_parts();
@@ -349,6 +450,8 @@ impl Renderer {
             self.images,
             self.used_images,
             self.links,
+            self.tags,
+            self.metadata,
         )
     }
 }

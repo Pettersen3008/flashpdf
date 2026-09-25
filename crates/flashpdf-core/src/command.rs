@@ -47,6 +47,7 @@ pub enum Command<'a> {
         width: ImageSize,
         height: Option<Pt>,
         link: Option<&'a str>,
+        alt: &'a str,
     },
 }
 
@@ -69,7 +70,7 @@ pub(crate) enum OwnedCommand {
     RowEnd,
     TableStart(u16, ColumnWidth),
     TableEnd,
-    Image(u16, ImageSize, Option<Pt>, Option<String>),
+    Image(u16, ImageSize, Option<Pt>, Option<String>, String),
 }
 
 impl OwnedCommand {
@@ -93,11 +94,12 @@ impl OwnedCommand {
                 width: *width,
             },
             Self::TableEnd => Command::TableEnd,
-            Self::Image(slot, width, height, link) => Command::Image {
+            Self::Image(slot, width, height, link, alt) => Command::Image {
                 slot: *slot,
                 width: *width,
                 height: *height,
                 link: link.as_deref(),
+                alt,
             },
         }
     }
@@ -204,11 +206,13 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 width,
                 height,
                 link,
+                alt,
             } => Ok(Element::Image(ImageNode {
                 slot,
                 width,
                 height,
                 link,
+                alt,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::BoxStart { style } => {

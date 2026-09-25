@@ -26,7 +26,7 @@ const MAX_RECORD: usize = 64 * 1024;
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 5;
+const VERSION: u16 = 6;
 
 #[derive(Default)]
 pub struct Decoder {
@@ -41,6 +41,8 @@ pub struct Decoder {
     /// Images registered before the renderer exists; later ones go straight to it.
     images: Vec<crate::Image>,
     image_bytes: usize,
+    metadata: Option<crate::pdf::Metadata>,
+    body_started: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -197,17 +199,18 @@ impl Decoder {
                 if !self.frames.is_empty() {
                     return Err(ProtocolError::InvalidNesting);
                 }
+                self.body_started = true;
                 self.ensure_renderer()?.page_break();
                 Ok(())
             }
-            Opcode::Footer => {
+            Opcode::Footer | Opcode::Header => {
                 let size = pt(cursor.positive_f32("font size")?)?;
                 let align = cursor.align()?;
                 let color = cursor.rgb()?;
                 let font = self.font(cursor.take(1)?[0])?;
                 let text = cursor.text(true)?.to_owned();
                 cursor.done()?;
-                if self.renderer.is_some() || !self.frames.is_empty() {
+                if self.body_started || !self.frames.is_empty() {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 let style = TextStyle {
@@ -216,9 +219,43 @@ impl Decoder {
                     color,
                     font,
                 };
-                self.ensure_renderer()?
-                    .set_footer(text, style)
-                    .map_err(ProtocolError::from)
+                let renderer = self.ensure_renderer()?;
+                if matches!(opcode, Opcode::Header) {
+                    renderer.set_header(text, style)
+                } else {
+                    renderer.set_footer(text, style)
+                }
+                .map_err(ProtocolError::from)
+            }
+            Opcode::Metadata => {
+                let tagged = match cursor.take(1)?[0] {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(ProtocolError::InvalidValue("tagged flag")),
+                };
+                let fields = (0..5)
+                    .map(|_| cursor.alt().map(str::to_owned))
+                    .collect::<Result<Vec<_>, _>>()?;
+                cursor.done()?;
+                if self.renderer.is_some() || !self.frames.is_empty() {
+                    return Err(ProtocolError::InvalidNesting);
+                }
+                let metadata = crate::pdf::Metadata {
+                    title: fields[0].clone(),
+                    author: fields[1].clone(),
+                    subject: fields[2].clone(),
+                    keywords: fields[3].clone(),
+                    language: fields[4].clone(),
+                    tagged,
+                };
+                if tagged && metadata.language.is_empty() {
+                    return Err(ProtocolError::InvalidValue("metadata language"));
+                }
+                if !metadata.language.is_empty() && !valid_language(&metadata.language) {
+                    return Err(ProtocolError::InvalidValue("metadata language"));
+                }
+                self.metadata = Some(metadata);
+                Ok(())
             }
             Opcode::Paragraph => {
                 let align = cursor.align()?;
@@ -279,10 +316,9 @@ impl Decoder {
                     1 => Some(cursor.uri()?.to_owned()),
                     _ => return Err(ProtocolError::InvalidValue("image link flag")),
                 };
-                // Alt text rides in the record for a future tagged-PDF pass; nothing reads it yet.
-                cursor.alt()?;
+                let alt = cursor.alt()?.to_owned();
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Image(slot, width, height, link))
+                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -371,6 +407,9 @@ impl Decoder {
             for image in std::mem::take(&mut self.images) {
                 renderer.add_image(image);
             }
+            if let Some(metadata) = self.metadata.take() {
+                renderer.set_metadata(metadata);
+            }
             self.renderer = Some(renderer);
         }
         Ok(self.renderer.as_mut().unwrap())
@@ -387,7 +426,9 @@ impl Decoder {
                         .sum::<usize>()
             }
             OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
-            OwnedCommand::Image(_, _, _, link) => link.as_ref().map_or(0, String::len),
+            OwnedCommand::Image(_, _, _, link, alt) => {
+                link.as_ref().map_or(0, String::len) + alt.len()
+            }
             _ => 0,
         };
         self.block_bytes += payload + size_of::<OwnedCommand>();
@@ -399,6 +440,7 @@ impl Decoder {
     }
 
     fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
+        self.body_started = true;
         self.push_command(command)?;
         self.complete_child()?;
         if self.frames.is_empty() {
@@ -408,6 +450,7 @@ impl Decoder {
     }
 
     fn open(&mut self, frame: Frame, command: OwnedCommand) -> Result<(), ProtocolError> {
+        self.body_started = true;
         if self.frames.len() >= MAX_LAYOUT_DEPTH {
             return Err(ProtocolError::NestingTooDeep);
         }
@@ -461,4 +504,13 @@ impl Decoder {
             .map(crate::Renderer::finish)
             .ok_or(ProtocolError::EmptyDocument)
     }
+}
+
+fn valid_language(value: &str) -> bool {
+    let mut parts = value.split('-');
+    parts.next().is_some_and(|part| {
+        (2..=8).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_alphabetic())
+    }) && parts.all(|part| {
+        (1..=8).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
 }

@@ -210,6 +210,7 @@ impl<'a> LayoutEngine<'a> {
             height: Pt(height),
             slot: node.slot,
             link,
+            alt: node.alt.to_owned(),
             line,
         });
         Ok(Pt(height))

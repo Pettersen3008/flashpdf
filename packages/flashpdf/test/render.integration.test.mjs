@@ -199,8 +199,69 @@ test("given a page footer, when rendering multiple pages, then repeats resolved 
 	assert.match(string(pdf), /\(Page 2 of 2\)/);
 	await assert.rejects(
 		render(jsx("main", { children: jsx(PageNumber, {}) })),
-		/only valid in a footer/,
+		/only valid in a header or footer/,
 	);
+});
+
+test("given a repeating header and tagged metadata, when rendering two pages, then writes page furniture and a structure tree", async () => {
+	const logo = png(1, 1, 2, [0, 255, 0, 0]);
+	const document = jsxs("main", {
+		children: [
+			jsx("img", { src: logo, alt: "Company logo", style: { width: 12 } }),
+			...Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+		],
+	});
+	const header = jsxs("header", {
+		children: ["Report ", jsx(PageNumber, {}), " of ", jsx(TotalPages, {})],
+	});
+	const pdf = await render(document, {
+		header,
+		metadata: { title: "Invoice", author: "Acme", language: "en-US" },
+		tagged: true,
+	});
+	const output = string(pdf);
+	assert.match(output, /\(Report 1 of 2\)/);
+	assert.match(output, /\(Report 2 of 2\)/);
+	for (const part of [
+		"/StructTreeRoot",
+		"/ParentTree",
+		"/StructParents",
+		"/MCID 0",
+		"/S /Figure",
+		"/Alt (Company logo)",
+		"/Lang (en-US)",
+		"/Title (Invoice)",
+		"/Author (Acme)",
+	])
+		assert.ok(output.includes(part), part);
+	const path = new URL("../../../dist/tagged.pdf", import.meta.url);
+	writeFileSync(path, pdf);
+	const parsed = spawnSync(
+		"cargo",
+		[
+			"run",
+			"--locked",
+			"-q",
+			"-p",
+			"flashpdf-core",
+			"--example",
+			"validate_pdf",
+			"--",
+			path.pathname,
+			"2",
+		],
+		{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+	);
+	assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+	assert.deepEqual(
+		pdf,
+		await render(document, {
+			header,
+			metadata: { title: "Invoice", author: "Acme", language: "en-US" },
+			tagged: true,
+		}),
+	);
+	await assert.rejects(render(document, { tagged: true }), /requires metadata.language/);
 });
 
 test("given adjacent text and plain spans, when rendering, then keeps them in one inline run", async () => {

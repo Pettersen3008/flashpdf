@@ -1,6 +1,6 @@
 # FlashPDF
 
-Render native JSX and a static CSS subset to a PDF. The layout engine is Rust compiled to WebAssembly, so the same code produces the same bytes in a browser, in Node, and in Bun.
+Render invoices and reports from native JSX and a static CSS subset. A Rust layout engine compiled to WebAssembly produces the same PDF bytes in browsers, Node, and Bun. FlashPDF runs without React or a browser DOM; it does not lay out arbitrary HTML or CSS.
 
 ## Quickstart
 
@@ -26,7 +26,7 @@ const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', ma
 
 ## Playground
 
-The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX template and a stylesheet to a PDF in the browser, with FlashPDF's validation errors shown in full. Run it locally with `pnpm playground`, share a template through the URL hash, and upload a `.ttf` to test embedded fonts. It deploys to GitHub Pages from `main` and lives in [`packages/playground`](./packages/playground).
+The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX template and a stylesheet to a PDF in the browser, with FlashPDF's validation errors shown in full. Run it locally with `pnpm playground`, share a template through the URL hash, and upload a `.ttf` to test embedded fonts. Export `{ document, options }` from the TSX editor to pass render options; the CSS editor and font uploader supply the default `stylesheets` and `fonts`. It deploys to GitHub Pages from `main` and lives in [`packages/playground`](./packages/playground).
 
 ## Tables
 
@@ -55,7 +55,7 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 
 ## Images and links
 
-`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. `alt` is stored for accessibility tagging.
+`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
 
 ```tsx
 const logo = new Uint8Array(await readFile('logo.png'));
@@ -106,18 +106,23 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | --- | --- | --- |
 | `render` | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
-| `PageNumber` | `() => Element` | Resolves to the current page number inside `RenderOptions.footer`. |
-| `TotalPages` | `() => Element` | Resolves to the final page count inside `RenderOptions.footer`. |
+| `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
+| `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; footer?: Element }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. A footer accepts one styled text line, repeats at the bottom of every page, and reserves its measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
 
 const pdf = await render(<Invoice />, {
+  header: <header style={{ fontSize: '9pt' }}>Acme invoice</header>,
   footer: <footer style={{ fontSize: '9pt', textAlign: 'center' }}>Page <PageNumber /> of <TotalPages /></footer>,
+  metadata: { title: 'Invoice 42', author: 'Acme', language: 'en-US' },
+  tagged: true,
 });
 ```
+
+`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
 
 ## Embedded fonts
 
@@ -150,7 +155,7 @@ Every target runs the same decoder, so a document that renders in one produces i
 
 ## Assets
 
-v1 embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
+FlashPDF embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](./CSS.md).
 

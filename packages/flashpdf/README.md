@@ -1,6 +1,6 @@
 # FlashPDF
 
-Render native JSX and a static CSS subset to a PDF. The layout engine is Rust compiled to WebAssembly, so the same code produces the same bytes in a browser, in Node, and in Bun.
+Render invoices and reports from native JSX and a static CSS subset. A Rust layout engine compiled to WebAssembly produces the same PDF bytes in browsers, Node, and Bun.
 
 Build it from a clone with the commands in the repository [README](https://github.com/pettersen3008/flashpdf#working-on-flashpdf).
 
@@ -25,16 +25,11 @@ function Invoice({ total }: { total: string }) {
 const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', margin: 36 });
 ```
 
-## Install from GitHub Packages
+## Install
 
-Configure npm to use GitHub Packages for this scope:
-
-```ini
-@pettersen3008:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
+```sh
+npm install @pettersen3008/flashpdf
 ```
-
-GitHub Packages requires a GitHub token with `read:packages` when installing. Public package visibility is configured on the package page after the first release.
 
 FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImportSource: "@pettersen3008/flashpdf"` to a template-only `tsconfig`, or use the file pragma above in an app that also uses React. FlashPDF also accepts ordinary React host-element trees. It resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
 
@@ -67,22 +62,25 @@ FlashPDF rejects any declaration it cannot honour, naming the property, the sele
 | --- | --- | --- |
 | `render` | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged, for tagging literals at author time. |
-| `PageNumber` | `() => Element` | Resolves to the current page number inside `RenderOptions.footer`. |
-| `TotalPages` | `() => Element` | Resolves to the final page count inside `RenderOptions.footer`. |
+| `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
+| `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; footer?: Element }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. A footer accepts one styled text line, repeats at the bottom of every page, and reserves its measured height before body pagination.
+`RenderOptions` accepts page format, margin, stylesheets, embedded fonts, a one-line repeating `header` and `footer`, `metadata`, and `tagged`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. Tagged mode requires a language and writes paragraph-line and figure tags with image `alt` text; it is not PDF/UA conformant.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
 
 const pdf = await render(<Invoice />, {
+  header: <header style={{ fontSize: '9pt' }}>Acme invoice</header>,
   footer: <footer style={{ fontSize: '9pt', textAlign: 'center' }}>Page <PageNumber /> of <TotalPages /></footer>,
+  metadata: { title: 'Invoice 42', language: 'en-US' },
+  tagged: true,
 });
 ```
 
 ## Embedded fonts
 
-The host provides full TTF bytes for each family. `fontFamily` selects an exact registered family; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
+The host provides TTF bytes for each family. `fontFamily` selects the first registered family in a list; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());
@@ -92,7 +90,7 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 });
 ```
 
-v1 embeds whole TrueType files and keeps the existing WinAnsi text subset. It supports regular and bold faces only, not font-family fallback lists, italic/variable-face selection, OpenType features, or Unicode shaping. Unsupported characters, absent families, and a bold request without a bold file reject clearly.
+Embedded TrueType files are subset to used glyphs and support Unicode through cmap formats 4 and 12. Regular and bold faces are supported; italic/variable-face selection and Unicode shaping are not.
 
 ## Compatibility
 
@@ -108,7 +106,7 @@ Every target runs the same decoder, so a document that renders in one produces i
 
 ## Assets
 
-v1 embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. There is no image input.
+Host-provided TTF, PNG, and JPEG bytes work in every supported runtime. FlashPDF never fetches assets itself. Images use `<img src={bytes} alt="description" />`.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](https://github.com/pettersen3008/flashpdf/blob/main/CSS.md).
 

@@ -1,11 +1,23 @@
-use pdf_writer::types::{ActionType, AnnotationType, Predictor};
-use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str};
+use pdf_writer::types::{ActionType, AnnotationType, Predictor, StructRole};
+use pdf_writer::writers::StructTreeRoot;
+use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
-use crate::paint::{image_name, PageLink};
+use crate::paint::{image_name, PageLink, PageTag};
 use crate::{FontId, Page, HELVETICA_BOLD};
 
+#[derive(Default)]
+pub(crate) struct Metadata {
+    pub(crate) title: String,
+    pub(crate) author: String,
+    pub(crate) subject: String,
+    pub(crate) keywords: String,
+    pub(crate) language: String,
+    pub(crate) tagged: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_pdf(
     page: Page,
     contents: Vec<Content>,
@@ -14,6 +26,8 @@ pub(crate) fn finish_pdf(
     images: Vec<Image>,
     used_images: Vec<bool>,
     links: Vec<Vec<PageLink>>,
+    tags: Vec<Vec<PageTag>>,
+    metadata: Metadata,
 ) -> Vec<u8> {
     let used: Vec<FontId> = (0..fonts.len())
         .filter(|slot| used_fonts[*slot])
@@ -74,13 +88,94 @@ pub(crate) fn finish_pdf(
             (slot as u16, image, mask)
         })
         .collect();
+    let info = [
+        &metadata.title,
+        &metadata.author,
+        &metadata.subject,
+        &metadata.keywords,
+    ]
+    .iter()
+    .any(|value| !value.is_empty())
+    .then(&mut allocate);
+    let structure = metadata.tagged.then(|| (allocate(), allocate()));
+    let parent_arrays: Vec<Ref> = if metadata.tagged {
+        tags.iter().map(|_| allocate()).collect()
+    } else {
+        Vec::new()
+    };
+    let tag_refs: Vec<Vec<Ref>> = if metadata.tagged {
+        tags.iter()
+            .map(|page| page.iter().map(|_| allocate()).collect())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let first_page = next;
     let count = contents.len();
     let page_refs = (0..count).map(|index| Ref::new(first_page + index as i32 * 2));
     let mut next_annotation = first_page + count as i32 * 2;
 
-    pdf.catalog(catalog).pages(pages);
+    let mut catalog_writer = pdf.catalog(catalog);
+    catalog_writer.pages(pages);
+    if !metadata.language.is_empty() {
+        catalog_writer.lang(pdf_writer::TextStr(&metadata.language));
+    }
+    if let Some((root, _)) = structure {
+        catalog_writer.pair(Name(b"StructTreeRoot"), root);
+        catalog_writer.mark_info().marked(true);
+    }
+    drop(catalog_writer);
+    if let Some(info) = info {
+        let mut writer = pdf.document_info(info);
+        if !metadata.title.is_empty() {
+            writer.title(pdf_writer::TextStr(&metadata.title));
+        }
+        if !metadata.author.is_empty() {
+            writer.author(pdf_writer::TextStr(&metadata.author));
+        }
+        if !metadata.subject.is_empty() {
+            writer.subject(pdf_writer::TextStr(&metadata.subject));
+        }
+        if !metadata.keywords.is_empty() {
+            writer.keywords(pdf_writer::TextStr(&metadata.keywords));
+        }
+    }
     pdf.pages(pages).kids(page_refs.clone()).count(count as i32);
+
+    if let Some((root, document)) = structure {
+        let mut tree = pdf.indirect(root).start::<StructTreeRoot>();
+        tree.child(document).parent_tree_next_key(count as i32);
+        let mut parents = tree.parent_tree();
+        let mut nums = parents.nums();
+        for (index, reference) in parent_arrays.iter().enumerate() {
+            nums.insert(index as i32, *reference);
+        }
+        drop(nums);
+        drop(parents);
+        drop(tree);
+        let mut doc = pdf.struct_element(document);
+        doc.kind(StructRole::Document).parent(root);
+        doc.children().items(tag_refs.iter().flatten().copied());
+        drop(doc);
+        for (page_index, page_tags) in tags.iter().enumerate() {
+            pdf.indirect(parent_arrays[page_index])
+                .array()
+                .items(tag_refs[page_index].iter().copied());
+            for (mcid, tag) in page_tags.iter().enumerate() {
+                let mut item = pdf.struct_element(tag_refs[page_index][mcid]);
+                item.kind(match tag {
+                    PageTag::Paragraph => StructRole::P,
+                    PageTag::Figure(_) => StructRole::Figure,
+                })
+                .parent(document)
+                .page(Ref::new(first_page + page_index as i32 * 2));
+                if let PageTag::Figure(alt) = tag {
+                    item.alt(TextStr(alt));
+                }
+                item.marked_content_child().marked_content_id(mcid as i32);
+            }
+        }
+    }
 
     for refs in &font_refs {
         match &fonts[refs.slot.index()] {
@@ -121,6 +216,9 @@ pub(crate) fn finish_pdf(
             .parent(pages)
             .media_box(Rect::new(0.0, 0.0, page.width.0, page.height.0))
             .contents(stream_ref);
+        if metadata.tagged {
+            output_page.struct_parents(index as i32);
+        }
         let mut resources = output_page.resources();
         // Every font belongs to one `/Font` dictionary; a second `fonts()` call
         // would write a duplicate key and hide the earlier entries.

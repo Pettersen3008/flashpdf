@@ -1,5 +1,5 @@
 import * as flashpdf from "@pettersen3008/flashpdf";
-import type { Element, EmbeddedFont } from "@pettersen3008/flashpdf";
+import type { Element, EmbeddedFont, RenderOptions } from "@pettersen3008/flashpdf";
 import * as jsxRuntime from "@pettersen3008/flashpdf/jsx-runtime";
 import { transform } from "sucrase";
 
@@ -23,7 +23,7 @@ function Item({ name, total }: { name: string; total: string }) {
 	);
 }
 
-export default (
+export default { document: (
 	<main className="invoice">
 		<header className="header">
 			<div>
@@ -47,7 +47,7 @@ export default (
 			<span className="amount">EUR 5 600.00</span>
 		</div>
 	</main>
-);
+), options: { metadata: { title: "Acme Consulting invoice", language: "en" }, tagged: true } };
 `;
 
 const DEFAULT_CSS = `.invoice {
@@ -133,12 +133,19 @@ async function update() {
 		const run = compile(tsx.value);
 		let document = await run(library);
 		if (typeof document === "function") document = await document();
+		let options: RenderOptions = {};
+		if (document && typeof document === "object" && "document" in document) {
+			const result = document as { document: unknown; options?: RenderOptions };
+			document = result.document;
+			options = result.options ?? {};
+		}
 		const start = performance.now();
 		const pdf = await flashpdf.render(document as Element, {
 			pageFormat: "A4",
 			margin: 36,
 			stylesheets: [css.value],
 			fonts,
+			...options,
 		});
 		const ms = performance.now() - start;
 		if (id !== generation) return;

@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-09-25
+
 ### Added
 
+- Repeating `RenderOptions.header` text with page number and total page tokens. Headers reserve their measured height before body pagination.
+- `RenderOptions.metadata` for PDF title, author, subject, keywords, and language.
+- Opt-in `RenderOptions.tagged` with a structure tree for paragraph lines and figures, image descriptions from `alt`, and decorative images and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance.
+- Playground TSX can export `{ document, options }` to test render options.
 - Images: `<img src={bytes} alt="…" />` with PNG (8-bit greyscale, RGB, palette, greyscale+alpha, RGBA) or JPEG (baseline and progressive, greyscale/RGB/CMYK) bytes. `width` in `pt`/`px`/`%` and `height` in `pt`/`px`; one follows the other by aspect ratio, and neither means the pixel size at 96 px per inch capped to the container. The same `Uint8Array` embeds once per render. Unsupported depths, interlacing, and formats reject naming the feature; 64 MiB of image bytes per render.
 - Links: `<a href>` as an inline run or around an image or block, emitted as `/Link` annotations with one rectangle per wrapped line. `http:`, `https:`, and `mailto:` only; `javascript:`, relative URLs, and `#anchors` reject. `a` defaults to `color: #0000EE` and `text-decoration: underline`.
 - `text-decoration: none | underline | line-through`; `overline` rejects.
@@ -27,8 +33,9 @@
 ### Changed
 
 - Embedded font programs are subset to the glyphs a document uses. Glyph ids are kept, unused outlines drop out, `cmap` and `OS/2` are omitted, and `/BaseFont` carries a deterministic six-letter subset tag.
-- The TypeScript and protocol boundaries reject only control characters, lone surrogates, and page tokens outside a footer. Whether a printable character renders is decided per font at layout; Helvetica and Helvetica-Bold still reject characters outside WinAnsi.
+- The TypeScript and protocol boundaries reject only control characters, lone surrogates, and page tokens outside a header or footer. Whether a printable character renders is decided per font at layout; Helvetica and Helvetica-Bold still reject characters outside WinAnsi.
 - Flex-row cells stretch to the row height, so a shorter cell's background and borders now cover the whole row.
+- The binary protocol adds header and metadata records and moves to version 6.
 - The binary protocol adds `TableStart`/`TableEnd` records and moves to version 4, then adds an `Image` record, a per-paragraph URI table with underline, line-through, and link run flags, and `PdfRenderer.add_image`, and moves to version 5.
 - Styled spans no longer break the paragraph. A span keeps its own line only when it has box properties, `width`, `flex`, or its own `text-align`. The binary protocol replaces the `Text` and `StyledText` records with one `Paragraph` record and moves to version 3.
 - At-rules and rules with unsupported selectors are skipped instead of rejected. Declarations are validated only for rules that match a rendered element. `stylesheet()` still validates every rule with a supported selector.
@@ -52,6 +59,7 @@
 - Control characters and page-number tokens in body text are rejected at decode time.
 - Node loading no longer uses a variable dynamic import, which removes webpack and Next.js critical-dependency warnings.
 - Border shorthand accepts `rgb()` with spaces.
+- Invalid embedded font errors name the requested font family.
 
 ## 0.2.2 - 2026-09-22
 

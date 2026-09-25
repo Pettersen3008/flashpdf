@@ -48,6 +48,7 @@ pub(crate) struct PositionedImage {
     pub(crate) height: Pt,
     pub(crate) slot: u16,
     pub(crate) link: Option<usize>,
+    pub(crate) alt: String,
     /// The empty pseudo-line whose box carries the image through page splitting.
     pub(crate) line: usize,
 }

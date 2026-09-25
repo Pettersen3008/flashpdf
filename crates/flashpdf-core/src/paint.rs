@@ -13,20 +13,65 @@ pub(crate) struct PageLink {
     pub(crate) uri: String,
 }
 
+pub(crate) enum PageTag {
+    Paragraph,
+    Figure(String),
+}
+
 pub(crate) struct PdfPainter<'a> {
     content: &'a mut Content,
     links: &'a mut Vec<PageLink>,
+    tags: Option<&'a mut Vec<PageTag>>,
 }
 
 impl<'a> PdfPainter<'a> {
-    pub(crate) fn new(content: &'a mut Content, links: &'a mut Vec<PageLink>) -> Self {
-        Self { content, links }
+    pub(crate) fn new(
+        content: &'a mut Content,
+        links: &'a mut Vec<PageLink>,
+        tags: Option<&'a mut Vec<PageTag>>,
+    ) -> Self {
+        Self {
+            content,
+            links,
+            tags,
+        }
     }
 
     pub(crate) fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        let mut ids = if self.tags.is_some() {
+            vec![None; lines.len()]
+        } else {
+            Vec::new()
+        };
+        if let Some(tags) = &mut self.tags {
+            let mut images = layout.images.iter().peekable();
+            for line in lines.clone() {
+                while images.peek().is_some_and(|image| image.line < line) {
+                    images.next();
+                }
+                let image = images.peek().filter(|image| image.line == line);
+                let tag = if let Some(image) = image {
+                    (!image.alt.is_empty()).then(|| PageTag::Figure(image.alt.clone()))
+                } else if !layout.lines[line].segments.is_empty() {
+                    Some(PageTag::Paragraph)
+                } else {
+                    None
+                };
+                if let Some(tag) = tag {
+                    ids[line - lines.start] = Some(tags.len() as i32);
+                    tags.push(tag);
+                }
+            }
+        }
+        if self.tags.is_some() {
+            self.content.begin_marked_content(Name(b"Artifact"));
+        }
         self.paint_boxes(layout, origin);
-        self.paint_images(layout, lines.clone(), origin);
-        self.paint_text(layout, lines, origin);
+        if self.tags.is_some() {
+            self.content.end_marked_content();
+        }
+        self.paint_images(layout, lines.clone(), origin, &ids);
+        self.paint_text(layout, lines, origin, &ids);
     }
 
     fn paint_boxes(&mut self, layout: &LayoutBuffer, origin: Point) {
@@ -57,12 +102,26 @@ impl<'a> PdfPainter<'a> {
     }
 
     /// `q w 0 0 h x y cm /ImN Do Q`; only images whose pseudo-line is in range.
-    fn paint_images(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+    fn paint_images(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        origin: Point,
+        ids: &[Option<i32>],
+    ) {
         for image in layout
             .images
             .iter()
             .filter(|image| lines.contains(&image.line))
         {
+            if let Some(id) = ids.get(image.line - lines.start).copied().flatten() {
+                self.content
+                    .begin_marked_content_with_properties(Name(b"Figure"))
+                    .properties()
+                    .identify(id);
+            } else if self.tags.is_some() {
+                self.content.begin_marked_content(Name(b"Artifact"));
+            }
             let (width, height) = (image.width.get(), image.height.get());
             let x = origin.x.get() + image.origin.x.get();
             let y = origin.y.get() - image.origin.y.get() - height;
@@ -78,16 +137,31 @@ impl<'a> PdfPainter<'a> {
                     uri: layout.links[link].clone(),
                 });
             }
+            if self.tags.is_some() {
+                self.content.end_marked_content();
+            }
         }
     }
 
     /// One text object per line; `Tf` and `rg` change only where the style does.
     /// Underlines, strike-throughs, and link rectangles follow per segment.
-    fn paint_text(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
-        for line in &layout.lines[lines] {
+    fn paint_text(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        origin: Point,
+        ids: &[Option<i32>],
+    ) {
+        for (offset, line) in layout.lines[lines].iter().enumerate() {
             let segments = &layout.segments[line.segments.clone()];
             if segments.is_empty() {
                 continue;
+            }
+            if let Some(id) = ids.get(offset).copied().flatten() {
+                self.content
+                    .begin_marked_content_with_properties(Name(b"P"))
+                    .properties()
+                    .identify(id);
             }
             self.content.begin_text();
             let x = origin.x
@@ -158,6 +232,9 @@ impl<'a> PdfPainter<'a> {
                         uri: layout.links[link].clone(),
                     });
                 }
+            }
+            if self.tags.is_some() {
+                self.content.end_marked_content();
             }
         }
     }

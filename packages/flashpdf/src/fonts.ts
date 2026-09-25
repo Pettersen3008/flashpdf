@@ -1,6 +1,15 @@
 import type { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { props } from "./assert.js";
+import { asError } from "./binary.js";
 import { type FontSlots, helvetica } from "./style.js";
+
+function addFont(renderer: PdfRenderer, bytes: Uint8Array, family: string): number {
+	try {
+		return renderer.add_font(bytes);
+	} catch (error) {
+		throw new Error(`font family "${family}": ${asError(error).message}`, { cause: error });
+	}
+}
 
 export function registerFonts(renderer: PdfRenderer, value: unknown): Map<string, FontSlots> {
 	const result = new Map<string, FontSlots>([["Helvetica", helvetica]]);
@@ -13,12 +22,12 @@ export function registerFonts(renderer: PdfRenderer, value: unknown): Map<string
 		if (result.has(font.family.trim())) throw new Error(`duplicate font family: ${font.family}`);
 		if (!(font.regular instanceof Uint8Array) || !font.regular.byteLength)
 			throw new Error("font regular must be a non-empty Uint8Array");
-		const regular = renderer.add_font(font.regular);
+		const regular = addFont(renderer, font.regular, font.family);
 		let boldFace: number | undefined;
 		if (font.bold !== undefined) {
 			if (!(font.bold instanceof Uint8Array) || !font.bold.byteLength)
 				throw new Error("font bold must be a non-empty Uint8Array");
-			boldFace = renderer.add_font(font.bold);
+			boldFace = addFont(renderer, font.bold, font.family);
 		}
 		result.set(font.family.trim(), { regular, bold: boldFace });
 	}

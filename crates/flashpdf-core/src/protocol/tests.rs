@@ -329,6 +329,22 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     let mut unknown_font = header(VERSION, 120.0, 60.0, 10.0);
     unknown_font.extend(paragraph(0, &[(2, 10.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&unknown_font), "unknown font");
+
+    let mut invalid_metadata = header(VERSION, 120.0, 60.0, 10.0);
+    let mut fields = vec![1];
+    for _ in 0..5 {
+        fields.extend(text(b""));
+    }
+    invalid_metadata.extend(record(14, &fields));
+    assert_eq!(push_error(&invalid_metadata), "invalid metadata language");
+
+    let mut duplicate_header = header(VERSION, 120.0, 60.0, 10.0);
+    let mut line = 10.0_f32.to_le_bytes().to_vec();
+    line.extend([0, 0, 0, 0, 0]);
+    line.extend(text(b"Header"));
+    duplicate_header.extend(record(13, &line));
+    duplicate_header.extend(record(13, &line));
+    assert_eq!(push_error(&duplicate_header), "InvalidLayout");
 }
 
 #[test]

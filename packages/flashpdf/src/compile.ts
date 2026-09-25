@@ -133,7 +133,7 @@ function writeParagraph(
 		!pageTokens &&
 		runs.some(({ text }) => text.includes(PAGE_NUMBER) || text.includes(TOTAL_PAGES))
 	)
-		throw new Error("page tokens are only valid in a footer");
+		throw new Error("page tokens are only valid in a header or footer");
 	writer.paragraph(runs, state.align);
 }
 

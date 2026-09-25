@@ -2,7 +2,7 @@
 
 FlashPDF renders a static CSS subset. It does not embed a browser engine, fetch assets, execute JavaScript in CSS, or support media/container queries, Grid, positioned layout, transforms, filters, animations, or SVG layout.
 
-The public authoring API is native JSX plus `render`. `PageNumber` and `TotalPages` work only in the repeating `RenderOptions.footer`. There are no `Document`, `Text`, `Stack`, `Row`, preview, or download helpers; tables use the HTML `table` tags.
+The public authoring API is native JSX plus `render`. `PageNumber` and `TotalPages` work only in a repeating `RenderOptions.header` or `RenderOptions.footer`. There are no `Document`, `Text`, `Stack`, `Row`, preview, or download helpers; tables use the HTML `table` tags.
 
 ## Authoring
 
@@ -29,7 +29,7 @@ Tables use `table`, `thead`, `tbody`, `tfoot`, `tr`, `th`, and `td`. Column widt
 </table>
 ```
 
-Images use `img` with `src` as the PNG or JPEG file bytes in a `Uint8Array`, passed by the host exactly like fonts: FlashPDF fetches nothing, and a string path or `data:` URL rejects with a hint. `alt` is accepted and stored in the protocol for a future tagged-PDF pass. An image is an atomic block box, left-aligned in its container. `width` and `height` take `pt`, `px`, or (width only) `%` of the container width; given one, the other follows the image's aspect ratio; given neither, the pixel size at 96 px per inch applies, capped to the container width. Images work as block children, in table cells, in flex rows, and in decorated boxes, and a paragraph splits around them at page ends, but an image cannot sit inside a paragraph's text. The same `Uint8Array` used on every row embeds once.
+Images use `img` with `src` as the PNG or JPEG file bytes in a `Uint8Array`, passed by the host exactly like fonts: FlashPDF fetches nothing, and a string path or `data:` URL rejects with a hint. In tagged mode, nonempty `alt` becomes the figure description and empty `alt` marks a decorative image. An image is an atomic block box, left-aligned in its container. `width` and `height` take `pt`, `px`, or (width only) `%` of the container width; given one, the other follows the image's aspect ratio; given neither, the pixel size at 96 px per inch applies, capped to the container width. Images work as block children, in table cells, in flex rows, and in decorated boxes, and a paragraph splits around them at page ends, but an image cannot sit inside a paragraph's text. The same `Uint8Array` used on every row embeds once.
 
 Links use `a` with an absolute `http:`, `https:`, or `mailto:` `href`. Inside a paragraph an `a` is an inline run like `b`; around an `img` or a block it makes that content clickable. Every wrapped line of a link gets its own rectangle. `a` defaults to `color: #0000EE` and `text-decoration: underline`, and a rule or inline style overrides both.
 
