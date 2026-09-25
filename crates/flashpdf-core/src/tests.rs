@@ -517,6 +517,107 @@ fn given_percent_columns_totalling_one_hundred_when_rounded_then_accepts_them() 
     );
 }
 
+fn table_start(header_rows: u16) -> Command<'static> {
+    Command::TableStart {
+        header_rows,
+        width: super::ColumnWidth::Fraction(FractionValue::new(1.0).unwrap()),
+    }
+}
+
+#[test]
+fn given_a_table_with_two_header_rows_and_sixty_body_rows_when_rendered_then_repeats_the_header_per_page_and_paints_each_row_once(
+) {
+    let columns = [super::ColumnWidth::Fraction(FractionValue::new(1.0).unwrap()); 3];
+    let cells: Vec<String> = (1..=60)
+        .flat_map(|row| ["a", "b", "c"].map(|column| format!("r{row}{column}")))
+        .collect();
+    let mut commands = vec![table_start(2)];
+    for header in [["H1a", "H1b", "H1c"], ["H2a", "H2b", "H2c"]] {
+        commands.push(Command::RowStart { columns: &columns });
+        commands.extend(header.iter().map(|cell| text(cell)));
+        commands.push(Command::RowEnd);
+    }
+    for row in cells.chunks(3) {
+        commands.push(Command::RowStart { columns: &columns });
+        commands.extend(row.iter().map(|cell| text(cell)));
+        commands.push(Command::RowEnd);
+    }
+    commands.push(Command::TableEnd);
+    let pdf = parsed(&commands);
+    // 40pt of body holds the 18.5pt header plus two 9.25pt rows.
+    assert_eq!(pdf.get_pages().len(), 30);
+    let mut body = Vec::new();
+    for page in 1..=30 {
+        let page_text = pdf.extract_text(&[page]).unwrap();
+        let rest = page_text
+            .trim()
+            .strip_prefix("H1a\nH1b\nH1c\nH2a\nH2b\nH2c\n")
+            .unwrap_or_else(|| panic!("page {page} lacks the header: {page_text}"));
+        body.extend(rest.lines().map(str::to_owned));
+    }
+    assert_eq!(body, cells);
+}
+
+#[test]
+fn given_a_painted_cell_beside_a_taller_cell_when_laid_out_then_its_background_covers_the_row_height(
+) {
+    use super::ColumnWidth::{Fixed, Fraction};
+    let style = super::BoxStyle {
+        margin: Edges::all(Pt(0.0)),
+        padding: Edges::all(Pt(0.0)),
+        border: Edges::all(Pt(0.0)),
+        background: Some(Rgb { r: 255, g: 0, b: 0 }),
+        border_color: Edges::all(Rgb::BLACK),
+    };
+    let columns = [Fixed(Pt(50.0)), Fraction(FractionValue::new(1.0).unwrap())];
+    let pdf = parsed(&[
+        Command::RowStart { columns: &columns },
+        Command::BoxStart { style },
+        text("a"),
+        Command::BoxEnd,
+        Command::StackStart { gap: Pt(0.0) },
+        text("a"),
+        text("b"),
+        Command::StackEnd,
+        Command::RowEnd,
+    ]);
+    assert!(
+        content(&pdf).contains("10 31.5 50 18.5 re"),
+        "{}",
+        content(&pdf)
+    );
+}
+
+#[test]
+fn given_a_table_row_taller_than_the_page_with_its_header_when_rendered_then_rejects_naming_the_row(
+) {
+    let columns = [super::ColumnWidth::Fraction(
+        FractionValue::new(1.0).unwrap(),
+    )];
+    let mut commands = vec![
+        table_start(1),
+        Command::RowStart { columns: &columns },
+        text("header"),
+        Command::RowEnd,
+        Command::RowStart { columns: &columns },
+        Command::StackStart { gap: Pt(0.0) },
+    ];
+    commands.extend(std::iter::repeat_n(text("line"), 4));
+    commands.extend([Command::StackEnd, Command::RowEnd, Command::TableEnd]);
+    assert_eq!(
+        super::render(page(), &commands),
+        Err(RenderError::TableRowOverflow(1))
+    );
+    // Three lines under a one-line header fit an empty page exactly, so the row moves whole.
+    commands.remove(7);
+    let pdf = parsed(&commands);
+    assert_eq!(pdf.get_pages().len(), 1);
+    assert_eq!(
+        pdf.extract_text(&[1]).unwrap().trim(),
+        "header\nline\nline\nline"
+    );
+}
+
 #[test]
 fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint() {
     let red = super::BoxStyle {
@@ -599,6 +700,24 @@ fn given_invalid_containers_when_measured_then_rejects() {
             text("x"),
             text("y"),
             Command::RowEnd,
+        ],
+        vec![Command::TableEnd],
+        vec![table_start(1), Command::TableEnd],
+        vec![table_start(0), text("x"), Command::TableEnd],
+        vec![
+            table_start(0),
+            Command::RowStart {
+                columns: &[Fixed(Pt(20.0))],
+            },
+            text("x"),
+            Command::RowEnd,
+            Command::RowStart {
+                columns: &[Fixed(Pt(20.0)), Fixed(Pt(20.0))],
+            },
+            text("x"),
+            text("y"),
+            Command::RowEnd,
+            Command::TableEnd,
         ],
     ] {
         assert_eq!(

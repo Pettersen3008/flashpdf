@@ -20,6 +20,8 @@ const opcode = {
 	pageBreak: 7,
 	footer: 8,
 	paragraph: 9,
+	tableStart: 10,
+	tableEnd: 11,
 	boxStart: 17,
 	boxEnd: 18,
 	end: 255,
@@ -99,6 +101,22 @@ export class ProtocolWriter {
 	rowEnd() {
 		this.body();
 		this.binary.record(opcode.rowEnd);
+	}
+
+	/** The first `headerRows` children repeat on every page the table continues on. */
+	tableStart(headerRows: number, width: Column) {
+		this.body();
+		if (headerRows > 0xffff) throw new Error("too many header rows");
+		this.binary.record(opcode.tableStart, () => {
+			this.binary.u16(headerRows);
+			this.binary.u8(width.kind);
+			this.binary.f32(width.value);
+		});
+	}
+
+	tableEnd() {
+		this.body();
+		this.binary.record(opcode.tableEnd);
 	}
 
 	pageBreak() {

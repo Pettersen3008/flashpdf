@@ -75,3 +75,54 @@ test("given a padded span inside a paragraph, when compiling, then rejects with 
 		/<p> accepts only text, <br>, and <span>, <b>, <strong> without box styles on <p>/,
 	);
 });
+
+test("given a table with thead and tbody, when compiling, then emits the container with header count 1 and one row per tr", async () => {
+	const cell = (tag, text, props = {}) => jsx(tag, { ...props, children: text });
+	const calls = await compiled(
+		jsxs("table", {
+			children: [
+				jsx("thead", {
+					children: jsxs("tr", {
+						children: [cell("th", "Item"), cell("th", "Amount", { style: { width: "80pt" } })],
+					}),
+				}),
+				jsx("tbody", {
+					children: jsxs("tr", { children: [cell("td", "Coffee"), cell("td", "$4")] }),
+				}),
+			],
+		}),
+	);
+	const columns = [
+		{ kind: 1, value: 1 },
+		{ kind: 0, value: 80 },
+	];
+	const row = (font, ...texts) => [
+		["rowStart", columns],
+		...texts.flatMap((text) => [
+			["stackStart", 0],
+			["paragraph", [run(font, text)], "left"],
+			["stackEnd"],
+		]),
+		["rowEnd"],
+	];
+	assert.deepEqual(calls, [
+		["tableStart", 1, { kind: 1, value: 1 }],
+		...row(1, "Item", "Amount"),
+		...row(0, "Coffee", "$4"),
+		["tableEnd"],
+	]);
+});
+
+test("given rows with different cell counts, when compiling, then rejects naming the tr path", async () => {
+	await assert.rejects(
+		compiled(
+			jsxs("table", {
+				children: [
+					jsxs("tr", { children: [jsx("td", { children: "a" }), jsx("td", { children: "b" })] }),
+					jsx("tr", { className: "short", children: jsx("td", { children: "a" }) }),
+				],
+			}),
+		),
+		/^Error: <tr> has 1 cells but the table has 2 columns on <tr\.short> in <table>$/,
+	);
+});

@@ -74,18 +74,18 @@ impl<'a> Cursor<'a> {
         if count == 0 || count > crate::command::MAX_COLUMNS {
             return Err(ProtocolError::InvalidColumnCount);
         }
-        let mut columns = Vec::with_capacity(count);
-        for _ in 0..count {
-            let kind = self.take(1)?[0];
-            let value = self.positive_f32("column width")?;
-            columns.push(match kind {
-                0 => crate::ColumnWidth::Fixed(pt(value)?),
-                1 => crate::ColumnWidth::Fraction(Fraction::new(value)?),
-                2 => crate::ColumnWidth::Percent(Percent::new(value)?),
-                _ => return Err(ProtocolError::InvalidColumnKind),
-            });
-        }
-        Ok(columns)
+        (0..count).map(|_| self.column()).collect()
+    }
+
+    pub(super) fn column(&mut self) -> Result<crate::ColumnWidth, ProtocolError> {
+        let kind = self.take(1)?[0];
+        let value = self.positive_f32("column width")?;
+        Ok(match kind {
+            0 => crate::ColumnWidth::Fixed(pt(value)?),
+            1 => crate::ColumnWidth::Fraction(Fraction::new(value)?),
+            2 => crate::ColumnWidth::Percent(Percent::new(value)?),
+            _ => return Err(ProtocolError::InvalidColumnKind),
+        })
     }
 
     pub(super) fn done(&self) -> Result<(), ProtocolError> {

@@ -24,14 +24,22 @@ export function cssInvoice(invoice: Invoice) {
 					Due <b>{invoice.dueDate}</b>
 				</p>
 			</header>
-			<section className={styles.items}>
-				{invoice.items.map((item) => (
-					<div className={styles.item} key={item.id}>
-						<span>{item.name}</span>
-						<span className={styles.amount}>{item.total}</span>
-					</div>
-				))}
-			</section>
+			<table className={styles.items}>
+				<thead>
+					<tr>
+						<th>Item</th>
+						<th className={styles.amount}>Amount</th>
+					</tr>
+				</thead>
+				<tbody>
+					{invoice.items.map((item) => (
+						<tr key={item.id}>
+							<td>{item.name}</td>
+							<td className={styles.amount}>{item.total}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
 		</main>,
 		{ pageFormat: "A4", margin: 36, stylesheets: [invoiceCss] },
 	);

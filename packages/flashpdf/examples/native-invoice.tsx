@@ -23,7 +23,10 @@ function rounded(amount: number) {
 	return Math.round((amount + Number.EPSILON) * 100) / 100;
 }
 
-/** A row of the line-item table. Only a flex row may size its columns. */
+const right = { textAlign: "right" } as const;
+const head = { borderBottom: `1pt solid ${rule}`, paddingBottom: 2 } as const;
+
+/** A totals row; the line items themselves are a `<table>` below. */
 function Line({
 	cells,
 	bold,
@@ -94,23 +97,27 @@ export function nativeInvoice(invoice: Invoice, options?: Pick<RenderOptions, "f
 				<Party title="BILL TO" name={invoice.customer.name} address={invoice.customer.address} />
 			</div>
 
-			{/* Line items are plain block children, so a long invoice paginates
-          without holding the whole table in memory. */}
-			<div>
-				<Line cells={["Description", "Qty", "Unit", "Amount"]} bold color={muted} />
-				<div style={{ borderWidth: 1, borderColor: rule, marginTop: 2, marginBottom: 4 }} />
-				{invoice.items.map((item, index) => (
-					<Line
-						key={item.description}
-						cells={[
-							item.description,
-							String(item.quantity),
-							money(invoice.currency, item.unitPrice),
-							money(invoice.currency, amounts[index]!),
-						]}
-					/>
-				))}
-			</div>
+			{/* A table splits between rows and repeats its <thead> on every page. */}
+			<table>
+				<thead>
+					<tr style={{ color: muted }}>
+						<th style={head}>Description</th>
+						<th style={{ ...head, ...right, width: "60pt" }}>Qty</th>
+						<th style={{ ...head, ...right, width: "90pt" }}>Unit</th>
+						<th style={{ ...head, ...right, width: "90pt" }}>Amount</th>
+					</tr>
+				</thead>
+				<tbody>
+					{invoice.items.map((item, index) => (
+						<tr key={item.description}>
+							<td>{item.description}</td>
+							<td style={right}>{item.quantity}</td>
+							<td style={right}>{money(invoice.currency, item.unitPrice)}</td>
+							<td style={right}>{money(invoice.currency, amounts[index]!)}</td>
+						</tr>
+					))}
+				</tbody>
+			</table>
 
 			{/* A decorated box is atomic, so the totals block never splits. */}
 			<div

@@ -227,7 +227,9 @@ function element(
 		case "section":
 		case "article":
 		case "header":
-		case "footer": {
+		case "footer":
+		case "td":
+		case "th": {
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
@@ -278,6 +280,14 @@ function element(
 		case "br":
 			writeParagraph(writer, [run(context, "", true)], context, pageTokens);
 			break;
+		case "thead":
+		case "tbody":
+		case "tfoot":
+		case "tr":
+			throw new Error(`<${node.tag}> belongs in a <table>`);
+		case "table":
+			table(node, writer, fonts, context, depth, pageTokens);
+			break;
 		case "hr": {
 			const next = inherit(style, context, fonts);
 			const rule =
@@ -292,6 +302,157 @@ function element(
 			break;
 		}
 	}
+}
+
+type RowGroup = { group?: StyledElement; rows: StyledElement[] };
+/** Rows and row groups sit inside the table, where `pageBreak` rejects both as nested. */
+const BREAKS = ["breakBefore", "breakAfter"] as const;
+
+/** `thead` groups first, then `tbody` and bare `tr` in source order, then `tfoot`, as browsers paint them. */
+function rowGroups(node: StyledElement): { header: RowGroup[]; body: RowGroup[] } {
+	const header: RowGroup[] = [];
+	const body: RowGroup[] = [];
+	const footer: RowGroup[] = [];
+	const accepts = "<table> accepts only <thead>, <tbody>, <tfoot>, and <tr>";
+	for (const child of node.children) {
+		if (child.kind === "text") throw new Error(`${accepts}, not text`);
+		if (child.tag === "tr") {
+			body.push({ rows: [child] });
+			continue;
+		}
+		if (child.tag !== "thead" && child.tag !== "tbody" && child.tag !== "tfoot")
+			throw new Error(`${accepts}, not <${child.tag}>`);
+		const rows = child.children.map((row) => {
+			if (row.kind === "text" || row.tag !== "tr")
+				throw locate(new Error(`<${child.tag}> accepts only <tr>`), child.where);
+			return row;
+		});
+		(child.tag === "thead" ? header : child.tag === "tbody" ? body : footer).push({
+			group: child,
+			rows,
+		});
+	}
+	return { header, body: [...body, ...footer] };
+}
+
+function table(
+	node: StyledElement,
+	writer: ProtocolWriter,
+	fonts: Fonts,
+	context: Context,
+	depth: number,
+	pageTokens: boolean,
+) {
+	const style = node.style;
+	if (style.flex !== undefined) throw new Error("flex applies only to a flex row child");
+	pageBreak(writer, style, "breakBefore", depth);
+	const next = inherit(style, context, fonts);
+	const paint = boxStyle(style, next.size);
+	if (
+		paint &&
+		(paint.margin[1] ||
+			paint.margin[3] ||
+			paint.background ||
+			[...paint.padding, ...paint.border].some(Boolean))
+	)
+		throw new Error("<table> accepts only vertical margins; style its cells or a wrapping <div>");
+	const { header, body } = rowGroups(node);
+	const rows = [...header, ...body].flatMap((group) => group.rows);
+	const first = rows[0];
+	if (!first) throw new Error("<table> has no rows");
+	const cells = (row: StyledElement) =>
+		row.children.map((cell) => {
+			if (cell.kind === "text" || (cell.tag !== "td" && cell.tag !== "th"))
+				throw locate(new Error("<tr> accepts only <td> and <th>"), row.where);
+			return cell;
+		});
+	const columns = cells(first).map(column);
+	for (const row of rows) {
+		const count = cells(row).length;
+		if (count !== columns.length)
+			throw locate(
+				new Error(`<tr> has ${count} cells but the table has ${columns.length} columns`),
+				row.where,
+			);
+	}
+	// A parent flex row already consumed `width` as this table's track.
+	const width: Column = context.inRow ? { kind: 1, value: 1 } : column(node);
+	if (paint?.margin[0]) writer.spacer(paint.margin[0]);
+	const inner = { ...next, inRow: false };
+	/** Element path of each table child, indexed as the renderer reports an overflowing row. */
+	const wheres: string[] = [];
+	const row = (tr: StyledElement, state: Context) => {
+		try {
+			rowOnly(tr.style, false);
+			for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
+			const own = inherit(tr.style, state, fonts);
+			box(writer, boxStyle(tr.style, own.size), () => {
+				writer.rowStart(columns);
+				compile(tr.children, writer, fonts, { ...own, inRow: true }, depth + 2, pageTokens);
+				writer.rowEnd();
+			});
+		} catch (error) {
+			throw locate(error, tr.where);
+		}
+	};
+	const group = ({ group, rows }: RowGroup, repeated: boolean) => {
+		let state = inner;
+		if (group)
+			try {
+				rowOnly(group.style, false);
+				for (const key of BREAKS) pageBreak(writer, group.style, key, depth + 1);
+				if (boxStyle(group.style, inner.size))
+					throw new Error(`<${group.tag}> accepts no box styles; style <tr> or its cells`);
+				state = { ...inherit(group.style, inner, fonts), inRow: false };
+			} catch (error) {
+				throw locate(error, group.where);
+			}
+		// Header rows always share a page, so `break-inside: avoid` only groups body rows.
+		if (group?.style.breakInside === "avoid" && !repeated) {
+			writer.stackStart(0);
+			for (const tr of rows) row(tr, state);
+			writer.stackEnd();
+			wheres.push(group.where);
+			return;
+		}
+		for (const tr of rows) {
+			row(tr, state);
+			wheres.push(tr.where);
+		}
+	};
+	try {
+		if (style.breakInside === "avoid") writer.stackStart(0);
+		writer.tableStart(
+			header.reduce((count, { rows }) => count + rows.length, 0),
+			width,
+		);
+		for (const item of header) group(item, true);
+		for (const item of body) group(item, false);
+		writer.tableEnd();
+		if (style.breakInside === "avoid") writer.stackEnd();
+	} catch (error) {
+		if (!(error instanceof Error)) throw error;
+		const overflow = /^TableRowOverflow\((\d+)\)$/.exec(error.message);
+		if (overflow)
+			throw locate(
+				new Error(
+					"a table row is taller than the page below its repeated header; split its content",
+				),
+				wheres[Number(overflow[1])] ?? node.where,
+			);
+		if (error.message === "PageOverflow")
+			throw locate(
+				new Error(
+					style.breakInside === "avoid"
+						? "PageOverflow: the table is taller than a page; drop break-inside: avoid"
+						: "PageOverflow: the table header is taller than a page",
+				),
+				node.where,
+			);
+		throw error;
+	}
+	if (paint?.margin[2]) writer.spacer(paint.margin[2]);
+	pageBreak(writer, style, "breakAfter", depth);
 }
 
 export function compile(

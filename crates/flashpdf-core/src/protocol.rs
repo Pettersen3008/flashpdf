@@ -21,11 +21,11 @@ use crate::{Edges, FontId, OwnedCommand, TextRun, TextStyle};
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
-/// An open Stack, Box or Row buffers its commands until it closes; this bounds that buffer.
+/// An open Stack, Box, Row or Table buffers its commands until it closes; this bounds that buffer.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 3;
+const VERSION: u16 = 4;
 
 #[derive(Default)]
 pub struct Decoder {
@@ -44,6 +44,7 @@ enum Frame {
     Stack,
     Box,
     Row { columns: usize, cells: usize },
+    Table,
 }
 
 impl Decoder {
@@ -136,7 +137,7 @@ impl Decoder {
             }
             Opcode::StackEnd => {
                 cursor.done()?;
-                self.close(false, OwnedCommand::StackEnd)
+                self.close(OwnedCommand::StackEnd)
             }
             Opcode::RowStart => {
                 let columns = cursor.columns()?;
@@ -151,7 +152,17 @@ impl Decoder {
             }
             Opcode::RowEnd => {
                 cursor.done()?;
-                self.close(true, OwnedCommand::RowEnd)
+                self.close(OwnedCommand::RowEnd)
+            }
+            Opcode::TableStart => {
+                let header_rows = cursor.u16()?;
+                let width = cursor.column()?;
+                cursor.done()?;
+                self.open(Frame::Table, OwnedCommand::TableStart(header_rows, width))
+            }
+            Opcode::TableEnd => {
+                cursor.done()?;
+                self.close(OwnedCommand::TableEnd)
             }
             Opcode::PageBreak => {
                 cursor.done()?;
@@ -252,7 +263,7 @@ impl Decoder {
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
-                self.close_box()
+                self.close(OwnedCommand::BoxEnd)
             }
             Opcode::End => {
                 cursor.done()?;
@@ -327,32 +338,19 @@ impl Decoder {
         Ok(())
     }
 
-    fn close(&mut self, row: bool, command: OwnedCommand) -> Result<(), ProtocolError> {
+    fn close(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = self.frames.pop().ok_or(ProtocolError::InvalidNesting)?;
-        match (row, frame) {
-            (false, Frame::Stack) => {}
-            (true, Frame::Row { columns, cells }) if columns == cells => {}
-            (true, Frame::Row { .. }) => return Err(ProtocolError::RowCellCountMismatch),
+        match (&command, frame) {
+            (OwnedCommand::StackEnd, Frame::Stack)
+            | (OwnedCommand::BoxEnd, Frame::Box)
+            | (OwnedCommand::TableEnd, Frame::Table) => {}
+            (OwnedCommand::RowEnd, Frame::Row { columns, cells }) if columns == cells => {}
+            (OwnedCommand::RowEnd, Frame::Row { .. }) => {
+                return Err(ProtocolError::RowCellCountMismatch)
+            }
             _ => return Err(ProtocolError::InvalidNesting),
         }
-        self.push_command(command)?;
-        self.complete_child()?;
-        if self.frames.is_empty() {
-            self.flush_block()?;
-        }
-        Ok(())
-    }
-
-    fn close_box(&mut self) -> Result<(), ProtocolError> {
-        if !matches!(self.frames.pop(), Some(Frame::Box)) {
-            return Err(ProtocolError::InvalidNesting);
-        }
-        self.push_command(OwnedCommand::BoxEnd)?;
-        self.complete_child()?;
-        if self.frames.is_empty() {
-            self.flush_block()?;
-        }
-        Ok(())
+        self.layout_command(command)
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {

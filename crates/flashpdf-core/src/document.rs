@@ -15,6 +15,7 @@ pub(crate) enum Element<'a> {
     Spacer(Spacer),
     Stack(Stack<'a>),
     Row(Row<'a>),
+    Table(Table<'a>),
 }
 
 pub(crate) struct Paragraph<'a> {
@@ -44,4 +45,12 @@ pub(crate) struct Row<'a> {
 pub(crate) struct Cell<'a> {
     pub(crate) width: ColumnWidth,
     pub(crate) content: Element<'a>,
+}
+
+/// Rows are Row elements, each optionally wrapped in a Box (`tr` paint) or a
+/// Stack (`break-inside: avoid` group). The first `header_rows` repeat per page.
+pub(crate) struct Table<'a> {
+    pub(crate) header_rows: usize,
+    pub(crate) width: ColumnWidth,
+    pub(crate) rows: Vec<Element<'a>>,
 }

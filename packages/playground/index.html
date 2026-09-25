@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>FlashPDF playground</title>
+		<link rel="stylesheet" href="./style.css" />
+		<script type="module" src="./main.ts"></script>
+	</head>
+	<body>
+		<header>
+			<h1>FlashPDF playground</h1>
+			<p>
+				JSX and a CSS subset to PDF, rendered in this tab by a 150 KB WASM engine.
+				<a href="https://github.com/pettersen3008/flashpdf">Source on GitHub</a>
+			</p>
+			<div class="controls">
+				<label>
+					Fonts (.ttf: regular, then bold)
+					<input id="fonts" type="file" accept=".ttf,font/ttf" multiple />
+				</label>
+				<span>Select an uploaded font with <code>fontFamily: "Custom"</code>.</span>
+				<button id="share" type="button">Share</button>
+				<a id="download" href="#" download="flashpdf.pdf">Download PDF</a>
+			</div>
+		</header>
+		<main>
+			<section class="editors">
+				<label for="tsx">Template (TSX, <code>export default</code> an element or a function)</label>
+				<textarea id="tsx" spellcheck="false"></textarea>
+				<label for="css">Stylesheet (CSS)</label>
+				<textarea id="css" spellcheck="false"></textarea>
+			</section>
+			<section class="output">
+				<p id="status" role="status" aria-live="polite">Loading…</p>
+				<pre id="error" role="alert" aria-live="assertive" hidden></pre>
+				<iframe id="preview" title="PDF preview"></iframe>
+			</section>
+		</main>
+	</body>
+</html>

@@ -245,6 +245,8 @@ pub enum RenderError {
     UnsupportedCharacter(char),
     TextTooWide,
     PageOverflow,
+    /// A table row and its repeated header exceed an empty page; the index is the table child.
+    TableRowOverflow(usize),
     InvalidLayout,
     MissingGlyph,
     DocumentTooLarge,

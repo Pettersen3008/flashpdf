@@ -44,21 +44,32 @@ function document_() {
 					}),
 				],
 			}),
-			jsx("section", {
+			jsxs("table", {
 				className: "items",
-				children: invoice.items.map((item) =>
-					jsxs(
-						"div",
-						{
-							className: "item",
+				children: [
+					jsx("thead", {
+						children: jsxs("tr", {
 							children: [
-								jsx("span", { children: item.name }),
-								jsx("span", { className: "amount", children: item.total }),
+								jsx("th", { children: "Item" }),
+								jsx("th", { className: "amount", children: "Amount" }),
 							],
-						},
-						item.id,
-					),
-				),
+						}),
+					}),
+					jsx("tbody", {
+						children: invoice.items.map((item) =>
+							jsxs(
+								"tr",
+								{
+									children: [
+										jsx("td", { children: item.name }),
+										jsx("td", { className: "amount", children: item.total }),
+									],
+								},
+								item.id,
+							),
+						),
+					}),
+				],
 			}),
 		],
 	});

@@ -24,6 +24,35 @@ function Invoice({ total }: { total: string }) {
 const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', margin: 36 });
 ```
 
+## Playground
+
+The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX template and a stylesheet to a PDF in the browser, with FlashPDF's validation errors shown in full. Run it locally with `pnpm playground`, share a template through the URL hash, and upload a `.ttf` to test embedded fonts. It deploys to GitHub Pages from `main` and lives in [`packages/playground`](./packages/playground).
+
+## Tables
+
+A `<table>` splits between rows and repeats its `<thead>` on every page. Column widths come from the first row's cells, cells stretch to the row height, and `th` is bold by default.
+
+```tsx
+<table>
+  <thead>
+    <tr>
+      <th>Description</th>
+      <th style={{ width: '90pt', textAlign: 'right' }}>Amount</th>
+    </tr>
+  </thead>
+  <tbody>
+    {items.map((item) => (
+      <tr key={item.id}>
+        <td style={{ borderBottom: '0.5pt solid #ddd' }}>{item.description}</td>
+        <td style={{ borderBottom: '0.5pt solid #ddd', textAlign: 'right' }}>{item.amount}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+```
+
+`colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+
 ## Install
 
 ```sh

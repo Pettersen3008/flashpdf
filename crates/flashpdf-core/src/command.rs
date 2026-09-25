@@ -1,4 +1,6 @@
-use crate::document::{Block, BoxNode, Cell, Document, Element, Paragraph, Row, Spacer, Stack};
+use crate::document::{
+    Block, BoxNode, Cell, Document, Element, Paragraph, Row, Spacer, Stack, Table,
+};
 use crate::{BoxStyle, Fraction, Percent, Pt, TextAlign, TextRun, TextStyle};
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
@@ -30,6 +32,12 @@ pub enum Command<'a> {
         columns: &'a [ColumnWidth],
     },
     RowEnd,
+    /// The first `header_rows` children repeat at the top of every page the table continues on.
+    TableStart {
+        header_rows: u16,
+        width: ColumnWidth,
+    },
+    TableEnd,
     PageBreak,
 }
 
@@ -50,6 +58,8 @@ pub(crate) enum OwnedCommand {
     StackEnd,
     RowStart(Vec<ColumnWidth>),
     RowEnd,
+    TableStart(u16, ColumnWidth),
+    TableEnd,
 }
 
 impl OwnedCommand {
@@ -67,6 +77,11 @@ impl OwnedCommand {
             Self::StackEnd => Command::StackEnd,
             Self::RowStart(columns) => Command::RowStart { columns },
             Self::RowEnd => Command::RowEnd,
+            Self::TableStart(header_rows, width) => Command::TableStart {
+                header_rows: *header_rows,
+                width: *width,
+            },
+            Self::TableEnd => Command::TableEnd,
         }
     }
 }
@@ -101,6 +116,7 @@ pub(crate) enum CommandParseError {
     UnexpectedCommand,
     UnexpectedEnd,
     InvalidRow,
+    InvalidTable,
     MaxDepthExceeded,
 }
 
@@ -186,9 +202,27 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 }
                 Ok(Element::Row(Row { cells }))
             }
-            Command::BoxEnd | Command::StackEnd | Command::RowEnd | Command::PageBreak => {
-                Err(CommandParseError::UnexpectedCommand)
+            Command::TableStart { header_rows, width } => {
+                self.check_depth(depth)?;
+                let rows = self.parse_children(Command::TableEnd, depth + 1)?;
+                let header_rows = usize::from(header_rows);
+                let mut columns = None;
+                if header_rows > rows.len()
+                    || rows.iter().any(|row| !uniform_rows(row, &mut columns))
+                {
+                    return Err(CommandParseError::InvalidTable);
+                }
+                Ok(Element::Table(Table {
+                    header_rows,
+                    width,
+                    rows,
+                }))
             }
+            Command::BoxEnd
+            | Command::StackEnd
+            | Command::RowEnd
+            | Command::TableEnd
+            | Command::PageBreak => Err(CommandParseError::UnexpectedCommand),
         }
     }
 
@@ -229,5 +263,17 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             .ok_or(CommandParseError::UnexpectedEnd)?;
         self.index += 1;
         Ok(command)
+    }
+}
+
+/// A table child is a Row, or a Box/Stack group of them, and every Row has the
+/// same cell count; `columns` learns it from the first Row.
+fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
+    match element {
+        Element::Row(row) => *columns.get_or_insert(row.cells.len()) == row.cells.len(),
+        Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {
+            children.iter().all(|child| uniform_rows(child, columns))
+        }
+        Element::Paragraph(_) | Element::Spacer(_) | Element::Table(_) => false,
     }
 }

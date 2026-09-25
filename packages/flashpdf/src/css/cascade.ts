@@ -17,6 +17,7 @@ export type StyledNode = TextNode | StyledElement;
 const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	b: { fontWeight: "bold" },
 	strong: { fontWeight: "bold" },
+	th: { fontWeight: "bold", textAlign: "left" },
 	h1: { fontSize: "2em", fontWeight: "bold" },
 	h2: { fontSize: "1.5em", fontWeight: "bold" },
 	h3: { fontSize: "1.17em", fontWeight: "bold" },

@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"types": ["node"],
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"jsx": "react-jsx",
+		"jsxImportSource": "@pettersen3008/flashpdf"
+	},
+	"include": ["main.ts", "vite.config.ts"]
+}

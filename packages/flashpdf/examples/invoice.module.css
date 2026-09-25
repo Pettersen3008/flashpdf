@@ -11,10 +11,9 @@
 	color: var(--muted);
 	font-size: 10pt;
 }
-.items > .item {
-	display: flex;
-	flex-direction: row;
-	gap: 0;
+.items th {
+	border-bottom: 1pt solid #d0d5dd;
+	padding-bottom: 2pt;
 }
 .amount {
 	width: 80pt;

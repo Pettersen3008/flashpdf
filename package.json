@@ -4,14 +4,16 @@
 	"type": "module",
 	"scripts": {
 		"build": "pnpm --filter @pettersen3008/flashpdf build",
-		"fmt": "oxfmt 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
-		"fmt:check": "oxfmt --check 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
+		"fmt": "oxfmt 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'packages/playground/*.{ts,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
+		"fmt:check": "oxfmt --check 'packages/flashpdf/**/*.{ts,tsx,mjs,json,css}' 'packages/playground/*.{ts,json,css}' 'tests/**/*.{ts,mjs,json}' package.json vitest.config.ts",
 		"lint": "oxlint --deny-warnings .",
 		"test": "pnpm build && vitest run",
 		"test:unit": "pnpm build && vitest run --project unit",
 		"test:integration": "pnpm build && vitest run --project integration",
 		"test:e2e": "pnpm build && node tests/e2e.mjs",
-		"typecheck": "pnpm --filter @pettersen3008/flashpdf typecheck"
+		"typecheck": "pnpm --filter @pettersen3008/flashpdf typecheck",
+		"playground": "pnpm --filter flashpdf-playground dev",
+		"playground:build": "pnpm --filter flashpdf-playground build"
 	},
 	"devDependencies": {
 		"@babel/core": "7.29.7",

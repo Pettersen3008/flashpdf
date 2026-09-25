@@ -48,6 +48,14 @@ fn paragraph(align: u8, runs: &[Run<'_>]) -> Vec<u8> {
     record(9, &payload)
 }
 
+/// `header_rows` then a full-width fraction track.
+fn table_start(header_rows: u16) -> Vec<u8> {
+    let mut bytes = header_rows.to_le_bytes().to_vec();
+    bytes.push(1);
+    bytes.extend(1.0_f32.to_le_bytes());
+    bytes
+}
+
 fn plain(value: &[u8]) -> Vec<u8> {
     paragraph(0, &[(0, 10.0, [0, 0, 0], 0, value)])
 }
@@ -63,7 +71,7 @@ fn box_start() -> Vec<u8> {
 }
 
 /// Every opcode the JSX lowering emits, on a 120x60 page whose 40pt of body
-/// forces the stream across three pages.
+/// forces the stream across four pages.
 fn representative() -> Vec<u8> {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
     bytes.extend(plain(b"Before"));
@@ -74,6 +82,13 @@ fn representative() -> Vec<u8> {
     bytes.extend(plain(b"row"));
     bytes.extend(plain(b"1"));
     bytes.extend(record(6, &[]));
+    bytes.extend(record(10, &table_start(1)));
+    for cell in [b"head", b"body"] {
+        bytes.extend(record(5, &columns(&[(1, 1.0)])));
+        bytes.extend(plain(cell));
+        bytes.extend(record(6, &[]));
+    }
+    bytes.extend(record(11, &[]));
     bytes.extend(record(2, &5.0_f32.to_le_bytes()));
     bytes.extend(record(3, &0.0_f32.to_le_bytes()));
     bytes.extend(plain(b"Stacked"));
@@ -194,13 +209,17 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     let expected = decode(&bytes).unwrap();
     assert!(expected.starts_with(b"%PDF-"));
     let pdf = lopdf::Document::load_mem(&expected).unwrap();
-    assert_eq!(pdf.get_pages().len(), 3);
+    assert_eq!(pdf.get_pages().len(), 4);
     assert_eq!(
         pdf.extract_text(&[1]).unwrap().trim(),
         "Before\nBoxed\nrow\n1"
     );
-    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "Stacked\nStyled");
-    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "After");
+    assert_eq!(
+        pdf.extract_text(&[2]).unwrap().trim(),
+        "head\nbody\nStacked"
+    );
+    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Styled");
+    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
     for split in 0..=bytes.len() {
         let mut decoder = Decoder::default();
         decoder.push(&bytes[..split]).unwrap();
@@ -310,6 +329,15 @@ fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
         deep.extend(record(3, &0.0_f32.to_le_bytes()));
     }
     assert_eq!(push_error(&deep), "nesting exceeds 64");
+
+    let mut bad_table_close = header(VERSION, 120.0, 60.0, 10.0);
+    bad_table_close.extend(record(11, &[]));
+    assert_eq!(push_error(&bad_table_close), "invalid nesting");
+
+    let mut headers_only = header(VERSION, 120.0, 60.0, 10.0);
+    headers_only.extend(record(10, &table_start(1)));
+    headers_only.extend(record(11, &[]));
+    assert_eq!(push_error(&headers_only), "InvalidLayout");
 
     let mut bad_layout_row = header(VERSION, 120.0, 60.0, 10.0);
     bad_layout_row.extend(record(5, &columns(&[(0, 50.0), (1, 1.0)])));

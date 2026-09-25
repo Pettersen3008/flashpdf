@@ -15,9 +15,11 @@ type Component = { render: Render; name: string };
 
 export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
 export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
-export const tags = [...blockTags, ...textTags, "hr", "br"] as const;
+export const tableTags = ["table", "thead", "tbody", "tfoot", "tr", "th", "td"] as const;
+export const tags = [...blockTags, ...textTags, ...tableTags, "hr", "br"] as const;
 export type BlockTag = (typeof blockTags)[number];
 export type TextTag = (typeof textTags)[number];
+export type TableTag = (typeof tableTags)[number];
 export type Tag = (typeof tags)[number];
 
 export type TextNode = { readonly kind: "text"; readonly value: string };
@@ -35,7 +37,9 @@ const HINTS: Record<string, string> = {
 	em: "italic faces are not supported yet; use <span>",
 	i: "italic faces are not supported yet; use <span>",
 	img: "images are not supported yet",
-	table: "tables are not supported yet; use flex rows of <div> and <span>",
+	colgroup: "column widths come from the first row's <th>/<td> width or flex",
+	col: "column widths come from the first row's <th>/<td> width or flex",
+	caption: "captions are not supported; use a <p> before the table",
 	ul: "lists are not supported yet; use one <p> per item",
 	ol: "lists are not supported yet; use one <p> per item",
 	li: "lists are not supported yet; use one <p> per item",
@@ -198,6 +202,8 @@ function host(value: unknown, depth = 0, chain = ""): Node[] {
 		);
 	}
 	const where = ` on <${element.type}>${inside}`;
+	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
+		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
 	const input = props(element.props, ["children", "id", "className", "style", "ref"]);
 	if (input.id !== undefined && typeof input.id !== "string")

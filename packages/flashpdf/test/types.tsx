@@ -46,4 +46,22 @@ const _rich = (
 );
 // @ts-expect-error Line breaks have no children.
 const _brChildren = <br>x</br>;
+const _table = (
+	<table style={{ width: "80%" }}>
+		<thead>
+			<tr>
+				<th>Item</th>
+				<th style={{ width: "60pt", textAlign: "right" }}>Total</th>
+			</tr>
+		</thead>
+		<tbody>
+			<tr style={{ background: "#f4f4f5" }}>
+				<td style={{ padding: 2 }}>Consulting</td>
+				<td style={{ textAlign: "right" }}>$100</td>
+			</tr>
+		</tbody>
+	</table>
+);
+// @ts-expect-error Spanning cells are not supported yet.
+const _colSpan = <td colSpan={2}>x</td>;
 void import("@pettersen3008/flashpdf/jsx-runtime");

@@ -3,12 +3,13 @@ mod row;
 mod text;
 
 pub(crate) use output::{LayoutBuffer, Segment};
+pub(crate) use row::table_width;
 
-use crate::document::{BoxNode, Element, Row, Stack};
+use crate::document::{BoxNode, Element, Row, Stack, Table};
 use crate::font::FontBook;
 use crate::geometry::LayoutArea;
 use crate::layout::output::PositionedBox;
-use crate::{FontId, Pt, RenderError};
+use crate::{BoxStyle, FontId, Pt, RenderError};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum LayoutError {
@@ -67,6 +68,7 @@ impl<'a> LayoutEngine<'a> {
             Element::Spacer(spacer) => Ok(spacer.height),
             Element::Stack(stack) => self.layout_stack(stack, area, output),
             Element::Row(row) => self.layout_row(row, area, output),
+            Element::Table(table) => self.layout_table(table, area, output),
         }
     }
 
@@ -95,9 +97,7 @@ impl<'a> LayoutEngine<'a> {
         let inset_x = style.margin.left + style.padding.left + style.border.left;
         let inset_y = style.margin.top + style.padding.top + style.border.top;
         let inner_width = area.width - horizontal;
-        let paint = (style.background.is_some()
-            || style.border.iter().any(|edge| *edge > Pt::ZERO))
-        .then(|| {
+        let paint = painted(&style).then(|| {
             let index = output.boxes.len();
             output.boxes.push(PositionedBox {
                 origin: area.origin,
@@ -154,20 +154,52 @@ impl<'a> LayoutEngine<'a> {
         area: LayoutArea,
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
-        let widths = row::resolve_column_widths(&row.cells, area.width)?;
+        let widths =
+            row::resolve_column_widths(row.cells.iter().map(|cell| cell.width), area.width)?;
         let mut offset = Pt::ZERO;
         let mut height = Pt::ZERO;
+        let mut placed = Vec::with_capacity(row.cells.len());
         for (cell, width) in row.cells.iter().zip(widths) {
+            let index = output.boxes.len();
             let cell_height = self.layout(
                 &cell.content,
                 area.translated(offset, Pt::ZERO).with_width(width),
                 output,
             )?;
+            placed.push((index, cell_height));
             if cell_height > height {
                 height = cell_height;
             }
             offset += width;
         }
+        // Cells stretch to the row (`align-items: stretch`): a painted cell box
+        // pushed its rectangle first, so growing it tiles the row's backgrounds and borders.
+        for (cell, (index, cell_height)) in row.cells.iter().zip(placed) {
+            if let Element::Box(node) = &cell.content {
+                if painted(&node.style) {
+                    output.boxes[index].height += height - cell_height;
+                }
+            }
+        }
         Ok(height)
     }
+
+    /// Nested tables stack their rows; only a top-level table paginates with a repeating header.
+    fn layout_table(
+        &self,
+        table: &Table<'_>,
+        area: LayoutArea,
+        output: &mut LayoutBuffer,
+    ) -> Result<Pt, LayoutError> {
+        let area = area.with_width(table_width(table.width, area.width)?);
+        let mut height = Pt::ZERO;
+        for row in &table.rows {
+            height += self.layout(row, area.translated(Pt::ZERO, height), output)?;
+        }
+        Ok(height)
+    }
+}
+
+fn painted(style: &BoxStyle) -> bool {
+    style.background.is_some() || style.border.iter().any(|edge| *edge > Pt::ZERO)
 }

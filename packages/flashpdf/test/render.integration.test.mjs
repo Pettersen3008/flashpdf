@@ -215,8 +215,77 @@ test("given an hr border, when rendering, then uses the author rule", async () =
 
 test("given non-native JSX, when rendering, then rejects it", async () => {
 	await assert.rejects(
-		render({ type: "table", props: {} }),
-		/unsupported element <table>: tables are not supported yet/,
+		render({ type: "ul", props: {} }),
+		/unsupported element <ul>: lists are not supported yet/,
+	);
+});
+
+test("given a table that spans two pages, when rendering, then the header row repeats on the second page", async () => {
+	const items = Array.from({ length: 70 }, (_, index) => `Item ${index + 1}`);
+	const pdf = await render(
+		jsx("main", {
+			children: jsxs("table", {
+				children: [
+					jsx("thead", {
+						children: jsxs("tr", {
+							children: [
+								jsx("th", { children: "Name" }),
+								jsx("th", { style: { width: "60pt", textAlign: "right" }, children: "Qty" }),
+							],
+						}),
+					}),
+					jsx("tbody", {
+						children: items.map((item, index) =>
+							jsxs("tr", {
+								children: [
+									jsx("td", { children: item }),
+									jsx("td", { style: { textAlign: "right" }, children: index + 1 }),
+								],
+							}),
+						),
+					}),
+				],
+			}),
+		}),
+	);
+	const path = new URL("../../../dist/table-pages.pdf", import.meta.url);
+	writeFileSync(path, pdf);
+	const parsed = spawnSync(
+		"cargo",
+		[
+			"run",
+			"--locked",
+			"-q",
+			"-p",
+			"flashpdf-core",
+			"--example",
+			"validate_pdf",
+			"--",
+			path.pathname,
+			"2",
+		],
+		{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+	);
+	assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+	const pages = parsed.stdout.split("\f");
+	assert.equal(pages.length, 2);
+	const body = pages.flatMap((page) => {
+		assert.match(page, /^Name\nQty\n/);
+		return page
+			.split("\n")
+			.slice(2)
+			.filter((line) => line.startsWith("Item"));
+	});
+	assert.deepEqual(body, items);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("tr", { children: jsx("td", { children: "x" }) }) })),
+		/<tr> belongs in a <table> on <tr> in <main>/,
+	);
+	await assert.rejects(
+		render(
+			jsx("table", { children: jsx("tr", { children: jsx("td", { colSpan: 2, children: "x" }) }) }),
+		),
+		/colSpan and rowSpan are not supported yet; use one cell per column on <td> in <tr> > <table>/,
 	);
 });
 

@@ -7,7 +7,10 @@ export type RejectedProperty =
 	| "borderRadius"
 	| "lineHeight"
 	| "letterSpacing"
-	| "textDecoration";
+	| "textDecoration"
+	| "verticalAlign"
+	| "borderCollapse"
+	| "borderSpacing";
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
 type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: string };
 const properties = {
@@ -64,6 +67,19 @@ const properties = {
 	textDecoration: {
 		css: "text-decoration",
 		unsupported: "text decoration is not implemented",
+	},
+	verticalAlign: {
+		css: "vertical-align",
+		unsupported: "cells align to the top; middle and bottom are not implemented",
+	},
+	borderCollapse: {
+		css: "border-collapse",
+		unsupported:
+			"cell borders are separate and adjacent ones double up; draw one edge per cell, such as border-bottom",
+	},
+	borderSpacing: {
+		css: "border-spacing",
+		unsupported: "cells tile their row; use cell padding",
 	},
 } as const satisfies Record<StyleProperty | RejectedProperty, PropertyDefinition>;
 

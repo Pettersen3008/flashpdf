@@ -47,7 +47,7 @@ function record(opcode, payload = new Uint8Array()) {
 }
 
 function protocolHeader() {
-	return join(encoder.encode("FPDF"), u16(3), f32(120), f32(60), f32(10));
+	return join(encoder.encode("FPDF"), u16(4), f32(120), f32(60), f32(10));
 }
 
 /** A left-aligned paragraph of one plain Helvetica run. */
@@ -150,7 +150,7 @@ test("given invalid protocol input, when pushed, then the release WASM reports t
 			join(protocolHeader(), record(3, f32(0)), text("word ".repeat(100)), record(4)),
 			/PageOverflow/,
 		],
-		[join(encoder.encode("XPDF"), u16(3), f32(120), f32(60), f32(10)), /invalid magic/],
+		[join(encoder.encode("XPDF"), u16(4), f32(120), f32(60), f32(10)), /invalid magic/],
 	]) {
 		assert.throws(() => renderProtocol(wasm, [stream]), message);
 	}

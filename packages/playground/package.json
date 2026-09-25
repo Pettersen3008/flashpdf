@@ -1,0 +1,16 @@
+{
+	"name": "flashpdf-playground",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "tsc --noEmit && vite build",
+		"preview": "vite preview"
+	},
+	"dependencies": {
+		"@pettersen3008/flashpdf": "workspace:*"
+	},
+	"devDependencies": {
+		"sucrase": "3.35.1"
+	}
+}

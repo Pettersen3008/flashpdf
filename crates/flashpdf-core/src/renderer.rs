@@ -1,10 +1,10 @@
 use pdf_writer::Content;
 
 use crate::command::{CommandParser, OwnedCommand};
-use crate::document::{Block, Document, Element};
+use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout};
-use crate::layout::{LayoutBuffer, LayoutEngine};
+use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
 use crate::paint::PdfPainter;
 use crate::pdf::finish_pdf;
 use crate::{Command, Page, Pt, RenderError, TextStyle};
@@ -139,6 +139,9 @@ impl Renderer {
     }
 
     fn render_element(&mut self, element: &Element<'_>) -> Result<(), RenderError> {
+        if let Element::Table(table) = element {
+            return self.render_table(table);
+        }
         self.layout.clear();
         let height = LayoutEngine::new(&self.fonts)
             .layout(
@@ -201,6 +204,78 @@ impl Renderer {
         }
     }
 
+    /// Rows place one at a time; the header lays out once into its own buffer
+    /// and repaints at the top of every page a body row opens.
+    fn render_table(&mut self, table: &Table<'_>) -> Result<(), RenderError> {
+        let area = LayoutArea::root(table_width(table.width, self.page.content_width())?);
+        let mut header = LayoutBuffer::default();
+        let mut header_height = Pt::ZERO;
+        for row in &table.rows[..table.header_rows] {
+            header_height += LayoutEngine::new(&self.fonts).layout(
+                row,
+                area.translated(Pt::ZERO, header_height),
+                &mut header,
+            )?;
+        }
+        for font in header.used_fonts() {
+            self.fonts.mark_used(font);
+        }
+        let reserved = header_height + self.footer_height;
+        self.page.validate_block(reserved)?;
+        let body = &table.rows[table.header_rows..];
+        if body.is_empty() {
+            if !self.cursor.fits(reserved, self.page) {
+                self.start_page();
+            }
+            self.paint_block(&header, header_height);
+            return Ok(());
+        }
+        let mut header_on_page = false;
+        for (index, row) in body.iter().enumerate() {
+            self.layout.clear();
+            let height = LayoutEngine::new(&self.fonts).layout(row, area, &mut self.layout)?;
+            for font in self.layout.used_fonts() {
+                self.fonts.mark_used(font);
+            }
+            if self.page.validate_block(height + reserved).is_err() {
+                return Err(RenderError::TableRowOverflow(table.header_rows + index));
+            }
+            let needed = height
+                + if header_on_page {
+                    self.footer_height
+                } else {
+                    reserved
+                };
+            if !self.cursor.fits(needed, self.page) {
+                self.start_page();
+                header_on_page = false;
+            }
+            if !header_on_page {
+                self.paint_block(&header, header_height);
+                header_on_page = true;
+            }
+            let Self {
+                contents,
+                cursor,
+                layout,
+                page,
+                ..
+            } = self;
+            paint_block(contents, cursor, *page, layout, height);
+        }
+        Ok(())
+    }
+
+    fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) {
+        paint_block(
+            &mut self.contents,
+            &mut self.cursor,
+            self.page,
+            layout,
+            height,
+        );
+    }
+
     fn start_page(&mut self) {
         self.content_bytes += self.contents.last().unwrap().len();
         self.contents.push(Content::new());
@@ -241,6 +316,21 @@ impl Renderer {
     }
 }
 
+fn paint_block(
+    contents: &mut [Content],
+    cursor: &mut PageCursor,
+    page: PageLayout,
+    layout: &LayoutBuffer,
+    height: Pt,
+) {
+    PdfPainter::new(contents.last_mut().unwrap()).paint(
+        layout,
+        0..layout.lines.len(),
+        cursor.origin(page),
+    );
+    cursor.advance(height);
+}
+
 /// Text and unpainted boxes split across pages. Stack stays atomic: the
 /// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
 fn splittable(element: &Element<'_>) -> bool {
@@ -259,7 +349,7 @@ fn splittable(element: &Element<'_>) -> bool {
                     .iter()
                     .all(|child| matches!(child, Element::Spacer(_)) || splittable(child))
         }
-        Element::Spacer(_) | Element::Stack(_) | Element::Row(_) => false,
+        Element::Spacer(_) | Element::Stack(_) | Element::Row(_) | Element::Table(_) => false,
     }
 }
 
