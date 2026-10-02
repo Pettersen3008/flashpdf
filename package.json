@@ -16,7 +16,7 @@
 		"playground:build": "pnpm --filter flashpdf-playground build"
 	},
 	"devDependencies": {
-		"@babel/core": "7.29.7",
+		"@babel/core": "8.0.6",
 		"@react-pdf/renderer": "4.9.0",
 		"@stylexjs/babel-plugin": "0.19.1",
 		"@tailwindcss/cli": "4.3.3",
