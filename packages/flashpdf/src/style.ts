@@ -1,6 +1,6 @@
 import { number, object } from "./assert.js";
 import { supported, unsupported } from "./css.js";
-import { flexGrow, point } from "./style/length.js";
+import { flexGrow, lineHeight, point } from "./style/length.js";
 import { normalize } from "./style/normalize.js";
 import type { NormalizedStyle } from "./style/types.js";
 
@@ -8,7 +8,7 @@ export type { Box, FontSlots, NormalizedStyle } from "./style/types.js";
 export { boxStyle, edges } from "./style/box.js";
 export { color } from "./style/color.js";
 export { bold, font, helvetica } from "./style/font.js";
-export { point } from "./style/length.js";
+export { lineHeight, point, type LineHeight } from "./style/length.js";
 
 export function decoration(value: unknown): { underline: boolean; lineThrough: boolean } {
 	if (typeof value !== "string") throw new Error(`invalid textDecoration: ${String(value)}`);
@@ -66,6 +66,7 @@ export function style(value: unknown): NormalizedStyle {
 	if (result.flex !== undefined) result.flex = flexGrow(result.flex);
 	if (result.gap !== undefined) point(result.gap);
 	if (result.fontSize !== undefined) point(result.fontSize, 12, true);
+	if (result.lineHeight !== undefined) lineHeight(result.lineHeight, 12);
 	const family = result.fontFamily;
 	if (family !== undefined && (typeof family !== "string" || !family.trim()))
 		throw new Error("fontFamily must name at least one family");

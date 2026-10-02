@@ -67,9 +67,10 @@ fn linked_paragraph(align: u8, links: &[&[u8]], runs: &[LinkedRun<'_>]) -> Vec<u
     record(9, &payload)
 }
 
-/// `header_rows` then a full-width fraction track.
+/// `header_rows`, no footer rows, then a full-width fraction track.
 fn table_start(header_rows: u16) -> Vec<u8> {
     let mut bytes = header_rows.to_le_bytes().to_vec();
+    bytes.extend(0_u16.to_le_bytes());
     bytes.push(1);
     bytes.extend(1.0_f32.to_le_bytes());
     bytes
@@ -319,7 +320,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&bad_length), "truncated record");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
-    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 16, b"x")]));
+    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 32, b"x")]));
     assert_eq!(push_error(&bad_flags), "invalid run flags");
 
     let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);

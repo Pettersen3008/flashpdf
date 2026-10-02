@@ -34,6 +34,8 @@ export type Style = {
 	backgroundColor?: string;
 	gap?: Length;
 	fontSize?: Length;
+	/** A unitless number is a factor of the font size; `%` and `em` resolve against this element's size. */
+	lineHeight?: number | "normal" | `${number}` | `${number}%` | Length;
 	fontFamily?: string;
 	fontWeight?: number | "normal" | "bold";
 	textAlign?: "left" | "center" | "right";

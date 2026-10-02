@@ -9,9 +9,11 @@ import {
 	decoration,
 	font,
 	helvetica,
+	lineHeight,
 	point,
 	type Box,
 	type FontSlots,
+	type LineHeight,
 	type NormalizedStyle,
 } from "./style.js";
 import { locate, rowOnly } from "./tree.js";
@@ -24,6 +26,7 @@ type TextState = {
 	bold: boolean;
 	underline: boolean;
 	lineThrough: boolean;
+	lineHeight: LineHeight;
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
 };
@@ -38,6 +41,7 @@ const ROOT: Context = {
 	bold: false,
 	underline: false,
 	lineThrough: false,
+	lineHeight: undefined,
 	link: undefined,
 	inRow: false,
 };
@@ -47,22 +51,28 @@ const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
 function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): TextState {
 	const selected = font(style, current.family, current.bold, fonts);
 	const decorated = style.textDecoration === undefined ? current : decoration(style.textDecoration);
+	const size =
+		style.fontSize === undefined ? current.size : point(style.fontSize, current.size, true);
 	return {
-		size: style.fontSize === undefined ? current.size : point(style.fontSize, current.size, true),
+		size,
 		align: style.textAlign ?? current.align,
 		color: style.color === undefined ? current.color : color(style.color),
 		family: selected.family,
 		bold: selected.weight,
 		underline: decorated.underline,
 		lineThrough: decorated.lineThrough,
+		lineHeight:
+			style.lineHeight === undefined ? current.lineHeight : lineHeight(style.lineHeight, size),
 		link: current.link,
 	};
 }
 
 function run(state: TextState, text: string, hardBreak = false): Run {
+	const height = state.lineHeight;
 	return {
 		font: state.bold ? state.family.bold! : state.family.regular,
 		size: state.size,
+		lineHeight: height === undefined ? 0 : "pt" in height ? height.pt : height.factor * state.size,
 		color: state.color,
 		text,
 		break: hardBreak,
@@ -80,6 +90,7 @@ function push(runs: Run[], next: Run) {
 		!last.break &&
 		last.font === next.font &&
 		last.size === next.size &&
+		last.lineHeight === next.lineHeight &&
 		last.underline === next.underline &&
 		last.lineThrough === next.lineThrough &&
 		last.link === next.link &&
@@ -270,9 +281,16 @@ function element(
 				const inner = { ...next, inRow: false };
 				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
 				if (row && node.children.length) {
-					if (gap !== 0) throw new Error("row gap is not implemented");
-					writer.rowStart(node.children.map(column));
-					compile(node.children, writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
+					// A gap is a fixed-width empty column between items, so flex grow shares what is left.
+					const spacer: Column = { kind: 0, value: gap };
+					const columns = node.children.map(column);
+					writer.rowStart(
+						gap ? columns.flatMap((item, i) => (i ? [spacer, item] : [item])) : columns,
+					);
+					for (const [index, child] of node.children.entries()) {
+						if (index && gap) writer.spacer(0);
+						compile([child], writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
+					}
 					writer.rowEnd();
 				} else if (context.inRow || style.breakInside === "avoid") {
 					writer.stackStart(gap);
@@ -369,7 +387,11 @@ type RowGroup = { group?: StyledElement; rows: StyledElement[] };
 const BREAKS = ["breakBefore", "breakAfter"] as const;
 
 /** `thead` groups first, then `tbody` and bare `tr` in source order, then `tfoot`, as browsers paint them. */
-function rowGroups(node: StyledElement): { header: RowGroup[]; body: RowGroup[] } {
+function rowGroups(node: StyledElement): {
+	header: RowGroup[];
+	body: RowGroup[];
+	footer: RowGroup[];
+} {
 	const header: RowGroup[] = [];
 	const body: RowGroup[] = [];
 	const footer: RowGroup[] = [];
@@ -392,7 +414,7 @@ function rowGroups(node: StyledElement): { header: RowGroup[]; body: RowGroup[] 
 			rows,
 		});
 	}
-	return { header, body: [...body, ...footer] };
+	return { header, body, footer };
 }
 
 function table(
@@ -416,8 +438,8 @@ function table(
 			[...paint.padding, ...paint.border].some(Boolean))
 	)
 		throw new Error("<table> accepts only vertical margins; style its cells or a wrapping <div>");
-	const { header, body } = rowGroups(node);
-	const rows = [...header, ...body].flatMap((group) => group.rows);
+	const { header, body, footer } = rowGroups(node);
+	const rows = [...header, ...body, ...footer].flatMap((group) => group.rows);
 	const first = rows[0];
 	if (!first) throw new Error("<table> has no rows");
 	const cells = (row: StyledElement) =>
@@ -467,7 +489,7 @@ function table(
 			} catch (error) {
 				throw locate(error, group.where);
 			}
-		// Header rows always share a page, so `break-inside: avoid` only groups body rows.
+		// Header and footer rows always share a page, so `break-inside: avoid` only groups body rows.
 		if (group?.style.breakInside === "avoid" && !repeated) {
 			writer.stackStart(0);
 			for (const tr of rows) row(tr, state);
@@ -482,12 +504,12 @@ function table(
 	};
 	try {
 		if (style.breakInside === "avoid") writer.stackStart(0);
-		writer.tableStart(
-			header.reduce((count, { rows }) => count + rows.length, 0),
-			width,
-		);
+		const count = (groups: RowGroup[]) =>
+			groups.reduce((total, { rows }) => total + rows.length, 0);
+		writer.tableStart(count(header), count(footer), width);
 		for (const item of header) group(item, true);
 		for (const item of body) group(item, false);
+		for (const item of footer) group(item, true);
 		writer.tableEnd();
 		if (style.breakInside === "avoid") writer.stackEnd();
 	} catch (error) {
@@ -496,7 +518,7 @@ function table(
 		if (overflow)
 			throw locate(
 				new Error(
-					"a table row is taller than the page below its repeated header; split its content",
+					"a table row is taller than the page beside its repeated header and footer; split its content",
 				),
 				wheres[Number(overflow[1])] ?? node.where,
 			);
@@ -505,7 +527,7 @@ function table(
 				new Error(
 					style.breakInside === "avoid"
 						? "PageOverflow: the table is taller than a page; drop break-inside: avoid"
-						: "PageOverflow: the table header is taller than a page",
+						: "PageOverflow: the table header and footer are taller than a page",
 				),
 				node.where,
 			);

@@ -34,9 +34,11 @@ pub enum Command<'a> {
         columns: &'a [ColumnWidth],
     },
     RowEnd,
-    /// The first `header_rows` children repeat at the top of every page the table continues on.
+    /// The first `header_rows` children repeat at the top of every page the table continues on,
+    /// the last `footer_rows` after the last body row of every page.
     TableStart {
         header_rows: u16,
+        footer_rows: u16,
         width: ColumnWidth,
     },
     TableEnd,
@@ -68,7 +70,7 @@ pub(crate) enum OwnedCommand {
     StackEnd,
     RowStart(Vec<ColumnWidth>),
     RowEnd,
-    TableStart(u16, ColumnWidth),
+    TableStart(u16, u16, ColumnWidth),
     TableEnd,
     Image(u16, ImageSize, Option<Pt>, Option<String>, String),
 }
@@ -89,8 +91,9 @@ impl OwnedCommand {
             Self::StackEnd => Command::StackEnd,
             Self::RowStart(columns) => Command::RowStart { columns },
             Self::RowEnd => Command::RowEnd,
-            Self::TableStart(header_rows, width) => Command::TableStart {
+            Self::TableStart(header_rows, footer_rows, width) => Command::TableStart {
                 header_rows: *header_rows,
+                footer_rows: *footer_rows,
                 width: *width,
             },
             Self::TableEnd => Command::TableEnd,
@@ -184,6 +187,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     len: text.len(),
                     font: style.font,
                     size: style.size,
+                    line_height: None,
                     color: style.color,
                     hard_break: false,
                     decoration: Default::default(),
@@ -242,18 +246,24 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 }
                 Ok(Element::Row(Row { cells }))
             }
-            Command::TableStart { header_rows, width } => {
+            Command::TableStart {
+                header_rows,
+                footer_rows,
+                width,
+            } => {
                 self.check_depth(depth)?;
                 let rows = self.parse_children(Command::TableEnd, depth + 1)?;
                 let header_rows = usize::from(header_rows);
+                let footer_rows = usize::from(footer_rows);
                 let mut columns = None;
-                if header_rows > rows.len()
+                if header_rows + footer_rows > rows.len()
                     || rows.iter().any(|row| !uniform_rows(row, &mut columns))
                 {
                     return Err(CommandParseError::InvalidTable);
                 }
                 Ok(Element::Table(Table {
                     header_rows,
+                    footer_rows,
                     width,
                     rows,
                 }))

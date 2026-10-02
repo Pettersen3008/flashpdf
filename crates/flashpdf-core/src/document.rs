@@ -58,9 +58,11 @@ pub(crate) struct Cell<'a> {
 }
 
 /// Rows are Row elements, each optionally wrapped in a Box (`tr` paint) or a
-/// Stack (`break-inside: avoid` group). The first `header_rows` repeat per page.
+/// Stack (`break-inside: avoid` group). The first `header_rows` and the last
+/// `footer_rows` repeat per page.
 pub(crate) struct Table<'a> {
     pub(crate) header_rows: usize,
+    pub(crate) footer_rows: usize,
     pub(crate) width: ColumnWidth,
     pub(crate) rows: Vec<Element<'a>>,
 }

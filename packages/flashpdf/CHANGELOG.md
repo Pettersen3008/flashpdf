@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `line-height`: `normal`, a unitless factor, a percent, or a length. A factor inherits as a factor and scales with each descendant's font size; a percent or `em` resolves against the element's own size and inherits as points. The extra height splits evenly above and below the text, as CSS half-leading does.
+- `gap` on a flex row. The gap is a fixed-width empty column between items, so `flex` grow shares the remaining width.
+- `tfoot` rows repeat after the last body row of every page a table spans, and their height is reserved on every page. Previously they painted once at the end.
+
+### Changed
+
+- The binary protocol is version 7: `TableStart` carries a footer row count. The JavaScript and WASM halves ship together, so this affects no public API.
+
 ## 0.3.0 - 2026-09-25
 
 ### Added
