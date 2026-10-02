@@ -26,7 +26,7 @@ const MAX_RECORD: usize = 64 * 1024;
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 6;
+const VERSION: u16 = 7;
 
 #[derive(Default)]
 pub struct Decoder {
@@ -186,9 +186,13 @@ impl Decoder {
             }
             Opcode::TableStart => {
                 let header_rows = cursor.u16()?;
+                let footer_rows = cursor.u16()?;
                 let width = cursor.column()?;
                 cursor.done()?;
-                self.open(Frame::Table, OwnedCommand::TableStart(header_rows, width))
+                self.open(
+                    Frame::Table,
+                    OwnedCommand::TableStart(header_rows, footer_rows, width),
+                )
             }
             Opcode::TableEnd => {
                 cursor.done()?;
@@ -269,9 +273,10 @@ impl Decoder {
                     let font = self.font(cursor.take(1)?[0])?;
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
-                    // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows.
+                    // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
+                    // 4 an f32 line height follows.
                     let flags = cursor.take(1)?[0];
-                    if flags > 0x0f {
+                    if flags > 0x1f {
                         return Err(ProtocolError::InvalidValue("run flags"));
                     }
                     let link = if flags & 8 != 0 {
@@ -282,12 +287,18 @@ impl Decoder {
                     } else {
                         None
                     };
+                    let line_height = if flags & 16 != 0 {
+                        Some(pt(cursor.positive_f32("line height")?)?)
+                    } else {
+                        None
+                    };
                     let run = cursor.text(false)?;
                     text.push_str(run);
                     runs.push(TextRun {
                         len: run.len(),
                         font,
                         size,
+                        line_height,
                         color,
                         hard_break: flags & 1 != 0,
                         decoration: RunDecoration {

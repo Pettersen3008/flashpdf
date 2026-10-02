@@ -4,7 +4,6 @@ export type RejectedProperty =
 	| "minWidth"
 	| "maxWidth"
 	| "borderRadius"
-	| "lineHeight"
 	| "letterSpacing"
 	| "verticalAlign"
 	| "objectFit"
@@ -45,6 +44,8 @@ const properties = {
 	// CSS propagates decoration to descendants rather than inheriting it; the effect is the same here.
 	textDecoration: { css: "text-decoration", inherited: true },
 	color: { inherited: true },
+	// Inherits through the compiler's text state: a factor stays a factor, a length stays a length.
+	lineHeight: { css: "line-height" },
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
@@ -57,10 +58,6 @@ const properties = {
 		unsupported: "only width on a flex row child is implemented",
 	},
 	borderRadius: { css: "border-radius", unsupported: "box corners are square" },
-	lineHeight: {
-		css: "line-height",
-		unsupported: "line height is fixed to the font's ascent, descent, and line gap",
-	},
 	letterSpacing: {
 		css: "letter-spacing",
 		unsupported: "text shaping is not implemented",

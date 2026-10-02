@@ -27,6 +27,7 @@ async function compiled(element) {
 const run = (font, text, extra = {}) => ({
 	font,
 	size: 12,
+	lineHeight: 0,
 	color: [0, 0, 0],
 	text,
 	break: false,
@@ -149,7 +150,7 @@ test("given a table with thead and tbody, when compiling, then emits the contain
 		["rowEnd"],
 	];
 	assert.deepEqual(calls, [
-		["tableStart", 1, { kind: 1, value: 1 }],
+		["tableStart", 1, 0, { kind: 1, value: 1 }],
 		...row(1, "Item", "Amount"),
 		...row(0, "Coffee", "$4"),
 		["tableEnd"],
@@ -168,4 +169,44 @@ test("given rows with different cell counts, when compiling, then rejects naming
 		),
 		/^Error: <tr> has 1 cells but the table has 2 columns on <tr\.short> in <table>$/,
 	);
+});
+
+test("given a flex row with a 12pt gap, when compiling, then a fixed 12pt empty column separates its items", async () => {
+	const calls = await compiled(
+		jsxs("div", {
+			style: { display: "flex", gap: "12pt" },
+			children: [jsx("div", { children: "a" }), jsx("div", { children: "b" })],
+		}),
+	);
+	const cell = (text) => [["stackStart", 0], ["paragraph", [run(0, text)], "left"], ["stackEnd"]];
+	assert.deepEqual(calls, [
+		[
+			"rowStart",
+			[
+				{ kind: 1, value: 1 },
+				{ kind: 0, value: 12 },
+				{ kind: 1, value: 1 },
+			],
+		],
+		...cell("a"),
+		["spacer", 0],
+		...cell("b"),
+		["rowEnd"],
+	]);
+});
+
+test("given a unitless line-height on a block, when a child changes font size, then each run scales the factor by its own size", async () => {
+	const calls = await compiled(
+		jsx("p", {
+			style: { lineHeight: 1.5 },
+			children: ["a", jsx("span", { style: { fontSize: "20pt" }, children: "b" })],
+		}),
+	);
+	assert.deepEqual(calls, [
+		[
+			"paragraph",
+			[run(0, "a", { lineHeight: 18 }), run(0, "b", { size: 20, lineHeight: 30 })],
+			"left",
+		],
+	]);
 });

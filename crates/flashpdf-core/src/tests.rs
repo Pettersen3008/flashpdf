@@ -305,6 +305,7 @@ fn run(len: usize, bold: bool, size: f32, hard_break: bool) -> TextRun {
             super::HELVETICA
         },
         size: Pt(size),
+        line_height: None,
         color: Rgb::BLACK,
         hard_break,
         decoration: Default::default(),
@@ -528,6 +529,7 @@ fn given_percent_columns_totalling_one_hundred_when_rounded_then_accepts_them() 
 fn table_start(header_rows: u16) -> Command<'static> {
     Command::TableStart {
         header_rows,
+        footer_rows: 0,
         width: super::ColumnWidth::Fraction(FractionValue::new(1.0).unwrap()),
     }
 }
@@ -830,4 +832,55 @@ fn given_a_character_abel_lacks_when_rendered_then_rejects_naming_it() {
         abel_text("\u{4e2d}").unwrap_err(),
         RenderError::MissingGlyph('\u{4e2d}')
     );
+}
+
+#[test]
+fn given_a_15pt_line_height_on_three_lines_when_rendered_then_the_third_line_moves_to_the_next_page(
+) {
+    // 40pt of content holds three normal 9.25pt lines, but only two 15pt ones.
+    let runs = [true, true, false].map(|hard_break| TextRun {
+        line_height: Some(Pt(15.0)),
+        ..run(1, false, 10.0, hard_break)
+    });
+    let pdf = parsed(&[Command::Paragraph {
+        links: &[],
+        align: TextAlign::Left,
+        text: "abc",
+        runs: &runs,
+    }]);
+    assert_eq!(pdf.get_pages().len(), 2);
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "a\nb");
+    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "c");
+}
+
+#[test]
+fn given_a_table_with_a_footer_row_when_it_spans_pages_then_the_footer_follows_the_last_body_row_on_every_page(
+) {
+    let columns = [super::ColumnWidth::Fraction(
+        FractionValue::new(1.0).unwrap(),
+    )];
+    let cells: Vec<String> = (1..=6).map(|row| format!("r{row}")).collect();
+    let mut commands = vec![Command::TableStart {
+        header_rows: 1,
+        footer_rows: 1,
+        width: columns[0],
+    }];
+    for cell in std::iter::once("H")
+        .chain(cells.iter().map(String::as_str))
+        .chain(["F"])
+    {
+        commands.extend([
+            Command::RowStart { columns: &columns },
+            text(cell),
+            Command::RowEnd,
+        ]);
+    }
+    commands.push(Command::TableEnd);
+    let pdf = parsed(&commands);
+    // 40pt of body holds the 9.25pt header and footer plus two 9.25pt rows.
+    assert_eq!(pdf.get_pages().len(), 3);
+    for (page, rows) in (1..=3).zip(cells.chunks(2)) {
+        let expected = format!("H\n{}\nF", rows.join("\n"));
+        assert_eq!(pdf.extract_text(&[page]).unwrap().trim(), expected);
+    }
 }

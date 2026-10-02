@@ -13,8 +13,8 @@ const resolve = async (value, sheets) => resolveStyles(await resolveTree(value),
 test("given CSS outside the supported subset, when parsing a stylesheet, then rejects it with its source position", () => {
 	for (const [source, message] of [
 		[
-			".a { line-height: 1.5 }",
-			/line-height \(line height is fixed to the font's ascent, descent, and line gap\).*"\.a" at 1:1/,
+			".a { letter-spacing: 1pt }",
+			/letter-spacing \(text shaping is not implemented\).*"\.a" at 1:1/,
 		],
 		[
 			".a { grid-template-columns: 1fr }",

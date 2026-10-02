@@ -34,3 +34,15 @@ export function flexGrow(value: unknown): number {
 	if (Number.isNaN(grow)) throw new Error(`invalid flex: ${value}`);
 	return number(grow);
 }
+
+/** Undefined is `normal`; a unitless number inherits as a factor, a length or percent as points. */
+export type LineHeight = { factor: number } | { pt: number } | undefined;
+export function lineHeight(value: unknown, size: number): LineHeight {
+	if (value === "normal") return undefined;
+	if (typeof value === "number") return { factor: number(value, true) };
+	if (typeof value !== "string") throw new Error(`invalid lineHeight: ${String(value)}`);
+	const match = /^(\d+(?:\.\d*)?|\.\d+)(%?)$/.exec(value.trim());
+	if (!match) return { pt: point(value, size, true) };
+	const amount = number(Number(match[1]), true);
+	return match[2] ? { pt: number((amount * size) / 100, true) } : { factor: amount };
+}
