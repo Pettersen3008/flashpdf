@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-02
+
 ### Added
 
 - `line-height`: `normal`, a unitless factor, a percent, or a length. A factor inherits as a factor and scales with each descendant's font size; a percent or `em` resolves against the element's own size and inherits as points. The extra height splits evenly above and below the text, as CSS half-leading does.
