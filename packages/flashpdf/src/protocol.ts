@@ -8,6 +8,8 @@ export type Dimension = { kind: 1 | 2; value: number };
 export type Run = {
 	font: number;
 	size: number;
+	/** Points; 0 is `normal`, the font's ascent, descent, and line gap. */
+	lineHeight: number;
 	color: readonly [number, number, number];
 	text: string;
 	break: boolean;
@@ -90,14 +92,17 @@ export class ProtocolWriter {
 					this.binary.u8(run.font);
 					this.binary.f32(run.size);
 					for (const channel of run.color) this.binary.u8(channel);
-					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows.
+					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
+					// 4 an f32 line height follows.
 					this.binary.u8(
 						(run.break ? 1 : 0) |
 							(run.underline ? 2 : 0) |
 							(run.lineThrough ? 4 : 0) |
-							(run.link === undefined ? 0 : 8),
+							(run.link === undefined ? 0 : 8) |
+							(run.lineHeight ? 16 : 0),
 					);
 					if (run.link !== undefined) this.binary.u16(links.indexOf(run.link));
+					if (run.lineHeight) this.binary.f32(run.lineHeight);
 					this.binary.text(run.text);
 				}
 			});
@@ -177,11 +182,13 @@ export class ProtocolWriter {
 	}
 
 	/** The first `headerRows` children repeat on every page the table continues on. */
-	tableStart(headerRows: number, width: Column) {
+	tableStart(headerRows: number, footerRows: number, width: Column) {
 		this.body();
 		if (headerRows > 0xffff) throw new Error("too many header rows");
+		if (footerRows > 0xffff) throw new Error("too many footer rows");
 		this.binary.record(opcode.tableStart, () => {
 			this.binary.u16(headerRows);
+			this.binary.u16(footerRows);
 			this.binary.u8(width.kind);
 			this.binary.f32(width.value);
 		});

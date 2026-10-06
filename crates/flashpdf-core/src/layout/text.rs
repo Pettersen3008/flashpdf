@@ -84,13 +84,19 @@ impl<'a> ParagraphLayouter<'a> {
             let (ascent, descent, gap) = font.metrics();
             let scale = run.size.get() / 1000.0;
             let ascent = ascent * scale;
+            let content = ascent - descent * scale;
+            // CSS half-leading: the difference to the content height splits evenly above and below.
+            let (ascent, line_height) = match run.line_height {
+                Some(height) => (ascent + (height.get() - content) / 2.0, height.get()),
+                None => (ascent, (content + gap * scale).max(0.0)),
+            };
             runs.push(RunMetrics {
                 font,
                 id: run.font,
                 size: run.size,
                 color: run.color,
                 ascent: Pt(ascent),
-                line_height: Pt((ascent - descent * scale + gap * scale).max(0.0)),
+                line_height: Pt(line_height),
             });
         }
         let mut state = Self {

@@ -187,6 +187,8 @@ pub struct TextRun {
     pub len: usize,
     pub font: FontId,
     pub size: Pt,
+    /// CSS `line-height`; `None` is `normal`, the font's ascent, descent, and line gap.
+    pub line_height: Option<Pt>,
     pub color: Rgb,
     /// Ends the line after this run without adding a space.
     pub hard_break: bool,

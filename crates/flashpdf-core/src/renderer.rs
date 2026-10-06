@@ -291,28 +291,23 @@ impl Renderer {
         }
     }
 
-    /// Rows place one at a time; the header lays out once into its own buffer
-    /// and repaints at the top of every page a body row opens.
+    /// Rows place one at a time; the header and footer rows lay out once into
+    /// their own buffers. The header repaints at the top of every page a body
+    /// row opens, the footer after the last body row of every page.
     fn render_table(&mut self, table: &Table<'_>) -> Result<(), RenderError> {
         let area = LayoutArea::root(table_width(table.width, self.page.content_width())?);
-        let mut header = LayoutBuffer::default();
-        let mut header_height = Pt::ZERO;
-        for row in &table.rows[..table.header_rows] {
-            header_height += LayoutEngine::new(&self.fonts, &self.images).layout(
-                row,
-                area.translated(Pt::ZERO, header_height),
-                &mut header,
-            )?;
-        }
-        self.mark_used(&header);
-        let reserved = header_height + self.footer_height;
+        let split = table.rows.len() - table.footer_rows;
+        let (header, header_height) = self.layout_rows(&table.rows[..table.header_rows], area)?;
+        let (footer, footer_height) = self.layout_rows(&table.rows[split..], area)?;
+        let reserved = header_height + footer_height + self.footer_height;
         self.page.validate_block(reserved)?;
-        let body = &table.rows[table.header_rows..];
+        let body = &table.rows[table.header_rows..split];
         if body.is_empty() {
             if !self.cursor.fits(reserved, self.page) {
                 self.start_page();
             }
             self.paint_block(&header, header_height);
+            self.paint_block(&footer, footer_height);
             return Ok(());
         }
         let mut header_on_page = false;
@@ -327,11 +322,14 @@ impl Renderer {
             }
             let needed = height
                 + if header_on_page {
-                    self.footer_height
+                    footer_height + self.footer_height
                 } else {
                     reserved
                 };
             if !self.cursor.fits(needed, self.page) {
+                if header_on_page {
+                    self.paint_block(&footer, footer_height);
+                }
                 self.start_page();
                 header_on_page = false;
             }
@@ -342,7 +340,26 @@ impl Renderer {
             self.paint_block(&layout, height);
             self.layout = layout;
         }
+        self.paint_block(&footer, footer_height);
         Ok(())
+    }
+
+    fn layout_rows(
+        &mut self,
+        rows: &[Element<'_>],
+        area: LayoutArea,
+    ) -> Result<(LayoutBuffer, Pt), RenderError> {
+        let mut buffer = LayoutBuffer::default();
+        let mut height = Pt::ZERO;
+        for row in rows {
+            height += LayoutEngine::new(&self.fonts, &self.images).layout(
+                row,
+                area.translated(Pt::ZERO, height),
+                &mut buffer,
+            )?;
+        }
+        self.mark_used(&buffer);
+        Ok((buffer, height))
     }
 
     fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) {
