@@ -24,6 +24,25 @@ export function point(value: unknown, parent = 12, positive = false): number {
 	return number(Number(match[1]) * scale, positive);
 }
 
+const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|%)$/;
+/** A `width` or img `height`: points (kind 1) or percent of the container width (kind 2). */
+export function dimension(
+	value: unknown,
+	name: "width" | "height",
+): { kind: 1 | 2; value: number } {
+	const match = typeof value === "string" ? DIMENSION.exec(value) : null;
+	const amount =
+		typeof value === "number"
+			? value
+			: match
+				? Number(match[1]) * (match[2] === "px" ? 0.75 : 1)
+				: NaN;
+	// The engine takes f32, so a long digit string must not round to Infinity.
+	if (!(amount > 0) || !Number.isFinite(Math.fround(amount)))
+		throw new Error(`invalid ${name}: ${String(value)}`);
+	return { kind: match?.[2] === "%" ? 2 : 1, value: Math.fround(amount) };
+}
+
 const FLEX_KEYWORD: Record<string, number> = { none: 0, initial: 0, auto: 1 };
 /** Only grow survives from the `flex` shorthand; shrink and basis have no meaning without content sizing. */
 export function flexGrow(value: unknown): number {

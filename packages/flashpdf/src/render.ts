@@ -6,7 +6,7 @@ import { resolveStyles } from "./css.js";
 import type { Element } from "./element.js";
 import { registerFonts } from "./fonts.js";
 import { ProtocolWriter } from "./protocol.js";
-import { resolveTree } from "./tree.js";
+import { pageOverflow, resolveTree } from "./tree.js";
 
 export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array | undefined };
 export type PdfMetadata = {
@@ -107,6 +107,8 @@ export function createRenderer(loadWasm: LoadWasm) {
 			} catch (error) {
 				throw asError(error);
 			}
+		} catch (error) {
+			throw pageOverflow(error);
 		} finally {
 			if (!consumed) renderer.free();
 		}

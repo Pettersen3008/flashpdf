@@ -1,11 +1,12 @@
 import type { FontSlots, NormalizedStyle } from "./types.js";
 
 export function bold(value: unknown): boolean {
-	return (
-		value === "bold" ||
-		(typeof value === "number" && value >= 600) ||
-		(typeof value === "string" && Number(value) >= 600)
-	);
+	if (value === "normal" || value === "bold") return value === "bold";
+	const weight =
+		typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) : value;
+	if (typeof weight !== "number" || !(weight >= 1 && weight <= 1000))
+		throw new Error(`invalid fontWeight: ${String(value)} (use normal, bold, or 1 to 1000)`);
+	return weight >= 600;
 }
 
 export const helvetica: FontSlots = { regular: 0, bold: 1 };

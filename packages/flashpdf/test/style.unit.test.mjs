@@ -83,3 +83,13 @@ test("given a font-family list, when selecting a font, then uses the first regis
 	assert.equal(pick("Arial"), helvetica);
 	assert.throws(() => pick("Missing, monospace"), /unregistered font family: Missing, monospace/);
 });
+
+test("given a font weight outside normal, bold, and 1 to 1000, when normalizing, then rejects it", () => {
+	for (const fontWeight of ["normal", "bold", 700, "700"]) style({ fontWeight });
+	for (const fontWeight of ["bolder", "boldd", 0, "1001"])
+		assert.throws(() => style({ fontWeight }), /invalid fontWeight/, String(fontWeight));
+});
+
+test("given a width with more digits than a float holds, when normalizing, then rejects it", () => {
+	assert.throws(() => style({ width: `${"9".repeat(45)}pt` }), /invalid width: 9+pt/);
+});

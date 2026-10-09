@@ -18,11 +18,12 @@ export function number(value: unknown, positive = false): number {
 		throw new Error("invalid number");
 	return Math.fround(value);
 }
-/** Control characters other than ASCII whitespace and the page tokens, plus lone surrogates
- *  (paired ones form a single code point under the `u` flag). Whether a printable character
- *  has a glyph is the font's decision at layout. */
+/** Control characters other than ASCII whitespace, plus lone surrogates (paired ones form a
+ *  single code point under the `u` flag). This includes the page tokens U+001E and U+001F,
+ *  which only `PageNumber` and `TotalPages` emit. Whether a printable character has a glyph
+ *  is the font's decision at layout. */
 // oxlint-disable-next-line no-control-regex -- Control characters are the point.
-const REJECTED = /[\u0000-\u0008\u000b\u000e-\u001d\u007f-\u009f\ud800-\udfff]/u;
+const REJECTED = /[\u0000-\u0008\u000b\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u;
 export function text(value: unknown): string {
 	if (typeof value !== "string" && (typeof value !== "number" || !Number.isFinite(value)))
 		throw new Error("expected text");
