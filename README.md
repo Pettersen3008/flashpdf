@@ -26,7 +26,7 @@ const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', ma
 
 ## Playground
 
-The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX template and a stylesheet to a PDF in the browser, with FlashPDF's validation errors shown in full. Run it locally with `pnpm playground`, share a template through the URL hash, and upload a `.ttf` to test embedded fonts. Export `{ document, options }` from the TSX editor to pass render options; the CSS editor and font uploader supply the default `stylesheets` and `fonts`. It deploys to GitHub Pages from `main` and lives in [`packages/playground`](./packages/playground).
+The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX template and a stylesheet to a PDF in the browser, with FlashPDF's validation errors shown in full. Run it locally with `pnpm playground`, share a template through the URL hash, and upload a `.ttf` to test embedded fonts. Export `{ document, options }` from the TSX editor to pass render options; the CSS editor and font uploader supply the default `stylesheets` and `fonts`. It deploys to GitHub Pages from `main` after CI passes there, and lives in [`packages/playground`](./packages/playground).
 
 ## Tables
 
@@ -158,9 +158,11 @@ Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Ha
 | Bun 1.x | Yes, including host-provided `Uint8Array` TTFs |
 | AWS Lambda Node.js 20.19+ | Yes, include the package's `wasm/` directory in the deployment artifact |
 | Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
-| Vercel Edge | Yes, the `edge-light` condition selects the same static WASM import |
+| Vercel Edge | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
 
-Every target runs the same decoder, so a document that renders in one produces identical bytes in the others. Content streams and embedded fonts are Flate-compressed. `tests/e2e.mjs` proves this against a packed tarball with Node, AWS Lambda handler packaging, Bun, Vite, Chromium, and Wrangler's local Workers runtime. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+Every target runs the same decoder. `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+
+Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common rejections, recipes, and a react-pdf migration map live in the [guide](./docs/guide.md).
 
 ## Assets
 
@@ -175,9 +177,12 @@ Supported CSS, the intentional v1 limits, and the reason behind each rejection l
 
 ## Working on FlashPDF
 
-Requirements: Node 22.12+, pnpm, Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x is optional for the Bun-specific check, and qpdf is optional for the PDF structure check in `tests/e2e.mjs`. The package itself runs on Node 20.19+.
+Requirements: Node 22.12+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools (`mutool`) are optional locally, each enabling a check in `tests/e2e.mjs`, and CI requires all three. The package itself runs on Node 20.19+.
+
+pnpm 10 cannot switch itself to pnpm 12, and Corepack 0.34 cannot launch it, so install the pinned version directly.
 
 ```bash
+npm install -g pnpm@12.4.2
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
 sh verify.sh
@@ -187,7 +192,7 @@ That formats, lints, and tests the Rust workspace, formats and lints the TypeScr
 
 Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. Every library renders the same fixture: A4 page, 36pt margins, 10pt body text, a 24pt heading, and a 70pt right-aligned amount column, so the comparison is fair even though each library uses its native authoring API. It reports median and p95 cold start and warm render, peak RSS, package size (`installBytes` adds every transitive runtime dependency, deduped by real path), and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts.
 
-To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version, reruns `verify.sh`, and publishes to GitHub Packages with `GITHUB_TOKEN`.
+To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version and against a `## <version>` heading in `packages/flashpdf/CHANGELOG.md`, reruns `verify.sh`, attests build provenance for the packed tarball, and publishes that tarball to GitHub Packages with `GITHUB_TOKEN`.
 
 `tests/golden/css-invoice.txt` pins the PDF content stream of the CSS invoice: every draw position, colour, font, and page break. Regenerate it with `UPDATE_GOLDEN=1` and review the diff.
 

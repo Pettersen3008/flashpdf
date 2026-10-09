@@ -4,12 +4,20 @@ import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const work = mkdtempSync(join(tmpdir(), "flashpdf-e2e-"));
 const nodeOnly = process.argv.includes("--node-only");
 const run = (command, args, options = {}) =>
 	execFileSync(command, args, { cwd: work, encoding: "utf8", stdio: "pipe", ...options });
+// CI installs every optional tool, so a missing one there fails instead of skipping its check.
+const installed = (tool, skipped) => {
+	if (spawnSync(tool, ["--version"]).error === undefined) return true;
+	if (process.env.CI) throw new Error(`${tool} is required in CI`);
+	console.warn(`${tool} not installed; ${skipped}`);
+	return false;
+};
 
 try {
 	const tarball = run("npm", ["pack", "--pack-destination", work, "--silent"], {
@@ -23,38 +31,40 @@ try {
 		JSON.stringify({ name: "flashpdf-consumer", private: true, type: "module" }),
 	);
 	run("npm", ["install", "--silent", "--no-audit", "--no-fund", join(work, tarball)]);
-	cpSync(join(repo, "packages/flashpdf/test/fixtures/Abel-Regular.ttf"), join(work, "font.ttf"));
-
+	// Every target renders this one module and must return the bytes Node returns. It reads no
+	// file and imports no builtin, so assets travel as base64 and one source runs everywhere.
+	// A 1x1 grey PNG built by hand, so the packed package proves image XObjects end to end.
+	const crc32 = (bytes) => {
+		let crc = 0xffffffff;
+		for (const byte of bytes) {
+			crc ^= byte;
+			for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+		}
+		return (crc ^ 0xffffffff) >>> 0;
+	};
+	const chunk = (kind, data) => {
+		const body = Buffer.concat([Buffer.from(kind), data]);
+		const bytes = Buffer.alloc(body.length + 8);
+		bytes.writeUInt32BE(data.length, 0);
+		body.copy(bytes, 4);
+		bytes.writeUInt32BE(crc32(body), body.length + 4);
+		return bytes;
+	};
+	const logo = Buffer.concat([
+		Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+		chunk("IHDR", Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0])),
+		chunk("IDAT", deflateSync(Buffer.from([0, 128]))),
+		chunk("IEND", Buffer.alloc(0)),
+	]);
+	const font = readFileSync(join(repo, "packages/flashpdf/test/fixtures/Abel-Regular.ttf"));
 	writeFileSync(
-		join(work, "consumer.mjs"),
-		`import { readFile } from "node:fs/promises";
-import { deflateSync } from "node:zlib";
-import { jsx, jsxs } from "@pettersen3008/flashpdf/jsx-runtime";
+		join(work, "invoice.mjs"),
+		`import { jsx, jsxs } from "@pettersen3008/flashpdf/jsx-runtime";
 import { render, stylesheet } from "@pettersen3008/flashpdf";
 
-// A 1x1 grey PNG built by hand, so the packed package proves image XObjects end to end.
-const crc32 = (bytes) => {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit++) crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-};
-const chunk = (kind, data) => {
-  const body = Buffer.concat([Buffer.from(kind), data]);
-  const bytes = Buffer.alloc(body.length + 8);
-  bytes.writeUInt32BE(data.length, 0);
-  body.copy(bytes, 4);
-  bytes.writeUInt32BE(crc32(body), body.length + 4);
-  return bytes;
-};
-const logo = new Uint8Array(Buffer.concat([
-  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  chunk("IHDR", Buffer.from([0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0])),
-  chunk("IDAT", deflateSync(Buffer.from([0, 128]))),
-  chunk("IEND", Buffer.alloc(0)),
-]));
+const bytes = (base64) => Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+const logo = bytes("${logo.toString("base64")}");
+const font = bytes("${font.toString("base64")}");
 const Invoice = ({ total }) => jsxs("main", {
   style: { fontFamily: "Invoice" },
   children: [
@@ -63,13 +73,19 @@ const Invoice = ({ total }) => jsxs("main", {
     jsx("p", { className: "total", children: total }),
   ],
 });
-const font = new Uint8Array(await readFile("font.ttf"));
-const pdf = await render(jsx(Invoice, { total: "$100.00" }), {
+export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {
   pageFormat: "A4",
   margin: 36,
   stylesheets: [stylesheet(".total { color: #0000ff; text-align: right }")],
   fonts: [{ family: "Invoice", regular: font, bold: font }],
 });
+`,
+	);
+	writeFileSync(
+		join(work, "consumer.mjs"),
+		`import { renderInvoice } from "./invoice.mjs";
+
+const pdf = await renderInvoice();
 if (!(pdf instanceof Uint8Array)) throw new Error("render must return a Uint8Array");
 if ((Buffer.from(pdf).toString("latin1").match(/\\/Subtype \\/Type0/g) ?? []).length !== 2)
   throw new Error("embedded regular and bold fonts missing");
@@ -85,23 +101,31 @@ process.stdout.write(Buffer.from(pdf).toString("base64"));
 
 	const pdfPath = join(work, "consumer.pdf");
 	writeFileSync(pdfPath, Buffer.from(nodePdf, "base64"));
-	if (spawnSync("qpdf", ["--version"]).status === 0) {
+	if (installed("qpdf", "PDF structure is unchecked")) {
 		run("qpdf", ["--check", pdfPath]);
 		console.log("qpdf --check: ok");
-	} else console.warn("qpdf not installed; PDF structure is unchecked");
-	if (spawnSync("mutool", ["-v"]).status === 0) {
-		const png = join(work, "page1.png");
-		run("mutool", ["draw", "-q", "-r", "72", "-o", png, pdfPath, "1"]);
-		const sha = createHash("sha256").update(readFileSync(png)).digest("hex");
-		console.log(`mutool page 1 sha256: ${sha}`);
-	} else console.warn("mutool not installed; first page is not rasterised");
+	}
+	if (installed("mutool", "first page is not rasterised")) {
+		// The Rust golden test pins the drawing; this proves an independent reader sees the page.
+		const pgm = join(work, "page1.pgm");
+		run("mutool", ["draw", "-q", "-r", "72", "-o", pgm, pdfPath, "1"]);
+		const raster = readFileSync(pgm);
+		const header = /^P5\s+(\d+)\s+(\d+)\s+255\s/.exec(raster.toString("latin1", 0, 32));
+		if (header?.[1] !== "595" || header[2] !== "842")
+			throw new Error("mutool did not rasterise an A4 page at 72 dpi");
+		if (raster.subarray(header[0].length).every((pixel) => pixel === 255))
+			throw new Error("mutool rasterised a blank page");
+		const text = run("mutool", ["draw", "-q", "-F", "txt", "-o", "-", pdfPath, "1"]);
+		if (!text.includes("Invoice") || !text.includes("$100.00"))
+			throw new Error("mutool cannot extract the page text");
+		console.log("mutool: raster and text ok");
+	}
 
 	writeFileSync(
 		join(work, "lambda.mjs"),
-		`import { jsx } from "@pettersen3008/flashpdf/jsx-runtime";
-import { render } from "@pettersen3008/flashpdf";
+		`import { renderInvoice } from "./invoice.mjs";
 export async function handler() {
-  const pdf = await render(jsx("main", { children: "Lambda invoice" }));
+  const pdf = await renderInvoice();
   return { statusCode: 200, isBase64Encoded: true, body: Buffer.from(pdf).toString("base64") };
 }
 `,
@@ -111,25 +135,22 @@ export async function handler() {
 		"-e",
 		`const { handler } = await import("./lambda.mjs"); const response = await handler(); process.stdout.write(response.body);`,
 	]);
-	if (!lambdaPdf.startsWith("JVBER")) throw new Error("Lambda handler did not render a PDF");
+	if (lambdaPdf !== nodePdf) throw new Error("Lambda output differs from Node");
 	console.log("aws-lambda: ok");
 
-	if (!nodeOnly && spawnSync("bun", ["--version"]).status === 0) {
+	if (!nodeOnly && installed("bun", "Bun support is unverified on this target")) {
 		const bunPdf = run("bun", ["consumer.mjs"]);
 		if (bunPdf !== nodePdf) throw new Error("Bun output differs from Node");
 		console.log("bun: ok");
-	} else if (!nodeOnly) console.warn("bun not installed; Bun support is unverified on this target");
+	}
 
 	if (!nodeOnly) {
 		writeFileSync(
 			join(work, "worker.mjs"),
-			`import { jsx } from "@pettersen3008/flashpdf/jsx-runtime";
-import { render } from "@pettersen3008/flashpdf";
+			`import { renderInvoice } from "./invoice.mjs";
 export default {
   async fetch() {
-    return new Response(await render(jsx("main", { children: "Worker invoice" })), {
-      headers: { "content-type": "application/pdf" },
-    });
+    return new Response(await renderInvoice(), { headers: { "content-type": "application/pdf" } });
   },
 };
 `,
@@ -146,8 +167,8 @@ export default {
 		const worker = await unstable_startWorker({ config: join(work, "wrangler.jsonc") });
 		try {
 			const response = await worker.fetch("http://example.com");
-			const workerPdf = Buffer.from(await response.arrayBuffer()).toString("latin1");
-			if (!workerPdf.startsWith("%PDF-")) throw new Error("Cloudflare Worker did not render a PDF");
+			const workerPdf = Buffer.from(await response.arrayBuffer()).toString("base64");
+			if (workerPdf !== nodePdf) throw new Error("Cloudflare Worker output differs from Node");
 			console.log("cloudflare-worker: ok");
 		} finally {
 			await worker.dispose();
@@ -218,11 +239,14 @@ if (Buffer.from(pdf.subarray(0, 5)).toString() !== "%PDF-") throw new Error("inv
 		);
 		writeFileSync(
 			join(work, "src.js"),
-			`import { jsx, jsxs } from "@pettersen3008/flashpdf/jsx-runtime";
-import { render } from "@pettersen3008/flashpdf";
-const Invoice = () => jsxs("main", { children: [jsx("h1", { children: "Invoice" }), jsx("p", { children: "$100.00" })] });
-const pdf = await render(jsx(Invoice, {}));
-document.querySelector("#out").textContent = new TextDecoder().decode(pdf.subarray(0, 5)) + " " + pdf.length;
+			`import { renderInvoice } from "./invoice.mjs";
+const out = document.querySelector("#out");
+try {
+  const digest = await crypto.subtle.digest("SHA-256", await renderInvoice());
+  out.textContent = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+} catch (error) {
+  out.textContent = "error: " + error.message;
+}
 `,
 		);
 		const { chromium } = await import("playwright");
@@ -250,10 +274,12 @@ document.querySelector("#out").textContent = new TextDecoder().decode(pdf.subarr
 		try {
 			const page = await browser.newPage();
 			await page.goto(`http://127.0.0.1:${address.port}`, { waitUntil: "networkidle" });
-			await page.waitForFunction(() =>
-				document.querySelector("#out")?.textContent?.startsWith("%PDF-"),
-			);
-			console.log(`browser: ${await page.locator("#out").textContent()}`);
+			await page.waitForFunction(() => document.querySelector("#out")?.textContent !== "rendering");
+			const browserSha = await page.locator("#out").textContent();
+			const nodeSha = createHash("sha256").update(Buffer.from(nodePdf, "base64")).digest("hex");
+			if (browserSha !== nodeSha)
+				throw new Error(`Browser output differs from Node: ${browserSha}`);
+			console.log("browser: ok");
 
 			const playground = join(repo, "packages/playground");
 			await build({ root: playground, logLevel: "error" });
