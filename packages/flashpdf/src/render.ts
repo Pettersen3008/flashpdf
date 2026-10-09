@@ -25,7 +25,21 @@ export type RenderOptions = {
 	header?: Element | undefined;
 	metadata?: PdfMetadata | undefined;
 	tagged?: boolean | undefined;
+	pdfa?: "3b" | undefined;
+	attachments?: readonly Attachment[] | undefined;
+	facturx?: FacturX | undefined;
 };
+export type Attachment = {
+	name: string;
+	data: Uint8Array;
+	mimeType: string;
+	description?: string | undefined;
+	relationship: (typeof RELATIONSHIPS)[number];
+};
+export type FacturX = { xml: Uint8Array; profile: (typeof PROFILES)[number] };
+
+const RELATIONSHIPS = ["Source", "Data", "Alternative", "Supplement", "Unspecified"] as const;
+const PROFILES = ["MINIMUM", "BASIC WL", "BASIC", "EN 16931", "EXTENDED", "XRECHNUNG"] as const;
 
 type LoadWasm = () => Promise<{ memory: { buffer: ArrayBufferLike } }>;
 
@@ -43,6 +57,9 @@ export function createRenderer(loadWasm: LoadWasm) {
 			"header",
 			"metadata",
 			"tagged",
+			"pdfa",
+			"attachments",
+			"facturx",
 		]);
 		const format = p.pageFormat === undefined ? "A4" : p.pageFormat;
 		if (format !== "A4" && format !== "Letter") throw new Error("invalid page format");
@@ -83,6 +100,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
 			writer.header(width, height, margin);
 			writer.metadata(metadata, p.tagged === true);
+			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 			for (const position of ["header", "footer"] as const) {
 				if (p[position] === undefined) continue;
 				const repeating = await resolveTree(p[position]);
@@ -113,4 +131,75 @@ export function createRenderer(loadWasm: LoadWasm) {
 			if (!consumed) renderer.free();
 		}
 	};
+}
+
+/** Writes the PDF/A and attachment records before the body; the core repeats each check. */
+function attach(
+	renderer: PdfRenderer,
+	writer: ProtocolWriter,
+	pdfa: unknown,
+	attachments: unknown,
+	facturx: unknown,
+) {
+	if (pdfa !== undefined && pdfa !== "3b")
+		throw new Error('invalid pdfa option; the supported level is "3b"');
+	let bytes = 0;
+	const add = (data: Uint8Array) => {
+		if ((bytes += data.byteLength) > 64 * 1024 * 1024)
+			throw new Error("attachments exceed 64 MiB per render");
+		try {
+			return renderer.add_attachment(data);
+		} catch (error) {
+			throw asError(error);
+		}
+	};
+	if (facturx !== undefined) {
+		const options = props(facturx, ["xml", "profile"]);
+		const profile = PROFILES.indexOf(options.profile as FacturX["profile"]);
+		if (profile < 0) throw new Error(`invalid facturx profile; use one of ${PROFILES.join(", ")}`);
+		if (!(options.xml instanceof Uint8Array) || !looksLikeXml(options.xml))
+			throw new Error("facturx xml must be UTF-8 XML bytes");
+		writer.pdfa(profile + 1, add(options.xml));
+	} else if (pdfa) writer.pdfa(0, 0);
+	if (attachments === undefined) return;
+	if (!Array.isArray(attachments)) throw new Error("invalid attachments");
+	const names = new Set<string>();
+	for (const entry of attachments) {
+		const file = props(entry, ["name", "data", "mimeType", "description", "relationship"]);
+		const { name, mimeType, description = "" } = file;
+		if (typeof name !== "string" || !/^[^\p{Cc}\ud800-\udfff/\\]{1,255}$/u.test(name))
+			throw new Error("attachment name must be 1 to 255 characters without controls or slashes");
+		if (names.has(name)) throw new Error(`duplicate attachment name: ${name}`);
+		names.add(name);
+		if (!(file.data instanceof Uint8Array))
+			throw new Error(`attachment ${name}: data must be a Uint8Array`);
+		if (
+			typeof mimeType !== "string" ||
+			mimeType.length > 255 ||
+			!/^[\w.+-]+\/[\w.+-]+$/.test(mimeType)
+		)
+			throw new Error(`attachment ${name}: invalid mimeType`);
+		if (
+			typeof description !== "string" ||
+			/[\p{Cc}\ud800-\udfff]/u.test(description) ||
+			description.length > 4096
+		)
+			throw new Error(`attachment ${name}: invalid description`);
+		const relationship = RELATIONSHIPS.indexOf(file.relationship as Attachment["relationship"]);
+		if (relationship < 0)
+			throw new Error(
+				`attachment ${name}: relationship must be one of ${RELATIONSHIPS.join(", ")}`,
+			);
+		writer.attachment(add(file.data), relationship, name, mimeType, description);
+	}
+}
+
+/** A shape check cheap enough for the boundary, not a parse. */
+function looksLikeXml(bytes: Uint8Array): boolean {
+	try {
+		const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).trim();
+		return text.startsWith("<") && text.endsWith(">");
+	} catch {
+		return false;
+	}
 }

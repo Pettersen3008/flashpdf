@@ -43,6 +43,15 @@
 - `stylesheet()` validates declaration values, not only property names, so `.a { color: notacolor }` rejects up front, naming the selector and position. Values that use `var()` are still checked at `render`.
 - U+001E and U+001F reject in user text. They are the page number and total pages tokens, so they threw in body text and became page numbers in a footer. `PageNumber` and `TotalPages` still emit them.
 - A `width` or image `height` too large for a 32-bit float rejects as an invalid width instead of reaching the engine.
+### Added
+
+- `RenderOptions.pdfa: '3b'` writes PDF/A-3b: XMP metadata that repeats `metadata`, an sRGB output intent, and a document ID hashed from the content. In this mode, text that would use the unembedded Helvetica and CMYK JPEGs reject.
+- `RenderOptions.attachments` embeds files with an `AFRelationship`, listed in the catalog's `/AF` array and the EmbeddedFiles name tree. Names, MIME types, and relationships are validated, with a 64 MiB cap per render.
+- `RenderOptions.facturx: { xml, profile }` embeds Factur-X or ZUGFeRD XML as `factur-x.xml` (`xrechnung.xml` for `XRECHNUNG`) with the Factur-X XMP extension schema, and implies `pdfa: '3b'`. FlashPDF does not validate the XML content.
+
+### Changed
+
+- Link annotations carry the print flag, which PDF/A requires.
 
 ## 0.4.0 - 2026-10-02
 

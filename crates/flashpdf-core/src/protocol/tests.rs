@@ -717,3 +717,99 @@ fn given_a_link_run_that_wraps_when_rendered_then_emits_one_annotation_per_line(
         );
     }
 }
+
+/// An Attachment record with an empty description.
+fn attachment(slot: u16, relationship: u8, name: &str, mime: &str) -> Vec<u8> {
+    let mut payload = slot.to_le_bytes().to_vec();
+    payload.push(relationship);
+    payload.extend(text(name.as_bytes()));
+    payload.extend(text(mime.as_bytes()));
+    payload.extend(text(b""));
+    record(21, &payload)
+}
+
+#[test]
+fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_cannot_carry() {
+    let error = |files: &[&[u8]], records: &[Vec<u8>]| {
+        let mut decoder = Decoder::default();
+        for file in files {
+            decoder.add_attachment(file.to_vec()).unwrap();
+        }
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        bytes.extend(records.concat());
+        decoder.push(&bytes).unwrap_err().to_string()
+    };
+    let pdfa = record(20, &[0]);
+    let facturx = record(20, &[4, 0, 0]);
+
+    assert!(error(&[], &[pdfa.clone(), plain(b"Total")]).starts_with("PDF/A embeds every font"));
+    assert_eq!(
+        error(&[b"Total: 42"], std::slice::from_ref(&facturx)),
+        "invalid Factur-X XML"
+    );
+    assert_eq!(
+        error(&[b"<x/>"], &[record(20, &[7, 0, 0])]),
+        "invalid Factur-X profile"
+    );
+    assert_eq!(
+        error(
+            &[b"<x/>", b"x"],
+            &[facturx, attachment(1, 1, "factur-x.xml", "text/xml")]
+        ),
+        "duplicate attachment name"
+    );
+    for (record, message) in [
+        (
+            attachment(0, 0, "a/b.txt", "text/plain"),
+            "invalid attachment name",
+        ),
+        (
+            attachment(0, 0, "", "text/plain"),
+            "invalid attachment name",
+        ),
+        (
+            attachment(0, 0, "a.txt", "text plain"),
+            "invalid attachment MIME type",
+        ),
+        (
+            attachment(0, 5, "a.txt", "text/plain"),
+            "invalid attachment relationship",
+        ),
+        (
+            attachment(1, 0, "a.txt", "text/plain"),
+            "invalid attachment slot",
+        ),
+    ] {
+        assert_eq!(error(&[b"x"], &[record]), message);
+    }
+    let reused = [
+        attachment(0, 0, "a", "text/plain"),
+        attachment(0, 0, "b", "text/plain"),
+    ];
+    assert_eq!(error(&[b"x"], &reused), "invalid attachment slot");
+    let late = [record(2, &5.0_f32.to_le_bytes()), pdfa.clone()];
+    assert_eq!(error(&[], &late), "invalid nesting");
+
+    // CMYK rejects whether the image registers before or after the PDF/A record.
+    let cmyk = jpeg(0xc0, 8, 4, true);
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(&pdfa);
+    let mut decoder = Decoder::default();
+    decoder.add_image(cmyk.clone()).unwrap();
+    let message = decoder.push(&bytes).unwrap_err().to_string();
+    assert!(
+        message.contains("CMYK JPEGs are not supported"),
+        "{message}"
+    );
+    let mut decoder = Decoder::default();
+    decoder.push(&bytes).unwrap();
+    assert!(decoder.add_image(cmyk).is_err());
+
+    let mut decoder = Decoder::default();
+    decoder.add_attachment(vec![0; 1024]).unwrap();
+    let message = decoder
+        .add_attachment(vec![0; super::MAX_ATTACHMENT_BYTES])
+        .unwrap_err()
+        .to_string();
+    assert_eq!(message, "attachments exceed 64 MiB per render");
+}

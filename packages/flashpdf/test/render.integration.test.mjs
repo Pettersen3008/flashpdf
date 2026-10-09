@@ -189,6 +189,87 @@ test("given text outside WinAnsi in an embedded font, when rendering, then emits
 	);
 });
 
+test("given an invoice with an embedded font and Factur-X XML, when rendering as PDF/A-3b, then writes XMP, an sRGB output intent, and the XML as an associated file", async () => {
+	const encode = (value) => new TextEncoder().encode(value);
+	const xml = encode(
+		'<?xml version="1.0" encoding="UTF-8"?>\n<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"/>\n',
+	);
+	const document = jsxs("main", {
+		style: { fontFamily: "Abel" },
+		children: [
+			jsx("p", { children: "Invoice 42" }),
+			jsxs("p", {
+				children: [
+					"Pay at ",
+					jsx("a", { href: "https://example.com/pay", children: "the portal" }),
+				],
+			}),
+		],
+	});
+	const note = { name: "delivery-note.csv", data: encode("item,qty\nA,1\n"), mimeType: "text/csv" };
+	const options = {
+		fonts: [{ family: "Abel", regular: font }],
+		metadata: { title: "Invoice 42 & Co", author: "Acme" },
+		facturx: { xml, profile: "EN 16931" },
+		attachments: [{ ...note, relationship: "Supplement" }],
+	};
+	const pdf = await render(document, options);
+	assert.deepEqual(pdf, await render(document, options));
+	const text = string(pdf);
+	assert.match(text, /<pdfaid:part>3<\/pdfaid:part><pdfaid:conformance>B<\/pdfaid:conformance>/);
+	assert.match(text, /\/Title \(Invoice 42 & Co\)/);
+	assert.match(
+		text,
+		/<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Invoice 42 &amp; Co<\/rdf:li>/,
+	);
+	assert.match(text, /<dc:creator><rdf:Seq><rdf:li>Acme<\/rdf:li>/);
+	assert.match(
+		text,
+		/<fx:DocumentFileName>factur-x\.xml<\/fx:DocumentFileName><fx:Version>1\.0<\/fx:Version><fx:ConformanceLevel>EN 16931</,
+	);
+	assert.match(text, /<pdfaSchema:prefix>fx<\/pdfaSchema:prefix>/);
+	assert.match(
+		text,
+		/\/S \/GTS_PDFA1\s+\/OutputConditionIdentifier \(sRGB IEC61966-2\.1\)\s+\/DestOutputProfile \d+ 0 R/,
+	);
+	// The catalog's /AF and the EmbeddedFiles name tree list the same file specs, sorted by name.
+	const [, delivery, invoice] = text.match(
+		/\/EmbeddedFiles <<\s+\/Names \[\(delivery-note\.csv\) (\d+ 0 R) \(factur-x\.xml\) (\d+ 0 R)\]/,
+	);
+	assert.ok(text.includes(`/AF [${delivery} ${invoice}]`));
+	assert.match(
+		text,
+		/\/F \(factur-x\.xml\)\s+\/UF \(factur-x\.xml\)\s+\/AFRelationship \/Alternative/,
+	);
+	assert.match(text, /\/AFRelationship \/Supplement/);
+	assert.match(
+		text,
+		/\/Subtype \/text#2Fxml\s+\/Filter \/FlateDecode\s+>>\s+stream\n<\?xml version/,
+	);
+	assert.match(text, /\/Subtype \/Link[^>]*\/F 4/);
+	const id = (bytes) =>
+		Buffer.from(bytes)
+			.toString("latin1")
+			.match(/\/ID \[(<[0-9A-F]{32}>) \1\]/)?.[1];
+	const other = { ...options, facturx: { xml: encode("<Invoice/>"), profile: "EN 16931" } };
+	assert.ok(id(pdf));
+	assert.notEqual(id(await render(document, other)), id(pdf));
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-pdfa.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+	await assert.rejects(
+		render(jsx("p", { children: "Total" }), options),
+		/PDF\/A embeds every font and Helvetica has none; register one with `fonts` and set fontFamily on <p>/,
+	);
+	await assert.rejects(
+		render(document, { ...options, attachments: [{ ...note, relationship: "Related" }] }),
+		/attachment delivery-note\.csv: relationship must be one of Source, Data, Alternative/,
+	);
+});
+
 test("given CSS cascade variables and a box, when rendering, then emits painted native content", async () => {
 	const css = stylesheet(
 		`main.invoice { --ink: #123; color: var(--ink); } .card { padding: 4pt; background: #fff; border: 1pt solid #456; } .amount { color: #456; font-weight: bold; text-align: right; }`,
