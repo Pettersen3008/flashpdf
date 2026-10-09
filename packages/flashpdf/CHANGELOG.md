@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
+
 ## 0.4.0 - 2026-10-02
 
 ### Added
