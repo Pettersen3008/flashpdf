@@ -118,7 +118,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
@@ -148,6 +148,25 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 Each embedded font is subset to the glyphs the document shows (plus the components of composite glyphs) and written as a Type0/CIDFontType2 font with `Identity-H` encoding and a `ToUnicode` map, so copy-paste and text extraction return the original characters. Any character the TTF has a glyph for renders: Latin extended, Greek, Cyrillic, CJK, symbols, currency, and supplementary-plane characters through cmap formats 4 and 12. A character without a glyph rejects naming the character, its code point, and the element.
 
 Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. There is no shaping, kerning, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. Helvetica and Helvetica-Bold have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Regular and bold faces only; italic and variable-face selection, absent families, and a bold request without a bold file reject clearly.
+
+## PDF/A and e-invoices
+
+`pdfa: '3b'` writes PDF/A-3b: an XMP packet that repeats `metadata`, an sRGB output intent, and a document ID hashed from the file's content, so the same input still gives the same bytes. FlashPDF writes no creation or modification date. PDF/A needs every font embedded, so register one with `fonts` and set `fontFamily` on the root element; text that would fall back to Helvetica rejects. CMYK JPEGs also reject, because the output intent is RGB.
+
+`attachments` embeds files as associated files, listed in the catalog's `/AF` array and in the viewer's attachments panel. Each entry is `{ name: string; data: Uint8Array; mimeType: string; description?: string; relationship: 'Source' | 'Data' | 'Alternative' | 'Supplement' | 'Unspecified' }`. Names must be unique and free of slashes and control characters, and all attachments together are capped at 64 MiB per render. Attachments also work without `pdfa`.
+
+`facturx: { xml, profile }` makes a Factur-X or ZUGFeRD 2.x hybrid invoice and implies `pdfa: '3b'`. FlashPDF embeds the CII XML as `factur-x.xml` (`xrechnung.xml` for the `XRECHNUNG` profile) with the relationship the profile requires (`Data` for `MINIMUM` and `BASIC WL`, `Alternative` for the rest), and writes the Factur-X XMP extension schema with `fx:Version` 1.0. `profile` is `'MINIMUM'`, `'BASIC WL'`, `'BASIC'`, `'EN 16931'`, `'EXTENDED'`, or `'XRECHNUNG'`.
+
+```tsx
+const xml = new Uint8Array(await readFile('invoice-42.xml'));
+const pdf = await render(<Invoice />, {
+  fonts: [{ family: 'Invoice', regular, bold }],
+  metadata: { title: 'Invoice 42', author: 'Acme', language: 'de-DE' },
+  facturx: { xml, profile: 'EN 16931' },
+});
+```
+
+FlashPDF only checks that `xml` is UTF-8 text that starts with `<` and ends with `>`. It does not validate the XML against the CII schema or the profile's rules, and it does not compare the XML with the rendered invoice. Validate the XML with your e-invoicing toolchain, for example the Mustang or KoSIT validator, before you send it.
 
 ## Compatibility
 
