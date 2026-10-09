@@ -17,5 +17,9 @@ export function loadWasm(): ReturnType<typeof init> {
 	return (initialization ??= (async () => {
 		const url = new URL("../wasm/flashpdf_wasm_bg.wasm", import.meta.url);
 		return init({ module_or_path: url.protocol === "file:" ? await readFile(url) : url });
-	})());
+	})().catch((error: unknown) => {
+		// A failed load must not poison every later render.
+		initialization = undefined;
+		throw error;
+	}));
 }

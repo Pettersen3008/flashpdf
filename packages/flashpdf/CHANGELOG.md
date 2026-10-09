@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- The package root exports `createElement`. TypeScript and Babel import it for `<Row {...row} key={row.id} />`, a spread before `key`, so such a module failed to load.
+- `<hr>` draws its one-point rule. The default border never reached the box, so a plain `<hr>` painted nothing.
+- Whitespace-only text between block-level children or flex items, such as Prettier's `{" "}`, no longer adds an empty flex column or a second `gap`.
+- A `border` or `background` shorthand in a later rule overrides an earlier `border-bottom` or `background-color`. Previously the longhand always won, whatever the cascade order.
+- An inline style value of `undefined` no longer erases the stylesheet's value for that property.
+- A `var()` fallback may hold parentheses and nested `var()`, such as `var(--c, rgb(0, 0, 0))`. A malformed `var()` rejects naming the reference.
+- A failed WASM load is no longer cached, so the next `render` retries it.
+- Stylesheet error positions count the lines inside comments.
+- `render` checks its options before it runs any component. Fonts are still checked when they are registered.
+
 ## 0.4.0 - 2026-10-02
 
 ### Added

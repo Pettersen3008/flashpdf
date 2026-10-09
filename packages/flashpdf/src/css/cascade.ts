@@ -19,6 +19,7 @@ const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	strong: { fontWeight: "bold" },
 	th: { fontWeight: "bold", textAlign: "left" },
 	a: { color: "#0000EE", textDecoration: "underline" },
+	hr: { borderBottom: "1pt solid black" },
 	h1: { fontSize: "2em", fontWeight: "bold" },
 	h2: { fontSize: "1.5em", fontWeight: "bold" },
 	h3: { fontSize: "1.17em", fontWeight: "bold" },
@@ -30,6 +31,8 @@ const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 function cascade(target: CascadedStyle, source: CascadedStyle | undefined) {
 	if (!source) return;
 	for (const [key, value] of Object.entries(source)) {
+		// React skips an undefined inline value rather than unsetting the property.
+		if (value === undefined) continue;
 		// Delete first so the key moves last: normalize() applies shorthands and longhands in insertion order.
 		delete (target as Record<string, unknown>)[key];
 		(target as Record<string, unknown>)[key] = value;
@@ -39,33 +42,59 @@ function cascade(target: CascadedStyle, source: CascadedStyle | undefined) {
 const MAX_VARIABLE_EXPANSIONS = 1024;
 const MAX_VARIABLE_OUTPUT = 64 * 1024;
 
+/** Replaces each top-level `var(--name, fallback)`, matching parentheses so the fallback
+ *  may hold `rgb(...)` or a nested `var()`. */
+function replaceVariables(
+	value: string,
+	substitute: (name: string, fallback: string | undefined) => string,
+): string {
+	let result = "";
+	let index = 0;
+	for (let start = value.indexOf("var("); start >= 0; start = value.indexOf("var(", index)) {
+		let depth = 0;
+		let comma = -1;
+		let end = start + 3;
+		for (; end < value.length; end++) {
+			if (value[end] === "(") depth++;
+			else if (value[end] === ")" && --depth === 0) break;
+			else if (value[end] === "," && depth === 1 && comma < 0) comma = end;
+		}
+		const name = value.slice(start + 4, comma < 0 ? end : comma).trim();
+		if (end === value.length || !/^--[\w-]+$/.test(name))
+			throw new Error(`invalid CSS variable reference: ${value.slice(start, end + 1)}`);
+		const fallback = comma < 0 ? undefined : value.slice(comma + 1, end).trim();
+		result += value.slice(index, start) + substitute(name, fallback);
+		index = end + 1;
+	}
+	return result + value.slice(index);
+}
+
 function resolveVariable(
 	value: string,
 	variables: CascadedStyle,
 	resolving = new Set<string>(),
 	budget = { expansions: 0 },
 ): string {
-	const resolved = value.replace(
-		/var\((--[\w-]+)(?:,\s*([^()]+))?\)/g,
-		(_, name: string, fallback: string | undefined) => {
-			if (++budget.expansions > MAX_VARIABLE_EXPANSIONS)
-				throw new Error("CSS variable expansion is too large");
-			if (resolving.has(name)) throw new Error(`cyclic CSS variable: ${name}`);
-			resolving.add(name);
-			try {
-				const candidate = variables[name as `--${string}`] ?? fallback;
-				if (candidate === undefined)
-					throw new Error(
-						`undefined CSS variable: ${name} (rules with unsupported selectors such as :root are skipped)`,
-					);
-				return typeof candidate === "string"
-					? resolveVariable(candidate, variables, resolving, budget)
-					: String(candidate);
-			} finally {
-				resolving.delete(name);
-			}
-		},
-	);
+	// Bounds the rescan of each nested fallback.
+	if (value.length > MAX_VARIABLE_OUTPUT) throw new Error("CSS variable output is too large");
+	const resolved = replaceVariables(value, (name, fallback) => {
+		if (++budget.expansions > MAX_VARIABLE_EXPANSIONS)
+			throw new Error("CSS variable expansion is too large");
+		if (resolving.has(name)) throw new Error(`cyclic CSS variable: ${name}`);
+		resolving.add(name);
+		try {
+			const candidate = variables[name as `--${string}`] ?? fallback;
+			if (candidate === undefined)
+				throw new Error(
+					`undefined CSS variable: ${name} (rules with unsupported selectors such as :root are skipped)`,
+				);
+			return typeof candidate === "string"
+				? resolveVariable(candidate, variables, resolving, budget)
+				: String(candidate);
+		} finally {
+			resolving.delete(name);
+		}
+	});
 	if (resolved.length > MAX_VARIABLE_OUTPUT) throw new Error("CSS variable output is too large");
 	return resolved;
 }

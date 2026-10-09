@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { test } from "vitest";
 
@@ -70,4 +71,22 @@ test("given the same Uint8Array used for two images, when writing them, then reg
 	writer.image(new Uint8Array([1, 2, 3]), undefined, undefined, "", undefined);
 	assert.equal(registered.length, 2);
 	assert.equal(registered[0], logo);
+});
+
+test("given a WASM fetch that fails once, when loading again, then retries instead of keeping the failure", async () => {
+	const bytes = readFileSync(new URL("../wasm/flashpdf_wasm_bg.wasm", import.meta.url));
+	const original = globalThis.fetch;
+	let fetches = 0;
+	globalThis.fetch = async () => {
+		if (fetches++ === 0) throw new TypeError("network down");
+		return new Response(bytes, { headers: { "Content-Type": "application/wasm" } });
+	};
+	try {
+		const { loadWasm } = await import("../dist/wasm.browser.js");
+		await assert.rejects(loadWasm(), /network down/);
+		assert.ok((await loadWasm()).memory);
+		assert.equal(fetches, 2);
+	} finally {
+		globalThis.fetch = original;
+	}
 });

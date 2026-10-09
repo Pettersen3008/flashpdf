@@ -48,6 +48,11 @@ const ROOT: Context = {
 
 const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
 
+/** CSS collapsible whitespace only; U+00A0 is content. */
+function blank(text: string) {
+	return /^[ \t\n\r\f]*$/.test(text);
+}
+
 function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): TextState {
 	const selected = font(style, current.family, current.bold, fonts);
 	const decorated = style.textDecoration === undefined ? current : decoration(style.textDecoration);
@@ -190,9 +195,11 @@ function flow(
 	};
 	let runs: Run[] = [];
 	const flush = () => {
-		if (!runs.length) return;
-		separate();
-		writeParagraph(writer, runs, context, pageTokens);
+		// Whitespace between block-level children makes no line, as in CSS.
+		if (runs.some((item) => item.break || !blank(item.text))) {
+			separate();
+			writeParagraph(writer, runs, context, pageTokens);
+		}
 		runs = [];
 	};
 	for (const child of children) {
@@ -280,14 +287,16 @@ function element(
 				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
 				const inner = { ...next, inRow: false };
 				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
-				if (row && node.children.length) {
+				// A whitespace-only text child is no flex item, as in CSS.
+				const items = node.children.filter((child) => child.kind !== "text" || !blank(child.value));
+				if (row && items.length) {
 					// A gap is a fixed-width empty column between items, so flex grow shares what is left.
 					const spacer: Column = { kind: 0, value: gap };
-					const columns = node.children.map(column);
+					const columns = items.map(column);
 					writer.rowStart(
 						gap ? columns.flatMap((item, i) => (i ? [spacer, item] : [item])) : columns,
 					);
-					for (const [index, child] of node.children.entries()) {
+					for (const [index, child] of items.entries()) {
 						if (index && gap) writer.spacer(0);
 						compile([child], writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
 					}
@@ -366,19 +375,9 @@ function element(
 		case "table":
 			table(node, writer, fonts, context, depth, pageTokens);
 			break;
-		case "hr": {
-			const next = inherit(style, context, fonts);
-			const rule =
-				style.borderWidth === undefined &&
-				style.borderBottomWidth === undefined &&
-				style.borderBottom === undefined;
-			box(
-				writer,
-				boxStyle(rule ? { ...style, borderBottom: "1pt solid black" } : style, next.size),
-				() => {},
-			);
+		case "hr":
+			box(writer, boxStyle(style, inherit(style, context, fonts).size), () => {});
 			break;
-		}
 	}
 }
 
