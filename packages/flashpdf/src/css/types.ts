@@ -13,6 +13,8 @@ export type Rule = {
 	selector: readonly SelectorPiece[];
 	order: number;
 	specificity: Specificity;
+	/** ` in selector ".a" at 1:1`, appended to errors about this rule. */
+	where: string;
 	/** Parsed on first use so rules that never match cost nothing and cannot fail a render. */
 	declarations(): Declarations;
 };

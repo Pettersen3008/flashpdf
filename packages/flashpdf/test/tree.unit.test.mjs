@@ -101,6 +101,20 @@ test("given multi-child nesting, when normalizing, then 64 element levels fit an
 	await assert.rejects(() => reactTree(nest(64)), /nesting exceeds 64/);
 });
 
+test("given 200,000 nested arrays, when resolving, then rejects at the nesting limit instead of overflowing the stack", async () => {
+	let children = "x";
+	for (let index = 0; index < 200_000; index++) children = [children];
+	await assert.rejects(resolveTree(jsx("main", { children })), /nesting exceeds 64/);
+});
+
+test("given children inside an hr or br, when resolving, then rejects them", async () => {
+	for (const tag of ["hr", "br"])
+		await assert.rejects(
+			resolveTree(jsx(tag, { children: "lost" })),
+			new RegExp(`<${tag}> has no children on <${tag}>`),
+		);
+});
+
 test("given a component that throws, when normalizing, then names the component and keeps the cause", async () => {
 	const Hooked = () => {
 		const [label] = useState("x");

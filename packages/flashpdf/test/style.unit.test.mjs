@@ -18,14 +18,14 @@ test("given an unrecognised length, when resolving a point value, then rejects i
 });
 
 test("given 1, 2, 3, or 4 shorthand values, when expanding margin edges, then mirrors CSS shorthand order", () => {
-	assert.deepEqual(edges({ margin: "4pt" }, "margin", 12), [4, 4, 4, 4]);
-	assert.deepEqual(edges({ margin: "4pt 8pt" }, "margin", 12), [4, 8, 4, 8]);
-	assert.deepEqual(edges({ margin: "4pt 8pt 12pt" }, "margin", 12), [4, 8, 12, 8]);
-	assert.deepEqual(edges({ margin: "1pt 2pt 3pt 4pt" }, "margin", 12), [1, 2, 3, 4]);
+	assert.deepEqual(edges(style({ margin: "4pt" }), "margin", 12), [4, 4, 4, 4]);
+	assert.deepEqual(edges(style({ margin: "4pt 8pt" }), "margin", 12), [4, 8, 4, 8]);
+	assert.deepEqual(edges(style({ margin: "4pt 8pt 12pt" }), "margin", 12), [4, 8, 12, 8]);
+	assert.deepEqual(edges(style({ margin: "1pt 2pt 3pt 4pt" }), "margin", 12), [1, 2, 3, 4]);
 });
 
 test("given a per-side override, when expanding margin edges, then it wins over the shorthand", () => {
-	assert.deepEqual(edges({ margin: "4pt", marginTop: "9pt" }, "margin", 12), [9, 4, 4, 4]);
+	assert.deepEqual(edges(style({ margin: "4pt", marginTop: "9pt" }), "margin", 12), [9, 4, 4, 4]);
 });
 
 test("given a named color or a 3- or 6-digit hex, when resolving a color, then converges on the same RGB triple", () => {
@@ -59,8 +59,8 @@ test("given a translucent color, when resolving it, then rejects with the opacit
 
 test("given a border shorthand with rgb() spaces, when normalizing, then keeps the function as one token", () => {
 	const s = style({ border: "1pt solid rgb(0, 0, 255)" });
-	assert.equal(s.borderColor, "rgb(0, 0, 255)");
-	assert.deepEqual(color(s.borderColor), [0, 0, 255]);
+	assert.equal(s.borderTopColor, "rgb(0, 0, 255)");
+	assert.deepEqual(color(s.borderTopColor), [0, 0, 255]);
 });
 
 test("given the flex shorthand, when normalizing, then keeps only the grow factor", () => {
@@ -82,4 +82,14 @@ test("given a font-family list, when selecting a font, then uses the first regis
 	assert.equal(pick("Missing, system-ui, sans-serif"), helvetica);
 	assert.equal(pick("Arial"), helvetica);
 	assert.throws(() => pick("Missing, monospace"), /unregistered font family: Missing, monospace/);
+});
+
+test("given a font weight outside normal, bold, and 1 to 1000, when normalizing, then rejects it", () => {
+	for (const fontWeight of ["normal", "bold", 700, "700"]) style({ fontWeight });
+	for (const fontWeight of ["bolder", "boldd", 0, "1001"])
+		assert.throws(() => style({ fontWeight }), /invalid fontWeight/, String(fontWeight));
+});
+
+test("given a width with more digits than a float holds, when normalizing, then rejects it", () => {
+	assert.throws(() => style({ width: `${"9".repeat(45)}pt` }), /invalid width: 9+pt/);
 });

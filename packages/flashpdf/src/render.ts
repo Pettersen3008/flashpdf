@@ -6,7 +6,7 @@ import { resolveStyles } from "./css.js";
 import type { Element } from "./element.js";
 import { registerFonts } from "./fonts.js";
 import { ProtocolWriter } from "./protocol.js";
-import { resolveTree } from "./tree.js";
+import { pageOverflow, resolveTree } from "./tree.js";
 
 export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array | undefined };
 export type PdfMetadata = {
@@ -34,8 +34,6 @@ export function createRenderer(loadWasm: LoadWasm) {
 		document: Element | Iterable<Element>,
 		options?: RenderOptions,
 	): Promise<Uint8Array> {
-		const tree = await resolveTree(document);
-		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
 		const p = props(options ?? {}, [
 			"pageFormat",
 			"margin",
@@ -52,6 +50,31 @@ export function createRenderer(loadWasm: LoadWasm) {
 		const width = format === "A4" ? 595 : 612;
 		const height = format === "A4" ? 842 : 792;
 		if (margin * 2 >= Math.min(width, height)) throw new Error("invalid margin");
+		const metadata =
+			p.metadata === undefined
+				? {}
+				: props(p.metadata, ["title", "author", "subject", "keywords", "language"]);
+		for (const [key, value] of Object.entries(metadata)) {
+			if (value === undefined) continue;
+			if (typeof value !== "string" || /[\p{Cc}\ud800-\udfff]/u.test(value) || value.length > 4096)
+				throw new Error(`invalid metadata ${key}`);
+		}
+		if (
+			metadata.language !== undefined &&
+			!/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/.test(metadata.language as string)
+		)
+			throw new Error("invalid metadata language");
+		if (p.tagged !== undefined && typeof p.tagged !== "boolean")
+			throw new Error("invalid tagged option");
+		if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
+		if (
+			p.stylesheets !== undefined &&
+			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
+		)
+			throw new Error("invalid stylesheets");
+		// Options are checked before user components run; fonts need the engine to parse.
+		const tree = await resolveTree(document);
+		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
 		const wasm = await loadWasm();
 		const renderer = new PdfRenderer();
 		let consumed = false;
@@ -59,33 +82,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			const fonts = registerFonts(renderer, p.fonts);
 			const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
 			writer.header(width, height, margin);
-			const metadata =
-				p.metadata === undefined
-					? {}
-					: props(p.metadata, ["title", "author", "subject", "keywords", "language"]);
-			for (const [key, value] of Object.entries(metadata)) {
-				if (value === undefined) continue;
-				if (
-					typeof value !== "string" ||
-					/[\p{Cc}\ud800-\udfff]/u.test(value) ||
-					value.length > 4096
-				)
-					throw new Error(`invalid metadata ${key}`);
-			}
-			if (
-				metadata.language !== undefined &&
-				!/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/.test(metadata.language as string)
-			)
-				throw new Error("invalid metadata language");
-			if (p.tagged !== undefined && typeof p.tagged !== "boolean")
-				throw new Error("invalid tagged option");
-			if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
 			writer.metadata(metadata, p.tagged === true);
-			if (
-				p.stylesheets !== undefined &&
-				(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
-			)
-				throw new Error("invalid stylesheets");
 			for (const position of ["header", "footer"] as const) {
 				if (p[position] === undefined) continue;
 				const repeating = await resolveTree(p[position]);
@@ -110,6 +107,8 @@ export function createRenderer(loadWasm: LoadWasm) {
 			} catch (error) {
 				throw asError(error);
 			}
+		} catch (error) {
+			throw pageOverflow(error);
 		} finally {
 			if (!consumed) renderer.free();
 		}

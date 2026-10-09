@@ -17,6 +17,32 @@
 - Embedded fonts use one `cmap` subtable: format 12 before format 4, then Windows before Unicode platform. A font with many records or overlapping format 4 segments no longer takes minutes to load, and a format 12 group that starts inside the previous one keeps its remaining characters.
 - Registered fonts are capped at 64 MiB per render, checked in JavaScript before the bytes are copied into WASM memory.
 - Page sides over 14,400 pt reject, the largest size PDF readers accept.
+### Fixed
+
+- The package root exports `createElement`. TypeScript and Babel import it for `<Row {...row} key={row.id} />`, a spread before `key`, so such a module failed to load.
+- `<hr>` draws its one-point rule. The default border never reached the box, so a plain `<hr>` painted nothing.
+- Whitespace-only text between block-level children or flex items, such as Prettier's `{" "}`, no longer adds an empty flex column or a second `gap`.
+- A `border` or `background` shorthand in a later rule overrides an earlier `border-bottom` or `background-color`. Previously the longhand always won, whatever the cascade order.
+- An inline style value of `undefined` no longer erases the stylesheet's value for that property.
+- A `var()` fallback may hold parentheses and nested `var()`, such as `var(--c, rgb(0, 0, 0))`. A malformed `var()` rejects naming the reference.
+- A failed WASM load is no longer cached, so the next `render` retries it.
+- Stylesheet error positions count the lines inside comments.
+- `render` checks its options before it runs any component. Fonts are still checked when they are registered.
+- Descendant selectors match in polynomial time. A long selector such as `section div div div div div div div div` on a 40-deep tree took 5.6 s.
+- Arrays nested directly in arrays count toward the 64-level nesting limit, so deeply nested arrays reject instead of overflowing the stack. The children array React puts under each element stays free.
+- A style object with an own `__proto__` key, as `JSON.parse` makes, rejects instead of skipping validation.
+- Type selectors are case-insensitive, so `P { }` matches `<p>`.
+- `<hr>` honours `break-before` and `break-after`.
+- An engine `InvalidLayout`, `TextTooWide`, or `PageOverflow` now says what to change and names the element.
+
+### Changed
+
+- `font-weight` rejects values other than `normal`, `bold`, and 1 to 1000, such as `bolder` or a typo. They rendered regular before.
+- `<hr>` and `<br>` reject children, `<br>` rejects box and layout styles, and `width` on an `<hr>` outside a flex row rejects. All were dropped before.
+- `<td>` and `<th>` outside a table row reject. They rendered as a `<div>` before.
+- `stylesheet()` validates declaration values, not only property names, so `.a { color: notacolor }` rejects up front, naming the selector and position. Values that use `var()` are still checked at `render`.
+- U+001E and U+001F reject in user text. They are the page number and total pages tokens, so they threw in body text and became page numbers in a footer. `PageNumber` and `TotalPages` still emit them.
+- A `width` or image `height` too large for a 32-bit float rejects as an invalid width instead of reaching the engine.
 
 ## 0.4.0 - 2026-10-02
 

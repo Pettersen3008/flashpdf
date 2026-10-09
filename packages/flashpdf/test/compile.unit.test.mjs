@@ -171,6 +171,32 @@ test("given rows with different cell counts, when compiling, then rejects naming
 	);
 });
 
+test("given a td outside a table row, when compiling, then rejects naming it", async () => {
+	await assert.rejects(
+		compiled(jsx("div", { children: jsx("td", { children: "x" }) })),
+		/^Error: <td> belongs in a <tr> inside a <table> on <td> in <div>$/,
+	);
+});
+
+test("given an hr with break-before: page, when compiling, then breaks the page before the rule", async () => {
+	const calls = await compiled(jsx("hr", { style: { breakBefore: "page" } }));
+	assert.deepEqual(
+		calls.map(([method]) => method),
+		["pageBreak", "boxStart", "boxEnd"],
+	);
+});
+
+test("given width on an hr or padding on a br, when compiling, then rejects instead of dropping it", async () => {
+	await assert.rejects(
+		compiled(jsx("hr", { style: { width: "50%" } })),
+		/width applies only to a flex row child on <hr>$/,
+	);
+	await assert.rejects(
+		compiled(jsxs("p", { children: ["a", jsx("br", { style: { padding: 10 } }), "b"] })),
+		/<br> takes no paddingTop; style the text around it on <br> in <p>$/,
+	);
+});
+
 test("given a flex row with a 12pt gap, when compiling, then a fixed 12pt empty column separates its items", async () => {
 	const calls = await compiled(
 		jsxs("div", {
@@ -192,6 +218,38 @@ test("given a flex row with a 12pt gap, when compiling, then a fixed 12pt empty 
 		["spacer", 0],
 		...cell("b"),
 		["rowEnd"],
+	]);
+});
+
+test("given whitespace-only text between flex items and column children, when compiling, then it adds no column, gap, or line", async () => {
+	const calls = await compiled(
+		jsxs("main", {
+			style: { display: "flex", flexDirection: "column", gap: "10pt" },
+			children: [
+				jsxs("div", {
+					style: { display: "flex" },
+					children: [jsx("span", { children: "a" }), " ", jsx("span", { children: "b" })],
+				}),
+				" ",
+				jsxs("div", {
+					children: [jsx("span", { children: "c" }), " ", jsx("b", { children: "d" })],
+				}),
+			],
+		}),
+	);
+	assert.deepEqual(calls, [
+		[
+			"rowStart",
+			[
+				{ kind: 1, value: 1 },
+				{ kind: 1, value: 1 },
+			],
+		],
+		["paragraph", [run(0, "a")], "left"],
+		["paragraph", [run(0, "b")], "left"],
+		["rowEnd"],
+		["spacer", 10],
+		["paragraph", [run(0, "c "), run(1, "d")], "left"],
 	]);
 });
 

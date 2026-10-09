@@ -1,12 +1,14 @@
 import type { StyledNode } from "./css.js";
 import type { StyledElement } from "./css/cascade.js";
+import { inherited } from "./css/properties.js";
 import { glyphError } from "./fonts.js";
 import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
-import type { ProtocolWriter, Column, Dimension, Run } from "./protocol.js";
+import type { ProtocolWriter, Column, Run } from "./protocol.js";
 import {
 	boxStyle,
 	color,
 	decoration,
+	dimension,
 	font,
 	helvetica,
 	lineHeight,
@@ -30,7 +32,8 @@ type TextState = {
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
 };
-type Context = TextState & { inRow: boolean };
+/** `cell` is set only for the direct children of a table row. */
+type Context = TextState & { inRow: boolean; cell?: boolean };
 type Fonts = ReadonlyMap<string, FontSlots>;
 
 const ROOT: Context = {
@@ -47,6 +50,36 @@ const ROOT: Context = {
 };
 
 const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
+
+/** CSS collapsible whitespace only; U+00A0 is content. */
+function blank(text: string) {
+	return /^[ \t\n\r\f]*$/.test(text);
+}
+
+/** A `br` paints nothing, so a box or layout property on it would be dropped. */
+function lineBreak(node: StyledElement, context: TextState): Run {
+	const key = Object.keys(node.style).find(
+		(name) => !inherited.has(name) && !name.startsWith("--"),
+	);
+	if (key) throw locate(new Error(`<br> takes no ${key}; style the text around it`), node.where);
+	return run(context, "", true);
+}
+
+const ENGINE_ERRORS = new Map([
+	[
+		"InvalidLayout",
+		"InvalidLayout: the content does not fit its container; reduce fixed widths, margins, padding, or borders",
+	],
+	[
+		"TextTooWide",
+		"TextTooWide: a character, or a header or footer line, is wider than its space; reduce the font size or widen the column",
+	],
+]);
+/** Explains the engine's bare error codes; `locate` then names the element. */
+function engineError(error: unknown): unknown {
+	const message = error instanceof Error ? ENGINE_ERRORS.get(error.message) : undefined;
+	return message ? new Error(message, { cause: error }) : error;
+}
 
 function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): TextState {
 	const selected = font(style, current.family, current.bold, fonts);
@@ -105,7 +138,7 @@ function push(runs: Run[], next: Run) {
 function inlineRuns(node: StyledNode, context: Context, fonts: Fonts): Run[] | undefined {
 	if (node.kind === "text") return [run(context, node.value)];
 	if (!INLINE_TAGS.has(node.tag)) return undefined;
-	if (node.tag === "br") return [run(context, "", true)];
+	if (node.tag === "br") return [lineBreak(node, context)];
 	try {
 		const style = node.style;
 		rowOnly(style, context.inRow);
@@ -190,9 +223,11 @@ function flow(
 	};
 	let runs: Run[] = [];
 	const flush = () => {
-		if (!runs.length) return;
-		separate();
-		writeParagraph(writer, runs, context, pageTokens);
+		// Whitespace between block-level children makes no line, as in CSS.
+		if (runs.some((item) => item.break || !blank(item.text))) {
+			separate();
+			writeParagraph(writer, runs, context, pageTokens);
+		}
 		runs = [];
 	};
 	for (const child of children) {
@@ -221,26 +256,13 @@ function streamMargin(box: Box | undefined, context: Context, style: NormalizedS
 	);
 }
 
-/** An `img` width or height; percent is of the container width. */
-function dimension(value: number | string): Dimension {
-	if (typeof value === "number") return { kind: 1, value };
-	const amount = Number.parseFloat(value);
-	if (value.endsWith("%")) return { kind: 2, value: amount };
-	return { kind: 1, value: value.endsWith("px") ? amount * 0.75 : amount };
-}
-
 function column(value: StyledNode): Column {
 	if (value.kind === "text") return { kind: 1, value: 1 };
 	const { flex, width } = value.style;
 	if (typeof flex === "number" && flex > 0) return { kind: 1, value: flex };
-	if (typeof width === "number") return { kind: 0, value: width };
-	if (typeof width === "string") {
-		const amount = Number.parseFloat(width);
-		return width.endsWith("pt")
-			? { kind: 0, value: amount }
-			: width.endsWith("px")
-				? { kind: 0, value: amount * 0.75 }
-				: { kind: 2, value: amount };
+	if (width !== undefined) {
+		const { kind, value: amount } = dimension(width, "width");
+		return { kind: kind === 2 ? 2 : 0, value: amount };
 	}
 	if (flex === 0)
 		throw locate(
@@ -270,6 +292,8 @@ function element(
 		case "footer":
 		case "td":
 		case "th": {
+			if ((node.tag === "td" || node.tag === "th") && !context.cell)
+				throw new Error(`<${node.tag}> belongs in a <tr> inside a <table>`);
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
@@ -280,14 +304,16 @@ function element(
 				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
 				const inner = { ...next, inRow: false };
 				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
-				if (row && node.children.length) {
+				// A whitespace-only text child is no flex item, as in CSS.
+				const items = node.children.filter((child) => child.kind !== "text" || !blank(child.value));
+				if (row && items.length) {
 					// A gap is a fixed-width empty column between items, so flex grow shares what is left.
 					const spacer: Column = { kind: 0, value: gap };
-					const columns = node.children.map(column);
+					const columns = items.map(column);
 					writer.rowStart(
 						gap ? columns.flatMap((item, i) => (i ? [spacer, item] : [item])) : columns,
 					);
-					for (const [index, child] of node.children.entries()) {
+					for (const [index, child] of items.entries()) {
 						if (index && gap) writer.spacer(0);
 						compile([child], writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
 					}
@@ -338,8 +364,9 @@ function element(
 				throw new Error("percent height has no container height; use pt or px, or set width");
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
-			const width = style.width === undefined ? undefined : dimension(style.width);
-			const height = style.height === undefined ? undefined : dimension(style.height).value;
+			const width = style.width === undefined ? undefined : dimension(style.width, "width");
+			const height =
+				style.height === undefined ? undefined : dimension(style.height, "height").value;
 			box(writer, boxStyle(style, next.size), () => {
 				try {
 					writer.image(node.src!, width, height, node.alt ?? "", context.link);
@@ -356,7 +383,7 @@ function element(
 			break;
 		}
 		case "br":
-			writeParagraph(writer, [run(context, "", true)], context, pageTokens);
+			writeParagraph(writer, [lineBreak(node, context)], context, pageTokens);
 			break;
 		case "thead":
 		case "tbody":
@@ -366,19 +393,12 @@ function element(
 		case "table":
 			table(node, writer, fonts, context, depth, pageTokens);
 			break;
-		case "hr": {
-			const next = inherit(style, context, fonts);
-			const rule =
-				style.borderWidth === undefined &&
-				style.borderBottomWidth === undefined &&
-				style.borderBottom === undefined;
-			box(
-				writer,
-				boxStyle(rule ? { ...style, borderBottom: "1pt solid black" } : style, next.size),
-				() => {},
-			);
+		case "hr":
+			rowOnly(style, context.inRow);
+			pageBreak(writer, style, "breakBefore", depth);
+			box(writer, boxStyle(style, inherit(style, context, fonts).size), () => {});
+			pageBreak(writer, style, "breakAfter", depth);
 			break;
-		}
 	}
 }
 
@@ -470,7 +490,14 @@ function table(
 			const own = inherit(tr.style, state, fonts);
 			box(writer, boxStyle(tr.style, own.size), () => {
 				writer.rowStart(columns);
-				compile(tr.children, writer, fonts, { ...own, inRow: true }, depth + 2, pageTokens);
+				compile(
+					tr.children,
+					writer,
+					fonts,
+					{ ...own, inRow: true, cell: true },
+					depth + 2,
+					pageTokens,
+				);
 				writer.rowEnd();
 			});
 		} catch (error) {
@@ -553,7 +580,7 @@ export function compile(
 		try {
 			element(node, writer, fonts, context, depth, pageTokens);
 		} catch (error) {
-			throw locate(glyphError(error), node.where);
+			throw locate(engineError(glyphError(error)), node.where);
 		}
 	}
 }

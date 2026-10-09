@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import zlib, { inflateSync } from "node:zlib";
 
 import { test } from "vitest";
@@ -21,9 +24,59 @@ const string = (pdf) =>
 		});
 const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", import.meta.url)));
 
-test("given the package entry point, when importing it, then exposes only the renderer and stylesheet validator", async () => {
+test("given the package entry point, when importing it, then exposes only the renderer, stylesheet validator, and JSX fallback", async () => {
 	const api = await import("../dist/index.js");
-	assert.deepEqual(Object.keys(api).sort(), ["PageNumber", "TotalPages", "render", "stylesheet"]);
+	assert.deepEqual(Object.keys(api).sort(), [
+		"PageNumber",
+		"TotalPages",
+		"createElement",
+		"render",
+		"stylesheet",
+	]);
+});
+
+test("given a spread before key, when TypeScript compiles the JSX, then its createElement fallback renders", async () => {
+	const dir = new URL("../../../dist/jsx-spread-key/", import.meta.url);
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(
+		new URL("document.tsx", dir),
+		'const row = { className: "row" };\nexport default <main><p {...row} key="k">Spread</p></main>;\n',
+	);
+	const typescript = dirname(createRequire(import.meta.url).resolve("typescript/package.json"));
+	const compiled = spawnSync(
+		process.execPath,
+		[
+			join(typescript, "bin", "tsc"),
+			"--jsx",
+			"react-jsx",
+			"--jsxImportSource",
+			"@pettersen3008/flashpdf",
+			"--noCheck",
+			"--module",
+			"esnext",
+			"--target",
+			"es2022",
+			"--outDir",
+			fileURLToPath(dir),
+			fileURLToPath(new URL("document.tsx", dir)),
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+	const source = readFileSync(new URL("document.js", dir), "utf8");
+	assert.match(
+		source,
+		/import \{ createElement as _createElement \} from "@pettersen3008\/flashpdf"/,
+	);
+	// The output sits outside the package, so point its imports at this build.
+	writeFileSync(
+		new URL("document.mjs", dir),
+		source.replace(/"@pettersen3008\/flashpdf(\/jsx-runtime)?"/g, (_, runtime) =>
+			JSON.stringify(new URL(`../dist/${runtime ? "jsx-runtime" : "index"}.js`, import.meta.url)),
+		),
+	);
+	const { default: document } = await import(new URL("document.mjs", dir).href);
+	assert.match(string(await render(document)), /\(Spread\) Tj/);
 });
 
 test("given the rendering entry point, when following its imports, then it has no build-tool dependencies", () => {
@@ -203,6 +256,32 @@ test("given a page footer, when rendering multiple pages, then repeats resolved 
 	);
 });
 
+test("given a page token character in user text, when it sits in a footer, then rejects it instead of numbering pages", async () => {
+	await assert.rejects(
+		render(jsx("main", { children: "x" }), { footer: jsx("footer", { children: "Page \u001e" }) }),
+		/unsupported control character/,
+	);
+});
+
+test("given layouts the engine rejects, when rendering, then explains the code and names the element", async () => {
+	const column = jsx("div", {
+		style: { display: "flex" },
+		children: jsx("span", { style: { width: "900%" }, children: "x" }),
+	});
+	await assert.rejects(
+		render(jsx("main", { children: column })),
+		/^Error: InvalidLayout: the content does not fit its container.* on <div> in <main>$/,
+	);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("p", { style: { fontSize: 3e38 }, children: "x" }) })),
+		/^Error: TextTooWide: .* on <p> in <main>$/,
+	);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("div", { style: { marginTop: 3e38 }, children: "x" }) })),
+		/^Error: PageOverflow: the content does not fit on an empty page.* on <div> in <main>$/,
+	);
+});
+
 test("given a repeating header and tagged metadata, when rendering two pages, then writes page furniture and a structure tree", async () => {
 	const logo = png(1, 1, 2, [0, 255, 0, 0]);
 	const document = jsxs("main", {
@@ -306,7 +385,18 @@ test("given per-edge borders and hr, when rendering, then emits native rules", a
 			],
 		}),
 	);
-	assert.match(string(pdf), /1 0 0 rg/);
+	assert.match(string(pdf), /1 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
+	assert.match(string(pdf), /0 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
+});
+
+test("given an invalid option, when rendering, then rejects before running any component", async () => {
+	let ran = false;
+	const Page = () => {
+		ran = true;
+		return jsx("main", { children: "x" });
+	};
+	await assert.rejects(render(jsx(Page, {}), { pageFormat: "A5" }), /invalid page format/);
+	assert.equal(ran, false);
 });
 
 test("given an hr border, when rendering, then uses the author rule", async () => {

@@ -32,7 +32,8 @@ function declarations(source: string, context = ""): Declarations {
 const PART = /^(?:[a-z][\w-]*)?(?:#[\w-]+|\.[\w-]+)*$/i;
 function selectorPart(part: string): SelectorPart {
 	return {
-		tag: part.match(/^[a-z][\w-]*/i)?.[0] ?? "",
+		// HTML type selectors are case-insensitive; JSX tags are lowercase.
+		tag: part.match(/^[a-z][\w-]*/i)?.[0].toLowerCase() ?? "",
 		ids: part.match(/#[\w-]+/g)?.map((value) => value.slice(1)) ?? [],
 		classes: part.match(/\.[\w-]+/g)?.map((value) => value.slice(1)) ?? [],
 	};
@@ -72,20 +73,27 @@ function matchesPart(part: SelectorPiece | undefined, node: Identity | undefined
 	);
 }
 /** Right-to-left with backtracking: a descendant step may skip any number of
- *  ancestors, so `div > section p` matches a `p` inside nested sections. */
+ *  ancestors, so `div > section p` matches a `p` inside nested sections.
+ *  `failed` remembers each (piece, depth) whose ancestor search found nothing,
+ *  which keeps the search polynomial instead of exponential. */
 function matchesFrom(
 	pieces: readonly SelectorPiece[],
 	index: number,
 	node: Identity | undefined,
 	ancestors: readonly Identity[],
 	depth: number,
+	failed: Set<number>,
 ): boolean {
 	if (!matchesPart(pieces[index], node)) return false;
 	if (index === 0) return true;
 	if (pieces[index - 1] === ">")
-		return matchesFrom(pieces, index - 2, ancestors[depth - 1], ancestors, depth - 1);
+		return matchesFrom(pieces, index - 2, ancestors[depth - 1], ancestors, depth - 1, failed);
+	const key = index * (ancestors.length + 1) + depth;
+	if (failed.has(key)) return false;
 	for (let ancestor = depth - 1; ancestor >= 0; ancestor--)
-		if (matchesFrom(pieces, index - 2, ancestors[ancestor], ancestors, ancestor)) return true;
+		if (matchesFrom(pieces, index - 2, ancestors[ancestor], ancestors, ancestor, failed))
+			return true;
+	failed.add(key);
 	return false;
 }
 export function matches(
@@ -93,7 +101,7 @@ export function matches(
 	node: Identity,
 	ancestors: readonly Identity[],
 ) {
-	return matchesFrom(pieces, pieces.length - 1, node, ancestors, ancestors.length);
+	return matchesFrom(pieces, pieces.length - 1, node, ancestors, ancestors.length, new Set());
 }
 
 function position(source: string, index: number) {
@@ -103,6 +111,7 @@ function position(source: string, index: number) {
 function invalid(source: string, index: number) {
 	return new Error(`invalid CSS stylesheet at ${position(source, index)}`);
 }
+/** Blanks comments to same-length whitespace, keeping newlines, so error positions match the source. */
 function withoutComments(source: string) {
 	const parts: string[] = [];
 	let index = 0;
@@ -112,6 +121,7 @@ function withoutComments(source: string) {
 		parts.push(source.slice(index, start));
 		const end = source.indexOf("*/", start + 2);
 		if (end < 0) return parts.join("") + source.slice(start);
+		parts.push(source.slice(start, end + 2).replace(/[^\n]/g, " "));
 		index = end + 2;
 	}
 }
@@ -196,12 +206,13 @@ export function parse(source: string): Rule[] {
 			const text = raw.trim();
 			const compiled = selector(text);
 			if (!compiled) continue;
+			const where = ` in selector ${JSON.stringify(text)}${at}`;
 			rules.push({
 				selector: compiled,
 				order: rules.length,
 				specificity: specificity(compiled),
-				declarations: () =>
-					(cached ??= declarations(body, ` in selector ${JSON.stringify(text)}${at}`)),
+				where,
+				declarations: () => (cached ??= declarations(body, where)),
 			});
 		}
 	}
