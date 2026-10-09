@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.
+- Blocks that move whole, such as decorated boxes, rows, and table rows, reject when they do not fit between the header and footer, instead of painting over the footer and into the bottom margin.
+- Headers, footers, and repeated table headers count toward the 16 MiB painted-content cap as they paint, so a long footer on thousands of pages rejects with `DocumentTooLarge` instead of growing to gigabytes.
+- A line that mixes font sizes or line heights is as tall as its highest ascent plus its lowest depth below the baseline, so it no longer overlaps the next line.
+
 ## 0.4.0 - 2026-10-02
 
 ### Added
