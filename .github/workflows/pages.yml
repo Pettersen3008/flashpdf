@@ -38,7 +38,7 @@ jobs:
       - run: wasm-pack build crates/flashpdf-wasm --release --target web --out-dir ../../packages/flashpdf/wasm --locked
       - run: |
           mv packages/flashpdf/wasm/flashpdf_wasm_bg.wasm target/flashpdf_wasm_bg.raw.wasm
-          pnpm exec wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int \
+          pnpm exec wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int \
             target/flashpdf_wasm_bg.raw.wasm -o packages/flashpdf/wasm/flashpdf_wasm_bg.wasm
       - run: pnpm build
       - run: GITHUB_PAGES=1 pnpm playground:build

@@ -12,7 +12,7 @@ wasm-pack build crates/flashpdf-wasm --release --target web --out-dir ../../$was
 # wasm-opt writes back over the glue's default path, so the package ships one
 # WASM file and a bundler resolves it without a fallback URL.
 mv $wasm/flashpdf_wasm_bg.wasm target/flashpdf_wasm_bg.raw.wasm
-pnpm exec wasm-opt -Oz \
+pnpm exec wasm-opt -O3 \
   --enable-bulk-memory --enable-nontrapping-float-to-int \
   target/flashpdf_wasm_bg.raw.wasm -o $wasm/flashpdf_wasm_bg.wasm
 
