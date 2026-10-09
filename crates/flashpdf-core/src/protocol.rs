@@ -511,9 +511,10 @@ impl Decoder {
         if self.page.is_none() || !self.ended || !self.pending.is_empty() {
             return Err(ProtocolError::TruncatedProtocol);
         }
-        self.renderer
-            .map(crate::Renderer::finish)
-            .ok_or(ProtocolError::EmptyDocument)
+        Ok(self
+            .renderer
+            .ok_or(ProtocolError::EmptyDocument)?
+            .finish()?)
     }
 }
 
