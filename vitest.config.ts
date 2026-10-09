@@ -18,6 +18,8 @@ export default defineConfig({
 						"tests/*.integration.test.mjs",
 					],
 					testTimeout: 30_000,
+					// The CSS invoice example imports one module twice, as classes and as ?inline text; scoped names would hash differently.
+					css: { include: /\.css/, modules: { classNameStrategy: "non-scoped" } },
 				},
 			},
 		],
