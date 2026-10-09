@@ -293,10 +293,15 @@ fn split_alpha(
         .checked_mul(stride + 1)
         .filter(|total| *total <= MAX_DECODED_BYTES)
         .ok_or_else(too_large)?;
-    let raw = miniz_oxide::inflate::decompress_to_vec_zlib(idat)
-        .map_err(|_| "PNG image data is not a valid zlib stream")?;
+    let mismatch = "PNG image data does not match its dimensions";
+    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(idat, expected).map_err(
+        |error| match error.status {
+            miniz_oxide::inflate::TINFLStatus::HasMoreOutput => mismatch,
+            _ => "PNG image data is not a valid zlib stream",
+        },
+    )?;
     if raw.len() != expected {
-        return Err("PNG image data does not match its dimensions".into());
+        return Err(mismatch.into());
     }
     let pixels = unfilter(&raw, stride, height as usize, channels)?;
     let mut color = Vec::with_capacity(pixels.len() / channels * color_len);

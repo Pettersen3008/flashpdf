@@ -2,6 +2,7 @@
 pub enum ProtocolError {
     FontsAfterDocument,
     TooManyFonts,
+    FontsTooLarge,
     InvalidFont(String),
     DataAfterEnd,
     RecordTooLarge,
@@ -40,6 +41,7 @@ impl std::fmt::Display for ProtocolError {
         let message = match self {
             Self::FontsAfterDocument => "fonts must be registered before document",
             Self::TooManyFonts => "too many fonts",
+            Self::FontsTooLarge => "fonts exceed 64 MiB per render",
             Self::InvalidFont(message) => return formatter.write_str(message),
             Self::DataAfterEnd => "data after end",
             Self::RecordTooLarge => "record too large",

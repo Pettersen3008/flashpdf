@@ -1,4 +1,4 @@
-use super::{Decoder, HEADER_LEN, MAGIC, VERSION};
+use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, VERSION};
 
 fn header(version: u16, width: f32, height: f32, margin: f32) -> Vec<u8> {
     let mut bytes = MAGIC.to_vec();
@@ -639,6 +639,46 @@ fn given_unsupported_pngs_when_registering_then_rejects_naming_the_feature() {
         .unwrap_err()
         .to_string()
         .starts_with("unsupported image format"));
+}
+
+#[test]
+fn given_a_png_whose_data_inflates_past_its_dimensions_when_registering_then_stops_at_their_size() {
+    // Without its checksum the stream is invalid, so only an inflater that stops early sees the size.
+    let mut stream = miniz_oxide::deflate::compress_to_vec_zlib(&[0; 1 << 16], 6);
+    stream.truncate(stream.len() - 4);
+    let valid = png(1, 1, 6, 8, &[0; 5]);
+    let idat = valid.windows(4).position(|w| w == b"IDAT").unwrap() - 4;
+    let mut bomb = valid[..idat].to_vec();
+    bomb.extend(chunk(b"IDAT", &stream));
+    bomb.extend(chunk(b"IEND", &[]));
+    assert_eq!(
+        Decoder::default().add_image(bomb).unwrap_err().to_string(),
+        "PNG image data does not match its dimensions"
+    );
+}
+
+#[test]
+fn given_fonts_over_64_mib_when_registering_then_rejects_before_parsing() {
+    let mut decoder = Decoder::default();
+    assert_eq!(
+        decoder
+            .add_font(vec![0; MAX_FONT_BYTES + 1])
+            .unwrap_err()
+            .to_string(),
+        "fonts exceed 64 MiB per render"
+    );
+}
+
+#[test]
+fn given_a_page_side_over_14400_units_when_decoding_then_rejects() {
+    assert_eq!(
+        push_error(&header(VERSION, 14_401.0, 60.0, 10.0)),
+        "invalid page size"
+    );
+    assert_eq!(
+        push_error(&header(VERSION, 120.0, f32::MAX, 10.0)),
+        "invalid page size"
+    );
 }
 
 #[test]
