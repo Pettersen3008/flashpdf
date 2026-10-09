@@ -34,6 +34,8 @@ const opcode = {
 	image: 12,
 	boxStart: 17,
 	boxEnd: 18,
+	pdfa: 20,
+	attachment: 21,
 	end: 255,
 } as const;
 
@@ -57,6 +59,24 @@ export class ProtocolWriter {
 			this.binary.u8(tagged ? 1 : 0);
 			for (const key of ["title", "author", "subject", "keywords", "language"])
 				this.binary.text((value[key] as string | undefined) ?? "");
+		});
+	}
+
+	/** Profile 0 is plain PDF/A-3b; 1 to 6 embed the Factur-X XML registered as `xml`. */
+	pdfa(profile: number, xml: number) {
+		this.binary.record(opcode.pdfa, () => {
+			this.binary.u8(profile);
+			if (profile) this.binary.u16(xml);
+		});
+	}
+
+	attachment(slot: number, relationship: number, name: string, mime: string, description: string) {
+		this.binary.record(opcode.attachment, () => {
+			this.binary.u16(slot);
+			this.binary.u8(relationship);
+			this.binary.text(name);
+			this.binary.text(mime);
+			this.binary.text(description);
 		});
 	}
 

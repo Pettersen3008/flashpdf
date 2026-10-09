@@ -15,8 +15,11 @@ pub use error::ProtocolError;
 use cursor::{nonnegative_f32, positive_f32, pt, Cursor};
 use opcode::Opcode;
 
+use pdf_writer::types::AssociationKind;
+
 use crate::command::MAX_LAYOUT_DEPTH;
-use crate::image::MAX_IMAGE_BYTES;
+use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
+use crate::pdf::Attachment;
 use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
@@ -27,6 +30,16 @@ pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
 const VERSION: u16 = 7;
+const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+/// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
+const FACTURX: [(&str, &str, AssociationKind); 6] = [
+    ("MINIMUM", "factur-x.xml", AssociationKind::Data),
+    ("BASIC WL", "factur-x.xml", AssociationKind::Data),
+    ("BASIC", "factur-x.xml", AssociationKind::Alternative),
+    ("EN 16931", "factur-x.xml", AssociationKind::Alternative),
+    ("EXTENDED", "factur-x.xml", AssociationKind::Alternative),
+    ("XRECHNUNG", "xrechnung.xml", AssociationKind::Alternative),
+];
 
 #[derive(Default)]
 pub struct Decoder {
@@ -41,7 +54,11 @@ pub struct Decoder {
     /// Images registered before the renderer exists; later ones go straight to it.
     images: Vec<crate::Image>,
     image_bytes: usize,
-    metadata: Option<crate::pdf::Metadata>,
+    /// Attachment bytes until an Attachment or PdfA record claims them.
+    attachments: Vec<Option<Vec<u8>>>,
+    attachment_bytes: usize,
+    metadata: crate::pdf::Metadata,
+    pdfa: bool,
     body_started: bool,
 }
 
@@ -83,6 +100,9 @@ impl Decoder {
             return Err(ProtocolError::TooManyImages);
         }
         let image = crate::Image::parse(bytes).map_err(ProtocolError::InvalidImage)?;
+        if self.pdfa && matches!(image.color_space, ColorSpace::Cmyk) {
+            return Err(ProtocolError::PdfACmyk);
+        }
         Ok(match &mut self.renderer {
             Some(renderer) => renderer.add_image(image),
             None => {
@@ -90,6 +110,24 @@ impl Decoder {
                 (self.images.len() - 1) as u16
             }
         })
+    }
+
+    /// Attachment bytes bypass the document window like images, and wait for
+    /// the record that names them.
+    pub fn add_attachment(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+        if self.ended {
+            return Err(ProtocolError::DataAfterEnd);
+        }
+        self.attachment_bytes = self
+            .attachment_bytes
+            .checked_add(bytes.len())
+            .filter(|total| *total <= MAX_ATTACHMENT_BYTES)
+            .ok_or(ProtocolError::AttachmentsTooLarge)?;
+        if self.attachments.len() >= usize::from(u16::MAX) {
+            return Err(ProtocolError::InvalidValue("attachment count"));
+        }
+        self.attachments.push(Some(bytes));
+        Ok((self.attachments.len() - 1) as u16)
     }
 
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
@@ -241,9 +279,7 @@ impl Decoder {
                     .map(|_| cursor.alt().map(str::to_owned))
                     .collect::<Result<Vec<_>, _>>()?;
                 cursor.done()?;
-                if self.renderer.is_some() || !self.frames.is_empty() {
-                    return Err(ProtocolError::InvalidNesting);
-                }
+                self.before_body()?;
                 let metadata = crate::pdf::Metadata {
                     title: fields[0].clone(),
                     author: fields[1].clone(),
@@ -251,6 +287,7 @@ impl Decoder {
                     keywords: fields[3].clone(),
                     language: fields[4].clone(),
                     tagged,
+                    ..std::mem::take(&mut self.metadata)
                 };
                 if tagged && metadata.language.is_empty() {
                     return Err(ProtocolError::InvalidValue("metadata language"));
@@ -258,8 +295,76 @@ impl Decoder {
                 if !metadata.language.is_empty() && !valid_language(&metadata.language) {
                     return Err(ProtocolError::InvalidValue("metadata language"));
                 }
-                self.metadata = Some(metadata);
+                self.metadata = metadata;
                 Ok(())
+            }
+            Opcode::PdfA => {
+                let profile = cursor.take(1)?[0];
+                let facturx = match profile {
+                    0 => None,
+                    1..=6 => Some((FACTURX[usize::from(profile - 1)], cursor.u16()?)),
+                    _ => return Err(ProtocolError::InvalidValue("Factur-X profile")),
+                };
+                cursor.done()?;
+                self.before_body()?;
+                if self
+                    .images
+                    .iter()
+                    .any(|image| matches!(image.color_space, ColorSpace::Cmyk))
+                {
+                    return Err(ProtocolError::PdfACmyk);
+                }
+                self.pdfa = true;
+                self.metadata.pdfa = true;
+                if let Some(((level, name, relationship), slot)) = facturx {
+                    let data = self.claim_attachment(slot)?;
+                    // A cheap shape check; the XML's schema and content are the caller's.
+                    let xml = std::str::from_utf8(&data)
+                        .map(|xml| xml.trim_start_matches('\u{feff}').trim())
+                        .unwrap_or_default();
+                    if !xml.starts_with('<') || !xml.ends_with('>') {
+                        return Err(ProtocolError::InvalidValue("Factur-X XML"));
+                    }
+                    self.metadata.facturx = Some((level, name));
+                    self.attach(Attachment {
+                        name: name.to_owned(),
+                        mime: "text/xml".to_owned(),
+                        description: "Factur-X/ZUGFeRD invoice".to_owned(),
+                        relationship,
+                        data,
+                    })?;
+                }
+                Ok(())
+            }
+            Opcode::Attachment => {
+                let slot = cursor.u16()?;
+                let relationship = match cursor.take(1)?[0] {
+                    0 => AssociationKind::Source,
+                    1 => AssociationKind::Data,
+                    2 => AssociationKind::Alternative,
+                    3 => AssociationKind::Supplement,
+                    4 => AssociationKind::Unspecified,
+                    _ => return Err(ProtocolError::InvalidValue("attachment relationship")),
+                };
+                let name = cursor.alt()?.to_owned();
+                let mime = cursor.alt()?.to_owned();
+                let description = cursor.alt()?.to_owned();
+                cursor.done()?;
+                self.before_body()?;
+                if name.is_empty() || name.chars().count() > 255 || name.contains(['/', '\\']) {
+                    return Err(ProtocolError::InvalidValue("attachment name"));
+                }
+                if !valid_mime(&mime) {
+                    return Err(ProtocolError::InvalidValue("attachment MIME type"));
+                }
+                let data = self.claim_attachment(slot)?;
+                self.attach(Attachment {
+                    name,
+                    mime,
+                    description,
+                    relationship,
+                    data,
+                })
             }
             Opcode::Paragraph => {
                 let align = cursor.align()?;
@@ -394,6 +499,9 @@ impl Decoder {
     /// Slots 0 and 1 are Helvetica; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
+        if self.pdfa && font.index() < 2 {
+            return Err(ProtocolError::PdfAFont);
+        }
         let count = self
             .renderer
             .as_ref()
@@ -402,6 +510,32 @@ impl Decoder {
             Ok(font)
         } else {
             Err(ProtocolError::UnknownFont)
+        }
+    }
+
+    /// Document-level records must precede the header, footer and body.
+    fn before_body(&self) -> Result<(), ProtocolError> {
+        if self.renderer.is_some() || !self.frames.is_empty() {
+            return Err(ProtocolError::InvalidNesting);
+        }
+        Ok(())
+    }
+
+    fn claim_attachment(&mut self, slot: u16) -> Result<Vec<u8>, ProtocolError> {
+        self.attachments
+            .get_mut(usize::from(slot))
+            .and_then(Option::take)
+            .ok_or(ProtocolError::InvalidValue("attachment slot"))
+    }
+
+    fn attach(&mut self, attachment: Attachment) -> Result<(), ProtocolError> {
+        let attachments = &mut self.metadata.attachments;
+        match attachments.binary_search_by(|other| other.name.cmp(&attachment.name)) {
+            Ok(_) => Err(ProtocolError::DuplicateAttachment),
+            Err(index) => {
+                attachments.insert(index, attachment);
+                Ok(())
+            }
         }
     }
 
@@ -418,9 +552,7 @@ impl Decoder {
             for image in std::mem::take(&mut self.images) {
                 renderer.add_image(image);
             }
-            if let Some(metadata) = self.metadata.take() {
-                renderer.set_metadata(metadata);
-            }
+            renderer.set_metadata(std::mem::take(&mut self.metadata));
             self.renderer = Some(renderer);
         }
         Ok(self.renderer.as_mut().unwrap())
@@ -524,4 +656,18 @@ fn valid_language(value: &str) -> bool {
     }) && parts.all(|part| {
         (1..=8).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
     })
+}
+
+/// veraPDF's PDF/A-3 rule 6.8-1 pattern, which is stricter than RFC 6838.
+fn valid_mime(value: &str) -> bool {
+    let token = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_.+-".contains(&byte))
+    };
+    value.len() <= 255
+        && value
+            .split_once('/')
+            .is_some_and(|(kind, subtype)| token(kind) && token(subtype))
 }

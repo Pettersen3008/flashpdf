@@ -1,4 +1,7 @@
-use pdf_writer::types::{ActionType, AnnotationType, Predictor, StructRole};
+use pdf_writer::types::{
+    ActionType, AnnotationFlags, AnnotationType, AssociationKind, OutputIntentSubtype, Predictor,
+    StructRole,
+};
 use pdf_writer::writers::StructTreeRoot;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
@@ -15,7 +18,23 @@ pub(crate) struct Metadata {
     pub(crate) keywords: String,
     pub(crate) language: String,
     pub(crate) tagged: bool,
+    pub(crate) pdfa: bool,
+    /// Factur-X conformance level and embedded file name.
+    pub(crate) facturx: Option<(&'static str, &'static str)>,
+    /// Sorted by name, as the EmbeddedFiles name tree requires.
+    pub(crate) attachments: Vec<Attachment>,
 }
+
+pub(crate) struct Attachment {
+    pub(crate) name: String,
+    pub(crate) mime: String,
+    pub(crate) description: String,
+    pub(crate) relationship: AssociationKind,
+    pub(crate) data: Vec<u8>,
+}
+
+// sRGB-v2-micro.icc from github.com/saucecontrol/Compact-ICC-Profiles, CC0 1.0.
+const SRGB: &[u8] = include_bytes!("sRGB-v2-micro.icc");
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_pdf(
@@ -110,6 +129,12 @@ pub(crate) fn finish_pdf(
     } else {
         Vec::new()
     };
+    let archive = metadata.pdfa.then(|| (allocate(), allocate()));
+    let files: Vec<(Ref, Ref)> = metadata
+        .attachments
+        .iter()
+        .map(|_| (allocate(), allocate()))
+        .collect();
     let first_page = next;
     let count = contents.len();
     let page_refs = (0..count).map(|index| Ref::new(first_page + index as i32 * 2));
@@ -123,6 +148,27 @@ pub(crate) fn finish_pdf(
     if let Some((root, _)) = structure {
         catalog_writer.pair(Name(b"StructTreeRoot"), root);
         catalog_writer.mark_info().marked(true);
+    }
+    if let Some((xmp, profile)) = archive {
+        catalog_writer.metadata(xmp);
+        catalog_writer
+            .output_intents()
+            .push()
+            .subtype(OutputIntentSubtype::PDFA)
+            .output_condition_identifier(TextStr("sRGB IEC61966-2.1"))
+            .dest_output_profile(profile);
+    }
+    if !files.is_empty() {
+        catalog_writer
+            .insert(Name(b"AF"))
+            .array()
+            .items(files.iter().map(|(spec, _)| *spec));
+        let mut names = catalog_writer.names();
+        let mut tree = names.embedded_files();
+        let mut entries = tree.names();
+        for (attachment, (spec, _)) in metadata.attachments.iter().zip(&files) {
+            entries.insert(Str(attachment.name.as_bytes()), *spec);
+        }
     }
     drop(catalog_writer);
     if let Some(info) = info {
@@ -208,6 +254,27 @@ pub(crate) fn finish_pdf(
     }
     drop(images);
 
+    if let Some((xmp, profile)) = archive {
+        pdf.metadata(xmp, xmp_packet(&metadata).as_bytes());
+        pdf.icc_profile(profile, SRGB).n(3);
+    }
+    for (attachment, (spec, file)) in metadata.attachments.iter().zip(&files) {
+        let data = deflate(&attachment.data);
+        let mut stream = pdf.embedded_file(*file, &data);
+        stream.subtype(Name(attachment.mime.as_bytes()));
+        stream.filter(Filter::FlateDecode);
+        drop(stream);
+        let mut file_spec = pdf.file_spec(*spec);
+        file_spec
+            .path(Str(attachment.name.as_bytes()))
+            .unic_file(TextStr(&attachment.name))
+            .association_kind(attachment.relationship)
+            .embedded_file(*file);
+        if !attachment.description.is_empty() {
+            file_spec.description(TextStr(&attachment.description));
+        }
+    }
+
     for (index, (content, page_links)) in contents.into_iter().zip(links).enumerate() {
         let page_ref = Ref::new(first_page + index as i32 * 2);
         let stream_ref = Ref::new(first_page + 1 + index as i32 * 2);
@@ -257,6 +324,7 @@ pub(crate) fn finish_pdf(
             annotation
                 .subtype(AnnotationType::Link)
                 .rect(Rect::new(x1, y1, x2, y2))
+                .flags(AnnotationFlags::PRINT)
                 .border(0.0, 0.0, 0.0, None);
             annotation
                 .action()
@@ -265,7 +333,126 @@ pub(crate) fn finish_pdf(
         }
     }
 
+    if metadata.pdfa {
+        // FNV-1a over every object written: deterministic, and distinct per document.
+        let id = pdf
+            .as_bytes()
+            .iter()
+            .fold(0x6c62272e07bb014262b821756295c58d_u128, |hash, byte| {
+                (hash ^ u128::from(*byte)).wrapping_mul(0x0000000001000000000000000000013b)
+            })
+            .to_be_bytes()
+            .to_vec();
+        pdf.set_file_id((id.clone(), id));
+    }
     pdf.finish()
+}
+
+/// XMP must agree with the Info dictionary, so it repeats the same fields plus the language.
+fn xmp_packet(metadata: &Metadata) -> String {
+    let mut xmp = String::from(concat!(
+        "<?xpacket begin=\"\u{feff}\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>",
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">",
+        "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">",
+        "<rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"",
+        " xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">",
+        "<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
+    ));
+    for (value, open, close) in [
+        (
+            &metadata.title,
+            "<dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">",
+            "</rdf:li></rdf:Alt></dc:title>",
+        ),
+        (
+            &metadata.author,
+            "<dc:creator><rdf:Seq><rdf:li>",
+            "</rdf:li></rdf:Seq></dc:creator>",
+        ),
+        (
+            &metadata.subject,
+            "<dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">",
+            "</rdf:li></rdf:Alt></dc:description>",
+        ),
+        (
+            &metadata.language,
+            "<dc:language><rdf:Bag><rdf:li>",
+            "</rdf:li></rdf:Bag></dc:language>",
+        ),
+        (&metadata.keywords, "<pdf:Keywords>", "</pdf:Keywords>"),
+    ] {
+        if value.is_empty() {
+            continue;
+        }
+        xmp.push_str(open);
+        for character in value.chars() {
+            match character {
+                '&' => xmp.push_str("&amp;"),
+                '<' => xmp.push_str("&lt;"),
+                '>' => xmp.push_str("&gt;"),
+                _ => xmp.push(character),
+            }
+        }
+        xmp.push_str(close);
+    }
+    xmp.push_str("</rdf:Description>");
+    if let Some((level, file)) = metadata.facturx {
+        xmp.extend([
+            concat!(
+                "<rdf:Description rdf:about=\"\"",
+                " xmlns:fx=\"urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#\">",
+                "<fx:DocumentType>INVOICE</fx:DocumentType><fx:DocumentFileName>",
+            ),
+            file,
+            "</fx:DocumentFileName><fx:Version>1.0</fx:Version><fx:ConformanceLevel>",
+            level,
+            concat!(
+                "</fx:ConformanceLevel></rdf:Description>",
+                "<rdf:Description rdf:about=\"\"",
+                " xmlns:pdfaExtension=\"http://www.aiim.org/pdfa/ns/extension/\"",
+                " xmlns:pdfaSchema=\"http://www.aiim.org/pdfa/ns/schema#\"",
+                " xmlns:pdfaProperty=\"http://www.aiim.org/pdfa/ns/property#\">",
+                "<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType=\"Resource\">",
+                "<pdfaSchema:schema>Factur-X PDFA Extension Schema</pdfaSchema:schema>",
+                "<pdfaSchema:namespaceURI>urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#",
+                "</pdfaSchema:namespaceURI><pdfaSchema:prefix>fx</pdfaSchema:prefix>",
+                "<pdfaSchema:property><rdf:Seq>",
+            ),
+        ]);
+        for (name, description) in [
+            ("DocumentFileName", "The name of the embedded XML document"),
+            (
+                "DocumentType",
+                "The type of the hybrid document, e.g. INVOICE",
+            ),
+            (
+                "Version",
+                "The version of the standard applying to the embedded XML",
+            ),
+            (
+                "ConformanceLevel",
+                "The conformance level of the embedded XML",
+            ),
+        ] {
+            xmp.extend([
+                "<rdf:li rdf:parseType=\"Resource\"><pdfaProperty:name>",
+                name,
+                concat!(
+                    "</pdfaProperty:name><pdfaProperty:valueType>Text</pdfaProperty:valueType>",
+                    "<pdfaProperty:category>external</pdfaProperty:category>",
+                    "<pdfaProperty:description>",
+                ),
+                description,
+                "</pdfaProperty:description></rdf:li>",
+            ]);
+        }
+        xmp.push_str(concat!(
+            "</rdf:Seq></pdfaSchema:property></rdf:li></rdf:Bag>",
+            "</pdfaExtension:schemas></rdf:Description>",
+        ));
+    }
+    xmp.push_str("</rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>");
+    xmp
 }
 
 /// Fixed level keeps the output byte-for-byte deterministic across runs.

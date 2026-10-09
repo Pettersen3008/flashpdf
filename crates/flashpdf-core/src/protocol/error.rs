@@ -33,6 +33,10 @@ pub enum ProtocolError {
     TooManyImages,
     UnknownImage,
     InvalidLink,
+    AttachmentsTooLarge,
+    DuplicateAttachment,
+    PdfAFont,
+    PdfACmyk,
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -71,6 +75,12 @@ impl std::fmt::Display for ProtocolError {
             Self::TooManyImages => "too many images",
             Self::UnknownImage => "unknown image",
             Self::InvalidLink => "invalid link: URIs must be printable ASCII",
+            Self::AttachmentsTooLarge => "attachments exceed 64 MiB per render",
+            Self::DuplicateAttachment => "duplicate attachment name",
+            Self::PdfAFont => {
+                "PDF/A embeds every font and Helvetica has none; register one with `fonts` and set fontFamily"
+            }
+            Self::PdfACmyk => "PDF/A output uses an sRGB output intent, so CMYK JPEGs are not supported",
         };
         formatter.write_str(message)
     }
