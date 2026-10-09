@@ -13,7 +13,8 @@ struct RunMetrics<'a> {
     size: Pt,
     color: Rgb,
     ascent: Pt,
-    line_height: Pt,
+    /// The run's line box below the baseline.
+    depth: Pt,
 }
 
 impl RunMetrics<'_> {
@@ -60,7 +61,7 @@ pub(crate) struct ParagraphLayouter<'a> {
     segment_start: usize,
     used: Pt,
     ascent: Pt,
-    line_height: Pt,
+    depth: Pt,
     has_word: bool,
     pieces: Vec<Piece>,
     space: Option<Space>,
@@ -96,7 +97,7 @@ impl<'a> ParagraphLayouter<'a> {
                 size: run.size,
                 color: run.color,
                 ascent: Pt(ascent),
-                line_height: Pt(line_height),
+                depth: Pt(line_height - ascent),
             });
         }
         let mut state = Self {
@@ -107,7 +108,7 @@ impl<'a> ParagraphLayouter<'a> {
             segment_start: output.segments.len(),
             used: Pt::ZERO,
             ascent: Pt::ZERO,
-            line_height: Pt::ZERO,
+            depth: Pt::ZERO,
             has_word: false,
             pieces: Vec::new(),
             space: None,
@@ -230,13 +231,14 @@ impl<'a> ParagraphLayouter<'a> {
 
     fn append(&mut self, run: usize, text: Range<usize>, width: Pt, output: &mut LayoutBuffer) {
         let metrics = &self.runs[run];
-        if metrics.ascent > self.ascent {
+        let on_line = output.segments.len() > self.segment_start;
+        // The line box spans the tallest ascent and the deepest depth of its runs.
+        if !on_line || metrics.ascent > self.ascent {
             self.ascent = metrics.ascent;
         }
-        if metrics.line_height > self.line_height {
-            self.line_height = metrics.line_height;
+        if !on_line || metrics.depth > self.depth {
+            self.depth = metrics.depth;
         }
-        let on_line = output.segments.len() > self.segment_start;
         match output.segments.last_mut() {
             Some(last)
                 if on_line
@@ -260,13 +262,14 @@ impl<'a> ParagraphLayouter<'a> {
     fn hard_break(&mut self, run: usize, output: &mut LayoutBuffer) {
         if !self.has_word {
             self.ascent = self.runs[run].ascent;
-            self.line_height = self.runs[run].line_height;
+            self.depth = self.runs[run].depth;
         }
         self.push_line(output);
     }
 
     fn push_line(&mut self, output: &mut LayoutBuffer) {
         let top = self.area.origin.y + self.height;
+        let height = self.ascent + self.depth;
         output.lines.push(PositionedLine {
             segments: self.segment_start..output.segments.len(),
             origin: Point {
@@ -274,16 +277,16 @@ impl<'a> ParagraphLayouter<'a> {
                 y: top + self.ascent,
             },
             top,
-            bottom: top + self.line_height,
+            bottom: top + height,
             available_width: self.area.width,
             text_width: self.used,
             align: self.align,
         });
-        self.height += self.line_height;
+        self.height += height;
         self.segment_start = output.segments.len();
         self.used = Pt::ZERO;
         self.ascent = Pt::ZERO;
-        self.line_height = Pt::ZERO;
+        self.depth = Pt::ZERO;
         self.has_word = false;
         self.space = None;
     }

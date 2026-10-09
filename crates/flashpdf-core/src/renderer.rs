@@ -16,7 +16,7 @@ pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 pub fn render(page: Page, commands: &[Command<'_>]) -> Result<Vec<u8>, RenderError> {
     let mut renderer = Renderer::new(page);
     renderer.push(commands)?;
-    Ok(renderer.finish())
+    renderer.finish()
 }
 
 pub struct Renderer {
@@ -32,16 +32,16 @@ pub struct Renderer {
     links: Vec<Vec<PageLink>>,
     tags: Vec<Vec<PageTag>>,
     layout: LayoutBuffer,
-    footer: Option<Footer>,
-    footer_height: crate::Pt,
-    header: Option<Footer>,
-    header_height: crate::Pt,
+    header: Option<Furniture>,
+    footer: Option<Furniture>,
     metadata: Metadata,
 }
 
-struct Footer {
+/// A header or footer line, painted on every page in `finish`.
+struct Furniture {
     template: String,
     style: TextStyle,
+    /// Baseline y from the page bottom.
     baseline: Pt,
 }
 
@@ -63,10 +63,8 @@ impl Renderer {
             links: vec![Vec::new()],
             tags: vec![Vec::new()],
             layout: LayoutBuffer::default(),
-            footer: None,
-            footer_height: crate::Pt::ZERO,
             header: None,
-            header_height: crate::Pt::ZERO,
+            footer: None,
             metadata: Metadata::default(),
         }
     }
@@ -120,37 +118,13 @@ impl Renderer {
         if self.footer.is_some() {
             return Err(RenderError::InvalidLayout);
         }
-        let font = self
-            .fonts
-            .get(style.font)
-            .ok_or(RenderError::InvalidLayout)?;
-        let mut digit = '0';
-        let mut width = 0;
-        let mut scratch = Vec::new();
-        for candidate in '0'..='9' {
-            let candidate_width = font.encode_into(candidate, &mut scratch)?;
-            if candidate_width > width {
-                digit = candidate;
-                width = candidate_width;
-            }
-        }
-        let placeholder = digit.to_string().repeat(10);
-        let (_, text_width) = footer_line(&template, &placeholder, &placeholder, font, style)?;
-        if text_width > self.page.content_width() {
-            return Err(RenderError::TextTooWide);
-        }
-        let (ascent, descent, gap) = font.metrics();
-        let scale = style.size.get() / 1000.0;
-        let ascent = Pt(ascent * scale);
-        let height = Pt((ascent.get() - descent * scale + gap * scale).max(0.0));
-        self.page.validate_block(height + self.header_height)?;
-        self.fonts.mark_used(style.font, &[]);
-        self.footer_height = height;
-        self.footer = Some(Footer {
+        let (ascent, height) = self.measure_furniture(&template, style)?;
+        self.footer = Some(Furniture {
             template,
             style,
-            baseline: height - ascent,
+            baseline: self.page.bottom() + (height - ascent),
         });
+        self.page.footer = height;
         Ok(())
     }
 
@@ -162,6 +136,24 @@ impl Renderer {
         if self.header.is_some() {
             return Err(RenderError::InvalidLayout);
         }
+        let (ascent, height) = self.measure_furniture(&template, style)?;
+        self.header = Some(Furniture {
+            template,
+            style,
+            baseline: self.page.top() - ascent,
+        });
+        self.page.header = height;
+        self.cursor.reset(self.page);
+        Ok(())
+    }
+
+    /// Checks that the line fits the page with ten-digit page numbers and
+    /// returns its ascent and height.
+    fn measure_furniture(
+        &mut self,
+        template: &str,
+        style: TextStyle,
+    ) -> Result<(Pt, Pt), RenderError> {
         let font = self
             .fonts
             .get(style.font)
@@ -177,23 +169,17 @@ impl Renderer {
             }
         }
         let placeholder = digit.to_string().repeat(10);
-        let (_, text_width) = footer_line(&template, &placeholder, &placeholder, font, style)?;
+        let (_, text_width) = footer_line(template, &placeholder, &placeholder, font, style)?;
         if text_width > self.page.content_width() {
             return Err(RenderError::TextTooWide);
         }
         let (ascent, descent, gap) = font.metrics();
         let scale = style.size.get() / 1000.0;
-        let height = Pt(((ascent - descent + gap) * scale).max(0.0));
-        self.page.validate_block(height + self.footer_height)?;
+        let ascent = ascent * scale;
+        let height = Pt((ascent - descent * scale + gap * scale).max(0.0));
+        self.page.validate_block(height)?;
         self.fonts.mark_used(style.font, &[]);
-        self.header_height = height;
-        self.cursor.advance(height);
-        self.header = Some(Footer {
-            template,
-            style,
-            baseline: Pt(ascent * scale),
-        });
-        Ok(())
+        Ok((Pt(ascent), height))
     }
 
     pub(crate) fn set_metadata(&mut self, metadata: Metadata) {
@@ -212,6 +198,10 @@ impl Renderer {
             Block::PageBreak => self.start_page(),
             Block::Element(element) => self.render_element(element)?,
         }
+        self.check_size()
+    }
+
+    fn check_size(&self) -> Result<(), RenderError> {
         if self.content_bytes + self.contents.last().unwrap().len() > MAX_CONTENT_BYTES {
             return Err(RenderError::DocumentTooLarge);
         }
@@ -249,21 +239,18 @@ impl Renderer {
     ) -> Result<(), RenderError> {
         let lines = layout.lines.len();
         if !splittable(element) {
-            self.page.validate_block(height + self.footer_height)?;
-            if !self.cursor.fits(height + self.footer_height, self.page) {
+            self.page.validate_block(height)?;
+            if !self.cursor.fits(height, self.page) {
                 self.start_page();
             }
-            let origin = self.cursor.origin(self.page);
-            self.painter().paint(layout, 0..lines, origin);
-            self.cursor.advance(height);
-            return Ok(());
+            return self.paint_block(layout, height);
         }
         // Stream positioned lines page by page; `offset` is the block y where
         // the current page starts, so gaps straddling a break collapse.
         let mut offset = Pt::ZERO;
         let mut index = 0;
         loop {
-            let available = self.cursor.remaining(self.page) - self.footer_height;
+            let available = self.cursor.remaining(self.page);
             let start = index;
             while layout
                 .lines
@@ -299,16 +286,15 @@ impl Renderer {
         let split = table.rows.len() - table.footer_rows;
         let (header, header_height) = self.layout_rows(&table.rows[..table.header_rows], area)?;
         let (footer, footer_height) = self.layout_rows(&table.rows[split..], area)?;
-        let reserved = header_height + footer_height + self.footer_height;
+        let reserved = header_height + footer_height;
         self.page.validate_block(reserved)?;
         let body = &table.rows[table.header_rows..split];
         if body.is_empty() {
             if !self.cursor.fits(reserved, self.page) {
                 self.start_page();
             }
-            self.paint_block(&header, header_height);
-            self.paint_block(&footer, footer_height);
-            return Ok(());
+            self.paint_block(&header, header_height)?;
+            return self.paint_block(&footer, footer_height);
         }
         let mut header_on_page = false;
         for (index, row) in body.iter().enumerate() {
@@ -322,26 +308,26 @@ impl Renderer {
             }
             let needed = height
                 + if header_on_page {
-                    footer_height + self.footer_height
+                    footer_height
                 } else {
                     reserved
                 };
             if !self.cursor.fits(needed, self.page) {
                 if header_on_page {
-                    self.paint_block(&footer, footer_height);
+                    self.paint_block(&footer, footer_height)?;
                 }
                 self.start_page();
                 header_on_page = false;
             }
             if !header_on_page {
-                self.paint_block(&header, header_height);
+                self.paint_block(&header, header_height)?;
                 header_on_page = true;
             }
-            self.paint_block(&layout, height);
+            let painted = self.paint_block(&layout, height);
             self.layout = layout;
+            painted?;
         }
-        self.paint_block(&footer, footer_height);
-        Ok(())
+        self.paint_block(&footer, footer_height)
     }
 
     fn layout_rows(
@@ -362,10 +348,12 @@ impl Renderer {
         Ok((buffer, height))
     }
 
-    fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) {
+    /// Checks the cap per paint: a repeated table header multiplies one block's bytes.
+    fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) -> Result<(), RenderError> {
         let origin = self.cursor.origin(self.page);
         self.painter().paint(layout, 0..layout.lines.len(), origin);
         self.cursor.advance(height);
+        self.check_size()
     }
 
     fn painter(&mut self) -> PdfPainter<'_> {
@@ -382,36 +370,36 @@ impl Renderer {
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
         self.cursor.reset(self.page);
-        self.cursor.advance(self.header_height);
     }
 
-    pub fn finish(mut self) -> Vec<u8> {
-        if let Some(header) = self.header.take() {
-            let total = self.contents.len() as i32;
-            for (index, (content, links)) in
-                self.contents.iter_mut().zip(&mut self.links).enumerate()
-            {
+    pub fn finish(mut self) -> Result<Vec<u8>, RenderError> {
+        // The header and footer repeat on every page, so they count against the cap too.
+        let mut bytes = self.content_bytes + self.contents.last().unwrap().len();
+        let total = self.contents.len() as i32;
+        for (index, (content, links)) in self.contents.iter_mut().zip(&mut self.links).enumerate() {
+            let before = content.len();
+            for furniture in self.header.iter().chain(&self.footer) {
                 let mut page_buffer = itoa::Buffer::new();
                 let mut total_buffer = itoa::Buffer::new();
-                let font = self.fonts.get(header.style.font).unwrap();
+                let font = self.fonts.get(furniture.style.font).unwrap();
                 let (text, width) = footer_line(
-                    &header.template,
+                    &furniture.template,
                     page_buffer.format(index as i32 + 1),
                     total_buffer.format(total),
                     font,
-                    header.style,
+                    furniture.style,
                 )
                 .unwrap();
-                self.fonts.mark_used(header.style.font, &text);
+                self.fonts.mark_used(furniture.style.font, &text);
                 if self.metadata.tagged {
                     content.begin_marked_content(pdf_writer::Name(b"Artifact"));
                 }
                 PdfPainter::new(content, links, None).paint_line(
                     &text,
-                    header.style,
+                    furniture.style,
                     crate::geometry::Point {
                         x: self.page.margin(),
-                        y: self.page.top() - header.baseline,
+                        y: furniture.baseline,
                     },
                     self.page.content_width(),
                     width,
@@ -420,46 +408,13 @@ impl Renderer {
                     content.end_marked_content();
                 }
             }
-        }
-        if let Some(footer) = self.footer.take() {
-            let total = self.contents.len() as i32;
-            for (index, (content, links)) in
-                self.contents.iter_mut().zip(&mut self.links).enumerate()
-            {
-                let mut page_buffer = itoa::Buffer::new();
-                let mut total_buffer = itoa::Buffer::new();
-                let page_number = page_buffer.format(index as i32 + 1);
-                let total_pages = total_buffer.format(total);
-                let font = self.fonts.get(footer.style.font).unwrap();
-                let (text, text_width) = footer_line(
-                    &footer.template,
-                    page_number,
-                    total_pages,
-                    font,
-                    footer.style,
-                )
-                .unwrap();
-                self.fonts.mark_used(footer.style.font, &text);
-                if self.metadata.tagged {
-                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
-                }
-                PdfPainter::new(content, links, None).paint_line(
-                    &text,
-                    footer.style,
-                    crate::geometry::Point {
-                        x: self.page.margin(),
-                        y: self.page.margin() + footer.baseline,
-                    },
-                    self.page.content_width(),
-                    text_width,
-                );
-                if self.metadata.tagged {
-                    content.end_marked_content();
-                }
+            bytes += content.len() - before;
+            if bytes > MAX_CONTENT_BYTES {
+                return Err(RenderError::DocumentTooLarge);
             }
         }
         let (fonts, used) = self.fonts.into_parts();
-        finish_pdf(
+        Ok(finish_pdf(
             self.page.page(),
             self.contents,
             fonts,
@@ -469,7 +424,7 @@ impl Renderer {
             self.links,
             self.tags,
             self.metadata,
-        )
+        ))
     }
 }
 

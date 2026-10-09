@@ -671,7 +671,7 @@ fn given_one_hundred_thousand_blocks_when_pushed_then_scratch_stays_flat() {
         renderer.push(&[text("row 1")]).unwrap();
     }
     assert_eq!(renderer.scratch_capacity(), initial);
-    assert!(lopdf::Document::load_mem(&renderer.finish()).is_ok());
+    assert!(lopdf::Document::load_mem(&renderer.finish().unwrap()).is_ok());
 }
 
 #[test]
@@ -762,7 +762,7 @@ fn abel_text(text: &str) -> Result<Vec<u8>, RenderError> {
             ..TextStyle::plain(Pt(12.0))
         },
     }])?;
-    Ok(renderer.finish())
+    renderer.finish()
 }
 
 #[test]
@@ -883,4 +883,91 @@ fn given_a_table_with_a_footer_row_when_it_spans_pages_then_the_footer_follows_t
         let expected = format!("H\n{}\nF", rows.join("\n"));
         assert_eq!(pdf.extract_text(&[page]).unwrap().trim(), expected);
     }
+}
+
+#[test]
+fn given_a_header_and_a_line_taller_than_the_page_when_rendered_then_rejects_with_page_overflow() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    // A thread, so a pagination loop that never ends fails the test instead of hanging it.
+    std::thread::spawn(move || {
+        let mut renderer = super::Renderer::new(page());
+        renderer
+            .set_header("Header".into(), TextStyle::plain(Pt(10.0)))
+            .unwrap();
+        let runs = [TextRun {
+            line_height: Some(Pt(100.0)),
+            ..run(1, false, 10.0, false)
+        }];
+        let _ = sender.send(renderer.push(&[Command::Paragraph {
+            links: &[],
+            align: TextAlign::Left,
+            text: "a",
+            runs: &runs,
+        }]));
+    });
+    let result = receiver
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("pagination must terminate");
+    assert_eq!(result, Err(RenderError::PageOverflow));
+}
+
+#[test]
+fn given_a_header_and_footer_when_a_stack_or_table_row_is_taller_than_the_body_between_them_then_rejects(
+) {
+    let render = |commands: &[Command<'_>]| {
+        let mut renderer = super::Renderer::new(page());
+        for set in [super::Renderer::set_header, super::Renderer::set_footer] {
+            set(&mut renderer, "x".into(), TextStyle::plain(Pt(10.0))).unwrap();
+        }
+        renderer.push(commands)?;
+        renderer.finish()
+    };
+    // 40pt of content minus the 9.25pt header and footer holds two 9.25pt lines, not three.
+    let mut stack = vec![Command::StackStart { gap: Pt(0.0) }];
+    stack.extend(std::iter::repeat_n(text("line"), 3));
+    stack.push(Command::StackEnd);
+    let columns = [super::ColumnWidth::Fraction(
+        FractionValue::new(1.0).unwrap(),
+    )];
+    let mut table = vec![table_start(0), Command::RowStart { columns: &columns }];
+    table.extend(stack.iter().copied());
+    table.extend([Command::RowEnd, Command::TableEnd]);
+    assert_eq!(render(&stack).err(), Some(RenderError::PageOverflow));
+    assert_eq!(render(&table).err(), Some(RenderError::TableRowOverflow(0)));
+    stack.remove(1);
+    let pdf = lopdf::Document::load_mem(&render(&stack).unwrap()).unwrap();
+    assert_eq!(pdf.get_pages().len(), 1);
+}
+
+#[test]
+fn given_two_sizes_with_the_same_line_height_on_one_line_when_wrapping_then_the_line_box_spans_the_tallest_ascent_and_deepest_depth(
+) {
+    // In a 20pt line, 20pt text rises 15.11pt and 10pt text sinks 7.445pt below the baseline.
+    let runs = [20.0, 10.0].map(|size| TextRun {
+        line_height: Some(Pt(20.0)),
+        ..run(1, false, size, false)
+    });
+    let pdf = parsed(&[
+        Command::Paragraph {
+            links: &[],
+            align: TextAlign::Left,
+            text: "ab",
+            runs: &runs,
+        },
+        text("next"),
+    ]);
+    // The 22.555pt line box puts the next baseline at 50 - 22.555 - 7.18.
+    let next = baselines(&pdf, (4, 0))[1];
+    assert!((next - 20.265).abs() < 0.001, "{next}");
+}
+
+#[test]
+fn given_a_long_footer_and_many_page_breaks_when_finishing_then_rejects_past_the_content_cap() {
+    let mut renderer = super::Renderer::new(Page::A4);
+    // 60,000 glyphs at 0.01pt fit the line, so every page paints about 60 KB of footer.
+    renderer
+        .set_footer("x".repeat(60_000), TextStyle::plain(Pt(0.01)))
+        .unwrap();
+    renderer.push(&vec![Command::PageBreak; 300]).unwrap();
+    assert_eq!(renderer.finish().err(), Some(RenderError::DocumentTooLarge));
 }
