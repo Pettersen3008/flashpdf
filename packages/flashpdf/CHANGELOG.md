@@ -11,6 +11,12 @@
 - Blocks that move whole, such as decorated boxes, rows, and table rows, reject when they do not fit between the header and footer, instead of painting over the footer and into the bottom margin.
 - Headers, footers, and repeated table headers count toward the 16 MiB painted-content cap as they paint, so a long footer on thousands of pages rejects with `DocumentTooLarge` instead of growing to gigabytes.
 - A line that mixes font sizes or line heights is as tall as its highest ascent plus its lowest depth below the baseline, so it no longer overlaps the next line.
+### Fixed
+
+- A PNG with transparency stops inflating at the size its dimensions allow, so a small compressed image can no longer exhaust memory.
+- Embedded fonts use one `cmap` subtable: format 12 before format 4, then Windows before Unicode platform. A font with many records or overlapping format 4 segments no longer takes minutes to load, and a format 12 group that starts inside the previous one keeps its remaining characters.
+- Registered fonts are capped at 64 MiB per render, checked in JavaScript before the bytes are copied into WASM memory.
+- Page sides over 14,400 pt reject, the largest size PDF readers accept.
 
 ## 0.4.0 - 2026-10-02
 

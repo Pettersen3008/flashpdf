@@ -24,6 +24,10 @@ pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
 /// An open Stack, Box, Row or Table buffers its commands until it closes; this bounds that buffer.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
+/// Total bytes of registered fonts per render.
+const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
+/// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
+const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
 const VERSION: u16 = 7;
@@ -38,6 +42,7 @@ pub struct Decoder {
     frames: Vec<Frame>,
     ended: bool,
     fonts: Vec<crate::EmbeddedFont>,
+    font_bytes: usize,
     /// Images registered before the renderer exists; later ones go straight to it.
     images: Vec<crate::Image>,
     image_bytes: usize,
@@ -63,6 +68,11 @@ impl Decoder {
         if self.fonts.len() >= 254 {
             return Err(ProtocolError::TooManyFonts);
         }
+        self.font_bytes = self
+            .font_bytes
+            .checked_add(bytes.len())
+            .filter(|total| *total <= MAX_FONT_BYTES)
+            .ok_or(ProtocolError::FontsTooLarge)?;
         self.fonts
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
         Ok((self.fonts.len() + 1) as u8)
@@ -143,6 +153,9 @@ impl Decoder {
         }
         let width = positive_f32(&bytes[6..10], "page width")?;
         let height = positive_f32(&bytes[10..14], "page height")?;
+        if width > MAX_PAGE_SIDE || height > MAX_PAGE_SIDE {
+            return Err(ProtocolError::InvalidValue("page size"));
+        }
         let margin = nonnegative_f32(&bytes[14..18], "margin")?;
         self.page = Some(crate::Page::new(pt(width)?, pt(height)?, pt(margin)?)?);
         Ok(())
