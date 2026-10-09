@@ -24,6 +24,7 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 		[".a { color: #000 } oops", /invalid CSS stylesheet at 1:20/],
 		["{bad}p { color: red }", /invalid CSS stylesheet/],
 		["@layer x { .a { color: red }", /invalid CSS stylesheet at 1:1/],
+		["/* one\n\n\n*/\n.a { letter-spacing: 1pt }", /"\.a" at 5:1/],
 	]) {
 		assert.throws(() => stylesheet(source), message, source);
 	}
@@ -194,4 +195,34 @@ test("given cascading shorthands, selector whitespace, and transparent paint, wh
 		() => style({ color: "transparent" }) && color("transparent"),
 		/only to background/,
 	);
+});
+
+test("given a longhand then a shorthand in a later rule, when cascading, then the shorthand wins", async () => {
+	const [cell] = await resolve(jsx("div", { className: "cell last", children: "x" }), [
+		".cell { border-bottom: 1pt solid red; background-color: red }",
+		".cell.last { border: none; background: blue }",
+	]);
+	const box = boxStyle(cell.style, 12);
+	assert.deepEqual(box.border, [0, 0, 0, 0]);
+	assert.deepEqual(box.background, [0, 0, 255]);
+});
+
+test("given an undefined inline style value, when cascading, then the stylesheet value stays", async () => {
+	const [card] = await resolve(
+		jsx("div", { className: "card", style: { padding: undefined }, children: "x" }),
+		[".card { padding: 10pt }"],
+	);
+	assert.deepEqual(boxStyle(card.style, 12).padding, [10, 10, 10, 10]);
+});
+
+test("given a var() fallback with parentheses or a nested var(), when resolving styles, then substitutes it", async () => {
+	const [main] = await resolve(
+		jsx("main", { className: "a", children: jsx("p", { className: "b", children: "x" }) }),
+		[
+			".a { color: var(--missing, rgb(255, 0, 0)) }",
+			".b { --blue: blue; color: var(--missing, var(--blue)) }",
+		],
+	);
+	assert.equal(main.style.color, "rgb(255, 0, 0)");
+	assert.equal(main.children[0].style.color, "blue");
 });

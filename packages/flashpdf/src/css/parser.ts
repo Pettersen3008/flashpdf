@@ -103,6 +103,7 @@ function position(source: string, index: number) {
 function invalid(source: string, index: number) {
 	return new Error(`invalid CSS stylesheet at ${position(source, index)}`);
 }
+/** Blanks comments to same-length whitespace, keeping newlines, so error positions match the source. */
 function withoutComments(source: string) {
 	const parts: string[] = [];
 	let index = 0;
@@ -112,6 +113,7 @@ function withoutComments(source: string) {
 		parts.push(source.slice(index, start));
 		const end = source.indexOf("*/", start + 2);
 		if (end < 0) return parts.join("") + source.slice(start);
+		parts.push(source.slice(start, end + 2).replace(/[^\n]/g, " "));
 		index = end + 2;
 	}
 }

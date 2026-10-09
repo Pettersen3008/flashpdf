@@ -195,6 +195,38 @@ test("given a flex row with a 12pt gap, when compiling, then a fixed 12pt empty 
 	]);
 });
 
+test("given whitespace-only text between flex items and column children, when compiling, then it adds no column, gap, or line", async () => {
+	const calls = await compiled(
+		jsxs("main", {
+			style: { display: "flex", flexDirection: "column", gap: "10pt" },
+			children: [
+				jsxs("div", {
+					style: { display: "flex" },
+					children: [jsx("span", { children: "a" }), " ", jsx("span", { children: "b" })],
+				}),
+				" ",
+				jsxs("div", {
+					children: [jsx("span", { children: "c" }), " ", jsx("b", { children: "d" })],
+				}),
+			],
+		}),
+	);
+	assert.deepEqual(calls, [
+		[
+			"rowStart",
+			[
+				{ kind: 1, value: 1 },
+				{ kind: 1, value: 1 },
+			],
+		],
+		["paragraph", [run(0, "a")], "left"],
+		["paragraph", [run(0, "b")], "left"],
+		["rowEnd"],
+		["spacer", 10],
+		["paragraph", [run(0, "c "), run(1, "d")], "left"],
+	]);
+});
+
 test("given a unitless line-height on a block, when a child changes font size, then each run scales the factor by its own size", async () => {
 	const calls = await compiled(
 		jsx("p", {
