@@ -256,6 +256,32 @@ test("given a page footer, when rendering multiple pages, then repeats resolved 
 	);
 });
 
+test("given a page token character in user text, when it sits in a footer, then rejects it instead of numbering pages", async () => {
+	await assert.rejects(
+		render(jsx("main", { children: "x" }), { footer: jsx("footer", { children: "Page \u001e" }) }),
+		/unsupported control character/,
+	);
+});
+
+test("given layouts the engine rejects, when rendering, then explains the code and names the element", async () => {
+	const column = jsx("div", {
+		style: { display: "flex" },
+		children: jsx("span", { style: { width: "900%" }, children: "x" }),
+	});
+	await assert.rejects(
+		render(jsx("main", { children: column })),
+		/^Error: InvalidLayout: the content does not fit its container.* on <div> in <main>$/,
+	);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("p", { style: { fontSize: 3e38 }, children: "x" }) })),
+		/^Error: TextTooWide: .* on <p> in <main>$/,
+	);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("div", { style: { marginTop: 3e38 }, children: "x" }) })),
+		/^Error: PageOverflow: the content does not fit on an empty page.* on <div> in <main>$/,
+	);
+});
+
 test("given a repeating header and tagged metadata, when rendering two pages, then writes page furniture and a structure tree", async () => {
 	const logo = png(1, 1, 2, [0, 255, 0, 0]);
 	const document = jsxs("main", {

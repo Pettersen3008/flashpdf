@@ -1,5 +1,5 @@
 import type { NormalizedStyle } from "../style.js";
-import { style } from "../style.js";
+import { point, style } from "../style.js";
 import type { ElementNode, Node, Tag, TextNode } from "../tree.js";
 import { label, locate } from "../tree.js";
 import { compareSpecificity, inline, matches, parse } from "./parser.js";
@@ -101,13 +101,8 @@ function resolveVariable(
 
 function resolveFontSize(result: CascadedStyle, parent: CascadedStyle) {
 	if (typeof result.fontSize !== "string") return;
-	const match = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|em|rem)$/.exec(result.fontSize.trim());
-	if (!match) return;
 	const parentSize = typeof parent.fontSize === "number" ? parent.fontSize : 12;
-	const amount = Number(match[1]);
-	result.fontSize =
-		amount *
-		(match[2] === "px" ? 0.75 : match[2] === "em" ? parentSize : match[2] === "rem" ? 12 : 1);
+	result.fontSize = point(result.fontSize, parentSize, true);
 }
 
 function visit(
@@ -121,7 +116,8 @@ function visit(
 	const identity: Identity = { tag: value.tag, id: value.id, classes: value.classes };
 	const self = label(value);
 	const where = chain ? `${self} in ${chain}` : self;
-	const result: CascadedStyle = {};
+	// No prototype, so an own `__proto__` key (from JSON.parse) stays a key that style() rejects.
+	const result: CascadedStyle = Object.create(null);
 	let resolved: NormalizedStyle;
 	try {
 		for (const [key, item] of Object.entries(parent))

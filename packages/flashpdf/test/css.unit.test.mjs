@@ -95,7 +95,7 @@ const tailwind = `/*! tailwindcss v4.1.0 | MIT License | https://tailwindcss.com
 `;
 
 test("given a Tailwind v4 sheet, when only .p-4 is used, then unused rules are ignored and the padding applies", async () => {
-	stylesheet(tailwind);
+	assert.throws(() => stylesheet(tailwind), /unsupported color: oklch.*"\.text-red-500" at 12:1/);
 	const [main] = await resolve(jsx("main", { className: "p-4", children: "x" }), [tailwind]);
 	assert.deepEqual(boxStyle(main.style, 12).padding, [12, 12, 12, 12]);
 });
@@ -225,4 +225,39 @@ test("given a var() fallback with parentheses or a nested var(), when resolving 
 	);
 	assert.equal(main.style.color, "rgb(255, 0, 0)");
 	assert.equal(main.children[0].style.color, "blue");
+});
+
+test("given a long descendant selector that fails on a deep tree, when matching, then finishes quickly", async () => {
+	// Backtracking without memoization took over 5 s here.
+	let element = "x";
+	for (let index = 0; index < 40; index++) element = jsx("div", { children: element });
+	const tree = await resolveTree(element);
+	const started = performance.now();
+	resolveStyles(tree, [`section ${"div ".repeat(8)}{ color: red }`]);
+	assert.ok(performance.now() - started < 500);
+});
+
+test("given a style object with an own __proto__ key, when resolving styles, then rejects it", async () => {
+	const style = JSON.parse('{ "__proto__": { "color": "red" } }');
+	await assert.rejects(
+		async () => resolve(jsx("main", { style, children: "x" })),
+		/unsupported style property: __proto__ on <main>/,
+	);
+});
+
+test("given an uppercase type selector, when cascading, then it matches the lowercase tag", async () => {
+	const [paragraph] = await resolve(jsx("p", { children: "x" }), ["P { color: red }"]);
+	assert.equal(paragraph.style.color, "red");
+});
+
+test("given an invalid value without var(), when validating a stylesheet, then rejects naming the rule", () => {
+	assert.throws(
+		() => stylesheet(".a { color: notacolor }"),
+		/unsupported color: notacolor in selector "\.a" at 1:1/,
+	);
+	assert.throws(
+		() => stylesheet("\n.b { margin: banana }"),
+		/invalid length: banana.*"\.b" at 2:1/,
+	);
+	assert.equal(stylesheet(".c { color: var(--brand) }"), ".c { color: var(--brand) }");
 });

@@ -94,10 +94,14 @@ export const supported = new Set<keyof Style>(
 		.filter(([, definition]) => !definition.unsupported)
 		.map(([name]) => name) as (keyof Style)[],
 );
-export const unsupported = Object.fromEntries(
-	propertyEntries
-		.filter(([, definition]) => definition.unsupported)
-		.map(([name, definition]) => [name, definition.unsupported]),
+// No prototype, so a style key such as `toString` finds no inherited "reason".
+export const unsupported = Object.assign(
+	Object.create(null),
+	Object.fromEntries(
+		propertyEntries
+			.filter(([, definition]) => definition.unsupported)
+			.map(([name, definition]) => [name, definition.unsupported]),
+	),
 ) as Partial<Record<keyof Style | RejectedProperty, string>>;
 
 export function property(

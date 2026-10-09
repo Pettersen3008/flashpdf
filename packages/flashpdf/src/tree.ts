@@ -1,5 +1,6 @@
 import { object, props, text } from "./assert.js";
 import type { Style } from "./element.js";
+import { PageToken } from "./page.js";
 import type { NormalizedStyle } from "./style.js";
 
 const REACT_FRAGMENT = Symbol.for("react.fragment");
@@ -56,13 +57,28 @@ export function label(node: {
 }
 
 const located = new WeakSet<Error>();
+/** The innermost element path of each bare PageOverflow, for `pageOverflow()`. */
+const overflows = new WeakMap<Error, string>();
 /** Appends the element path once; a bare PageOverflow stays bare so `box()` can still recognise it. */
 export function locate(error: unknown, where: string): unknown {
-	if (!(error instanceof Error) || located.has(error) || error.message === "PageOverflow")
+	if (!(error instanceof Error) || located.has(error)) return error;
+	if (error.message === "PageOverflow") {
+		if (!overflows.has(error)) overflows.set(error, where);
 		return error;
+	}
 	error.message += ` on ${where}`;
 	located.add(error);
 	return error;
+}
+
+/** Explains a PageOverflow that no decorated box, image, or table claimed. */
+export function pageOverflow(error: unknown): unknown {
+	if (!(error instanceof Error) || error.message !== "PageOverflow") return error;
+	const where = overflows.get(error);
+	return new Error(
+		`PageOverflow: the content does not fit on an empty page; split it into smaller blocks${where ? ` on ${where}` : ""}`,
+		{ cause: error },
+	);
 }
 
 function displayName(type: { displayName?: unknown; name?: unknown }): string {
@@ -119,7 +135,7 @@ function list(values: Iterable<unknown>, depth: number): unknown[] | Promise<unk
 	let pending = false;
 	let unchanged = Array.isArray(values);
 	for (const value of values) {
-		const child = normalize(value, depth);
+		const child = normalize(value, depth, true);
 		pending ||= thenable(child);
 		unchanged &&= child === value;
 		result.push(child);
@@ -143,15 +159,17 @@ function invoke(component: Component, p: Record<string, unknown>, depth: number)
 	return Promise.resolve(result).then((value) => normalize(value, depth + 1), failed);
 }
 
-/** `depth` counts element levels only, matching the renderer's own limit; the
- *  children arrays React puts between them are transparent. */
-function normalize(value: unknown, depth: number): unknown {
+/** `depth` counts element levels, matching the renderer's own limit. The children
+ *  array React puts under an element is free; an array nested in an array (`nested`)
+ *  counts, so deep arrays cannot overflow the stack. */
+function normalize(value: unknown, depth: number, nested = false): unknown {
 	if (depth > 64) throw new Error("nesting exceeds 64");
 	if (typeof value === "bigint") return String(value);
-	if (Array.isArray(value)) return list(value, depth);
+	if (Array.isArray(value)) return list(value, depth + Number(nested));
 	if (typeof value !== "object" || value === null) return value;
 	const iterator = (value as { [Symbol.iterator]?: unknown })[Symbol.iterator];
-	if (typeof iterator === "function") return list(value as Iterable<unknown>, depth);
+	if (typeof iterator === "function")
+		return list(value as Iterable<unknown>, depth + Number(nested));
 
 	const node = object(value);
 	if (!("type" in node) || !("props" in node)) return value;
@@ -227,12 +245,14 @@ function describe(type: unknown) {
 	return String(type);
 }
 
-function host(value: unknown, depth = 0, chain = ""): Node[] {
+function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 	if (depth > 64) throw new Error("nesting exceeds 64");
 	if (value === null || value === undefined || typeof value === "boolean") return [];
 	if (typeof value === "string" || typeof value === "number")
 		return [{ kind: "text", value: text(value) }];
-	if (Array.isArray(value)) return value.flatMap((child) => host(child, depth, chain));
+	if (value instanceof PageToken) return [{ kind: "text", value: value.token }];
+	if (Array.isArray(value))
+		return value.flatMap((child) => host(child, depth + Number(nested), chain, true));
 
 	const element = object(value);
 	const inside = chain ? ` in ${chain}` : "";
@@ -248,6 +268,8 @@ function host(value: unknown, depth = 0, chain = ""): Node[] {
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
 	const own = element.type === "img" ? ["src", "alt"] : element.type === "a" ? ["href"] : [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
+	if ((element.type === "hr" || element.type === "br") && input.children != null)
+		throw new Error(`<${element.type}> has no children${where}`);
 	if (input.id !== undefined && typeof input.id !== "string")
 		throw new Error(`id must be a string${where}`);
 	if (input.className !== undefined && typeof input.className !== "string")
