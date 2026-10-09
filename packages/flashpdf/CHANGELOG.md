@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- A PNG with transparency stops inflating at the size its dimensions allow, so a small compressed image can no longer exhaust memory.
+- Embedded fonts use one `cmap` subtable: format 12 before format 4, then Windows before Unicode platform. A font with many records or overlapping format 4 segments no longer takes minutes to load, and a format 12 group that starts inside the previous one keeps its remaining characters.
+- Registered fonts are capped at 64 MiB per render, checked in JavaScript before the bytes are copied into WASM memory.
+- Page sides over 14,400 pt reject, the largest size PDF readers accept.
+
 ## 0.4.0 - 2026-10-02
 
 ### Added
