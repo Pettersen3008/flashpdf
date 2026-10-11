@@ -78,6 +78,19 @@ PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and base
 </svg>
 ```
 
+## QR codes and barcodes
+
+`QRCode` and `Barcode` draw vector symbols through `svg`, so they stay sharp at any size and need no image library.
+
+```tsx
+import { Barcode, QRCode } from '@pettersen3008/flashpdf';
+
+<QRCode value="https://example.com/pay/42" alt="Pay invoice 42" style={{ width: 90 }} />
+<Barcode value="INV-2026-0042" moduleWidth={1} height={36} />
+```
+
+`QRCode` takes `value`, `level` (`'L'`, `'M'`, `'Q'`, or `'H'`, default `'M'`), and `quietZone` in modules (default 4). It uses numeric or alphanumeric mode when the whole value fits, otherwise UTF-8 bytes, picks the smallest version from 1 to 40 at that level, and applies the mask with the lowest penalty from the QR standard. A `style` width sizes it; without one, each module is 1.5 pt. Children draw over the symbol in a 100 by 100 box, for a logo or the Swiss cross. `Barcode` draws Code 128 with automatic switching between code sets B and C and the checksum. `moduleWidth` and `height` are points (defaults 1 and 36), `quietZone` is 10 modules, and `text={false}` hides the value printed below. Both take `alt`, `style`, `className`, and `id`. Code set A, FNC1 (GS1-128), and other symbologies are not supported. FlashPDF does not validate payment payloads; the [guide](./docs/guide.md) has EPC (GiroCode) and Swiss QR-bill recipes.
+
 ## Install
 
 Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
@@ -128,6 +141,8 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
+| `QRCode` | `(props: QRCodeProps) => Element` | A vector QR code; see [QR codes and barcodes](#qr-codes-and-barcodes). |
+| `Barcode` | `(props: BarcodeProps) => Element` | A vector Code 128 barcode. |
 
 `RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 

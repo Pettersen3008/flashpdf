@@ -110,3 +110,20 @@ export type SvgShapeProps<Geometry extends string = never> = SvgPresentation & {
 	children?: never;
 };
 export type PdfProps = BlockProps | VoidProps | ImageProps | LinkProps | SvgProps;
+/** `level` defaults to M and `quietZone` to 4 modules; children draw over the symbol in a 100 by 100 box. */
+export type QRCodeProps = CommonProps & {
+	value: string;
+	level?: "L" | "M" | "Q" | "H" | undefined;
+	quietZone?: number | undefined;
+	alt?: string | undefined;
+	children?: PdfNode | undefined;
+};
+/** `moduleWidth` (default 1) and `height` (default 36) are points; `text` (default true) prints the value. */
+export type BarcodeProps = CommonProps & {
+	value: string;
+	moduleWidth?: number | undefined;
+	height?: number | undefined;
+	text?: boolean | undefined;
+	quietZone?: number | undefined;
+	alt?: string | undefined;
+};

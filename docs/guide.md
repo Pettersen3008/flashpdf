@@ -1,6 +1,6 @@
 # FlashPDF guide
 
-Setup for bundlers and browsers, fixes for common rejections, three recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
+Setup for bundlers and browsers, fixes for common rejections, four recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
 
 ## Bundlers and runtimes
 
@@ -101,19 +101,60 @@ const pdf = await render(<Invoice />, {
 
 A header or footer is one styled text line that repeats on every page and reserves its height. Footer text takes no links or decoration.
 
-### Payment QR code
+### EPC payment QR code (GiroCode)
 
-FlashPDF draws images and does not make them. Create the PNG with any QR library and pass the bytes to `img`. This example uses the `qrcode` package, which FlashPDF does not depend on:
+European banking apps read a SEPA credit transfer from an EPC QR code, also called GiroCode. The payload is plain text with one field per line, as the EPC069-12 guideline defines it:
 
 ```tsx
-import QRCode from 'qrcode';
+import { QRCode } from '@pettersen3008/flashpdf';
 
-const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice/2026-0042', { margin: 1 }));
+const epc = [
+  'BCD', // service tag
+  '002', // version; 002 makes the BIC optional
+  '1', // character set: UTF-8
+  'SCT', // SEPA credit transfer
+  'BFSWDE33', // BIC, or an empty line
+  'Acme GmbH', // beneficiary, at most 70 characters
+  'DE71110220330123456789', // IBAN
+  'EUR1234.50', // amount
+  '', // purpose code
+  'RF18539007547034', // creditor reference; leave it empty and add a line of text instead to send a message
+].join('\n');
 
-<img src={qr} alt="Scan to pay" style={{ width: 90 }} />
+<QRCode value={epc} level="M" alt="Pay EUR 1,234.50 to Acme GmbH" style={{ width: 113 }} />
 ```
 
-`width` is in points. FlashPDF accepts 8-bit, non-interlaced PNGs. An encoder that writes 1-bit or interlaced PNGs makes `render` reject the image naming the feature, so re-encode it as 8-bit.
+The guideline asks for error correction level M and at most 331 bytes. FlashPDF encodes the text as given: it does not check the IBAN, BIC, amount, reference, or field order, so validate the payload with your payment library and scan a test print with a banking app.
+
+### Swiss QR-bill QR code
+
+The Swiss QR code holds the payment part of a QR-bill. Lines end with LF or CR LF, and the fields follow the Swiss Implementation Guidelines:
+
+```tsx
+import { QRCode } from '@pettersen3008/flashpdf';
+
+const swiss = [
+  'SPC', '0200', '1', // QR type, version, UTF-8
+  'CH4431999123000889012', // QR-IBAN or IBAN
+  'S', 'Robert Schneider AG', 'Rue du Lac', '1268', '2501', 'Biel', 'CH', // creditor, structured address
+  '', '', '', '', '', '', '', // ultimate creditor, reserved
+  '1949.75', 'CHF',
+  'S', 'Pia-Maria Rutschmann-Schnyder', 'Grosse Marktgasse', '28', '9400', 'Rorschach', 'CH', // debtor
+  'QRR', '210000000003139471430009017', // reference type and reference
+  'Order dated 18.06.2020', // unstructured message
+  'EPD', // trailer
+].join('\n');
+
+// The 7 mm Swiss cross on a 46 mm symbol, in the 100 by 100 box that QRCode children draw in.
+<QRCode value={swiss} level="M" quietZone={0} alt="Swiss QR code" style={{ width: 130.4, margin: 14.2 }}>
+  <rect x={42.39} y={42.39} width={15.22} height={15.22} fill="#fff" />
+  <rect x={43.48} y={43.48} width={13.04} height={13.04} fill="#000" />
+  <rect x={45.92} y={48.78} width={8.16} height={2.44} fill="#fff" />
+  <rect x={48.78} y={45.92} width={2.44} height={8.16} fill="#fff" />
+</QRCode>
+```
+
+The guidelines ask for error correction level M, a 46 mm square symbol (130.4 pt), a 5 mm quiet zone (14.2 pt, here the margin), and a 7 mm Swiss cross in the centre. The cross above follows the flag's proportions; draw SIX's official artwork instead if your bank or printer requires it. The cross covers the centre alignment pattern, as the standard intends: zxing-cpp reads such a code, and zbar 0.23 does not. FlashPDF does not check the payload against the QR-bill rules or the reference checksum, and the printed payment part with its fields and layout is yours to build.
 
 ## Migrating from react-pdf
 

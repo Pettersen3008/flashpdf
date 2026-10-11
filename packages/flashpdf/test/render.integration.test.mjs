@@ -8,7 +8,7 @@ import zlib, { inflateSync } from "node:zlib";
 
 import { test } from "vitest";
 
-import { PageNumber, render, stylesheet, TotalPages } from "../dist/index.js";
+import { Barcode, PageNumber, QRCode, render, stylesheet, TotalPages } from "../dist/index.js";
 import { Fragment, jsx, jsxs } from "../dist/jsx-runtime.js";
 
 /** Latin-1 view of the PDF with FlateDecode streams inflated so content operators are greppable. */
@@ -24,10 +24,12 @@ const string = (pdf) =>
 		});
 const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", import.meta.url)));
 
-test("given the package entry point, when importing it, then exposes only the renderer, stylesheet validator, and JSX fallback", async () => {
+test("given the package entry point, when importing it, then exposes only the renderer, stylesheet validator, components, and JSX fallback", async () => {
 	const api = await import("../dist/index.js");
 	assert.deepEqual(Object.keys(api).sort(), [
+		"Barcode",
 		"PageNumber",
+		"QRCode",
 		"TotalPages",
 		"createElement",
 		"render",
@@ -741,6 +743,38 @@ test("given an svg with a viewBox, when rendering, then paints a tagged form fit
 		render(page(jsx("svg", { viewBox: "0 0 1 1", style: { width: "50%", height: 20 } }))),
 		/a percent width with a height leaves the aspect ratio open; use a pt or px width, or preserveAspectRatio="none" on <svg> in <main>/,
 	);
+});
+
+test("given a QRCode and a Barcode, when rendering, then each draws its merged module runs as one tagged form", async () => {
+	const options = { tagged: true, metadata: { language: "en" } };
+	const pdf = await render(
+		jsxs("main", {
+			children: [
+				jsx(QRCode, {
+					value: "HELLO WORLD",
+					level: "Q",
+					alt: "Pay invoice 42",
+					style: { width: 87 },
+				}),
+				jsx(Barcode, { value: "0123456789" }),
+			],
+		}),
+		options,
+	);
+	const text = string(pdf);
+	assert.equal(text.match(/\/Subtype \/Form/g).length, 2);
+	// The first row, 1111111 0 11 0000 1111111, is three runs offset by the 4-module quiet zone.
+	assert.match(text, /4 4 m\n11 4 l\n11 5 l\n4 5 l\nh\n12 4 m\n14 4 l\n14 5 l\n12 5 l\nh\n18 4 m/);
+	assert.match(text, /\/Alt \(Pay invoice 42\)/);
+	assert.match(text, /\(0123456789\) Tj/);
+	for (const [element, message] of [
+		[jsx(QRCode, { value: "" }), /QRCode value must be a non-empty string/],
+		[jsx(QRCode, { value: "x", level: "X" }), /QRCode level must be L, M, Q, or H/],
+		[jsx(QRCode, { value: "x", size: 3 }), /unsupported property: size/],
+		[jsx(Barcode, { value: "Øre" }), /Barcode value must be printable ASCII/],
+		[jsx(Barcode, { value: "1", quietZone: 1.5 }), /quietZone must be a whole number/],
+	])
+		await assert.rejects(render(jsx("main", { children: element })), message);
 });
 
 test("given two stylesheets of equal specificity, when rendering, then the later one wins", async () => {

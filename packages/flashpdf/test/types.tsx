@@ -1,4 +1,11 @@
-import { PageNumber, render, TotalPages, type EmbeddedFont } from "@pettersen3008/flashpdf";
+import {
+	Barcode,
+	PageNumber,
+	QRCode,
+	render,
+	TotalPages,
+	type EmbeddedFont,
+} from "@pettersen3008/flashpdf";
 
 const invoice = (
 	<main className="invoice" style={{ padding: "18pt", backgroundColor: "#fff" }}>
@@ -96,4 +103,16 @@ const _vector = (
 const _shapeChildren = <circle r={2}>x</circle>;
 // @ts-expect-error A path needs its d.
 const _bareShape = <path />;
+const _codes = (
+	<main>
+		<QRCode value="https://example.com/pay" level="Q" alt="Pay" style={{ width: 90 }}>
+			<rect x={40} y={40} width={20} height={20} fill="#fff" />
+		</QRCode>
+		<Barcode value="INV-42" moduleWidth={1.2} height={30} text={false} />
+	</main>
+);
+// @ts-expect-error A QR code needs its value.
+const _qrWithoutValue = <QRCode level="M" />;
+// @ts-expect-error The level is L, M, Q, or H.
+const _qrLevel = <QRCode value="x" level="X" />;
 void import("@pettersen3008/flashpdf/jsx-runtime");
