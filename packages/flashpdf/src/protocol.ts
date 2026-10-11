@@ -44,6 +44,9 @@ export class ProtocolWriter {
 	private repeatWritten = false;
 	/** Slot per registered byte array, so a logo reused on every row embeds once. */
 	private readonly images = new Map<Uint8Array, number>();
+	/** Drawings are encoded per element, so an icon on every row needs a key by content. */
+	private readonly drawings = new Map<string, Uint8Array>();
+	private readonly latin1 = new TextDecoder("latin1");
 
 	constructor(
 		private readonly binary: Binary,
@@ -168,6 +171,15 @@ export class ProtocolWriter {
 			}
 			this.binary.text(alt);
 		});
+	}
+
+	/** The first array with these bytes, which `image` has registered once. */
+	drawing(bytes: Uint8Array): Uint8Array {
+		const key = this.latin1.decode(bytes);
+		const first = this.drawings.get(key);
+		if (first) return first;
+		this.drawings.set(key, bytes);
+		return bytes;
 	}
 
 	spacer(height: number) {

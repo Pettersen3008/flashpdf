@@ -657,6 +657,124 @@ fn given_a_png_whose_data_inflates_past_its_dimensions_when_registering_then_sto
     );
 }
 
+/// A vector drawing: a box size, then each path's flags, matrix, paints, and segment bytes.
+fn drawing(width: f32, height: f32, paths: &[(u8, &[u8], &[u8])]) -> Vec<u8> {
+    let mut bytes = b"FPDV".to_vec();
+    bytes.extend(width.to_le_bytes());
+    bytes.extend(height.to_le_bytes());
+    for (flags, paint, segments) in paths {
+        bytes.push(*flags);
+        for value in [1.0 / width, 0.0, 0.0, -1.0 / height, 0.0, 1.0] {
+            bytes.extend(value.to_le_bytes());
+        }
+        bytes.extend(*paint);
+        bytes.extend(*segments);
+    }
+    bytes
+}
+
+fn segments(items: &[(u8, &[f32])]) -> Vec<u8> {
+    let mut bytes = (items.len() as u32).to_le_bytes().to_vec();
+    for (op, points) in items {
+        bytes.push(*op);
+        for value in *points {
+            bytes.extend(value.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn stroke(width: f32, dashes: &[f32]) -> Vec<u8> {
+    let mut bytes = vec![0, 0, 255, 255];
+    bytes.extend(width.to_le_bytes());
+    bytes.extend(4.0_f32.to_le_bytes());
+    bytes.push(dashes.len() as u8);
+    for value in dashes.iter().chain([&0.0]) {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes
+}
+
+#[test]
+fn given_a_vector_drawing_when_rendered_then_paints_a_form_clipped_to_the_box() {
+    let square = segments(&[
+        (0, &[0.0, 0.0]),
+        (1, &[30.0, 0.0]),
+        (2, &[30.0, 10.0, 20.0, 20.0, 0.0, 20.0]),
+        (3, &[]),
+    ]);
+    let line = segments(&[(0, &[0.0, 10.0]), (1, &[30.0, 10.0])]);
+    // Even-odd fill at alpha 0x80; a round-capped, bevel-joined, dashed stroke.
+    let logo = drawing(
+        30.0,
+        20.0,
+        &[
+            (3, &[255, 0, 0, 0x80], &square),
+            (4 | 1 << 3 | 2 << 5, &stroke(2.0, &[3.0, 1.0]), &line),
+        ],
+    );
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(image_record(0, Some(60.0), None, None));
+    bytes.extend(record(255, &[]));
+    let pdf = decode_with_images(&[logo], &bytes).unwrap();
+    let form = first_xobject(&pdf);
+    assert_eq!(
+        form.dict.get(b"Subtype").unwrap().as_name().unwrap(),
+        b"Form"
+    );
+    let bbox = form.dict.get(b"BBox").unwrap().as_array().unwrap();
+    let bbox: Vec<f32> = bbox.iter().map(|value| value.as_float().unwrap()).collect();
+    assert_eq!(bbox, [0.0, 0.0, 1.0, 1.0]);
+    let states = form.dict.get(b"Resources").unwrap().as_dict().unwrap();
+    let state = states.get(b"ExtGState").unwrap().as_dict().unwrap();
+    let alpha = state.get(b"G80FF").unwrap().as_dict().unwrap();
+    assert_eq!(alpha.get(b"ca").unwrap().as_float().unwrap(), 128.0 / 255.0);
+    assert_eq!(
+        String::from_utf8(form.decompressed_content().unwrap()).unwrap(),
+        "q\n0.033333335 0 0 -0.05 0 1 cm\n1 0 0 rg\n/G80FF gs\n0 0 m\n30 0 l\n30 10 20 20 0 20 c\nh\nf*\nQ\n\
+         q\n0.033333335 0 0 -0.05 0 1 cm\n0 0 1 RG\n2 w\n1 J\n2 j\n4 M\n[3 1] 0 d\n0 10 m\n30 10 l\nS\nQ"
+    );
+    let content = String::from_utf8(pdf.get_page_content(pdf.get_pages()[&1])).unwrap();
+    assert!(
+        content.contains("q\n60 0 0 40 10 10 cm\n/Im1 Do\nQ"),
+        "{content}"
+    );
+}
+
+#[test]
+fn given_malformed_vector_drawings_when_registering_then_rejects() {
+    let fill = [0, 0, 0, 255];
+    let moved = segments(&[(0, &[0.0, 0.0]), (1, &[1.0, 1.0])]);
+    for bytes in [
+        drawing(0.0, 10.0, &[(1, &fill, &moved)]),
+        drawing(10.0, 10.0, &[(1, &fill, &segments(&[(1, &[1.0, 1.0])]))]),
+        drawing(
+            10.0,
+            10.0,
+            &[(
+                1,
+                &fill,
+                &segments(&[(0, &[0.0, 0.0]), (3, &[]), (1, &[1.0, 1.0])]),
+            )],
+        ),
+        drawing(10.0, 10.0, &[(2, &[], &moved)]),
+        drawing(
+            10.0,
+            10.0,
+            &[(1, &fill, &segments(&[(0, &[f32::NAN, 0.0])]))],
+        ),
+        drawing(10.0, 10.0, &[(4, &stroke(0.0, &[]), &moved)]),
+        drawing(10.0, 10.0, &[(4, &stroke(1.0, &[0.0, 0.0]), &moved)]),
+        drawing(10.0, 10.0, &[(1, &fill, &segments(&[]))]),
+        drawing(10.0, 10.0, &[(1, &fill, &moved[..moved.len() - 1])]),
+    ] {
+        assert_eq!(
+            Decoder::default().add_image(bytes).unwrap_err().to_string(),
+            "invalid vector drawing"
+        );
+    }
+}
+
 #[test]
 fn given_fonts_over_64_mib_when_registering_then_rejects_before_parsing() {
     let mut decoder = Decoder::default();

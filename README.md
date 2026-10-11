@@ -55,7 +55,7 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 
 ## Images and links
 
-`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
+`img` takes the PNG, JPEG, or SVG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
 
 ```tsx
 const logo = new Uint8Array(await readFile('logo.png'));
@@ -66,6 +66,17 @@ const logo = new Uint8Array(await readFile('logo.png'));
 ```
 
 PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](./CSS.md).
+
+## Vector graphics
+
+`svg` draws logos, icons, and simple charts as vector paths and sizes like `img`. Shapes, `path` with the full `d` grammar, transforms, strokes and dashes, opacity, and `currentColor` work; text, gradients, filters, masks, clip paths, and `use` reject with a reason. `<img src={svgBytes}>` takes an SVG file with the same subset.
+
+```tsx
+<svg viewBox="0 0 24 24" width={32} aria-label="Paid" style={{ color: '#0a7' }}>
+  <circle cx={12} cy={12} r={10} fill="none" stroke="currentColor" strokeWidth={2} />
+  <path d="M7 12l3 3 7-7" fill="none" stroke="currentColor" strokeLinecap="round" />
+</svg>
+```
 
 ## Install
 
@@ -185,7 +196,7 @@ Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common reject
 
 ## Assets
 
-FlashPDF embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
+FlashPDF embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG, JPEG, or SVG bytes passed through `img`, and `svg` draws inline vector graphics; FlashPDF never fetches a URL or reads a path.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](./CSS.md).
 

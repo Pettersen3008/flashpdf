@@ -2,12 +2,13 @@ use pdf_writer::types::{
     ActionType, AnnotationFlags, AnnotationType, AssociationKind, OutputIntentSubtype, Predictor,
     StructRole,
 };
-use pdf_writer::writers::StructTreeRoot;
+use pdf_writer::writers::{ExtGraphicsState, StructTreeRoot};
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
 use crate::paint::{image_name, PageLink, PageTag};
+use crate::vector::alpha_name;
 use crate::{FontId, Page, HELVETICA_BOLD};
 
 #[derive(Default)]
@@ -461,6 +462,24 @@ pub(crate) fn deflate(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn write_image(pdf: &mut Pdf, reference: Ref, mask: Option<Ref>, image: &Image) {
+    if let Encoding::Form { alphas, .. } = &image.encoding {
+        // A form drawn in the unit square paints exactly like an image.
+        let mut form = pdf.form_xobject(reference, &image.data);
+        form.filter(Filter::FlateDecode);
+        form.bbox(Rect::new(0.0, 0.0, 1.0, 1.0));
+        let mut resources = form.resources();
+        if !alphas.is_empty() {
+            let mut states = resources.ext_g_states();
+            for alpha in alphas {
+                states
+                    .insert(Name(&alpha_name(*alpha)))
+                    .start::<ExtGraphicsState>()
+                    .non_stroking_alpha(f32::from(alpha[0]) / 255.0)
+                    .stroking_alpha(f32::from(alpha[1]) / 255.0);
+            }
+        }
+        return;
+    }
     let (width, height) = (image.width as i32, image.height as i32);
     if let (Some(mask), Some(alpha)) = (mask, &image.alpha) {
         let mut smask = pdf.image_xobject(mask, alpha);
@@ -502,6 +521,7 @@ fn write_image(pdf: &mut Pdf, reference: Ref, mask: Option<Ref>, image: &Image) 
         Encoding::Flate => {
             xobject.filter(Filter::FlateDecode);
         }
+        Encoding::Form { .. } => unreachable!("written as a form above"),
     }
     if let Some(key) = &image.color_key {
         xobject.color_mask(key.iter().copied());

@@ -587,7 +587,10 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
-		[{ height: 40 }, /height applies only to <img> \(block height comes from content\) on <main>/],
+		[
+			{ height: 40 },
+			/height applies only to <img> and <svg> \(block height comes from content\) on <main>/,
+		],
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
 		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
@@ -693,7 +696,50 @@ test("given an invoice with a PNG logo on every row and a link, when rendering, 
 	);
 	await assert.rejects(
 		render(jsx("main", { children: jsx("img", { src: new Uint8Array([1, 2, 3]) }) })),
-		/unsupported image format; pass PNG or JPEG bytes on <img> in <main>/,
+		/unsupported image format; pass PNG, JPEG, or SVG bytes on <img> in <main>/,
+	);
+});
+
+test("given an svg with a viewBox, when rendering, then paints a tagged form fitted to its box, as the same file in an img does", async () => {
+	const options = { tagged: true, metadata: { language: "en" } };
+	const box = { width: 60, height: 60 };
+	const page = (child) => jsx("main", { style: { color: "#ff0000" }, children: child });
+	const pdf = await render(
+		page(
+			jsx("svg", {
+				viewBox: "0 0 20 10",
+				preserveAspectRatio: "xMinYMid meet",
+				"aria-label": "Acme",
+				style: box,
+				children: jsx("rect", { width: 20, height: 10, fill: "currentColor", fillOpacity: 0.5 }),
+			}),
+		),
+		options,
+	);
+	const text = string(pdf);
+	assert.match(
+		text,
+		/\/BBox \[0 0 1 1\]\s*\/Resources <<\s*\/ExtGState <<\s*\/G80FF <<\s*\/Type \/ExtGState\s*\/ca 0\.5019608\s*\/CA 1\s/,
+	);
+	// A 2:1 viewBox in a 60 pt square: scale 3, left-aligned, centred vertically, y up.
+	assert.match(
+		text,
+		/q\n0\.05 0 0 -0\.05 0 0\.75 cm\n1 0 0 rg\n\/G80FF gs\n0 0 m\n20 0 l\n20 10 l\n0 10 l\nh\nf\nQ/,
+	);
+	assert.match(text, /\/Figure <<\s*\/MCID 0\s*>> BDC\nq\n60 0 0 60 36 746 cm\n\/Im1 Do/);
+	assert.match(text, /\/Alt \(Acme\)/);
+	const file = new TextEncoder().encode(
+		'<svg viewBox="0 0 20 10" preserveAspectRatio="xMinYMid meet" aria-label="Acme"><rect width="20" height="10" fill="currentColor" fill-opacity="0.5"/></svg>',
+	);
+	assert.deepEqual(await render(page(jsx("img", { src: file, style: box })), options), pdf);
+	const rows = string(
+		await render(page([1, 2, 3].map(() => jsx("img", { src: file, style: box })))),
+	);
+	assert.equal(rows.match(/\/Subtype \/Form/g).length, 1, "one form for the repeated drawing");
+	assert.equal(rows.match(/\/Im1 Do/g).length, 3);
+	await assert.rejects(
+		render(page(jsx("svg", { viewBox: "0 0 1 1", style: { width: "50%", height: 20 } }))),
+		/a percent width with a height leaves the aspect ratio open; use a pt or px width, or preserveAspectRatio="none" on <svg> in <main>/,
 	);
 });
 

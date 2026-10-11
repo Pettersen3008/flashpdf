@@ -67,8 +67,46 @@ export type CommonProps = {
 };
 export type BlockProps = CommonProps & { children?: PdfNode | undefined };
 export type VoidProps = CommonProps & { children?: never };
-/** `src` is the PNG or JPEG file bytes; `alt` is stored for accessibility tagging. */
+/** `src` is the PNG, JPEG, or SVG file bytes; `alt` is stored for accessibility tagging. */
 export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined };
 /** `href` must be an absolute `http:`, `https:`, or `mailto:` URL. */
 export type LinkProps = BlockProps & { href: string };
-export type PdfProps = BlockProps | VoidProps | ImageProps | LinkProps;
+
+type SvgNumber = number | string;
+/** SVG presentation attributes, by their React names. */
+export type SvgPresentation = {
+	fill?: string | undefined;
+	fillOpacity?: SvgNumber | undefined;
+	fillRule?: "nonzero" | "evenodd" | undefined;
+	stroke?: string | undefined;
+	strokeWidth?: SvgNumber | undefined;
+	strokeLinecap?: "butt" | "round" | "square" | undefined;
+	strokeLinejoin?: "miter" | "round" | "bevel" | undefined;
+	strokeMiterlimit?: SvgNumber | undefined;
+	strokeDasharray?: SvgNumber | undefined;
+	strokeDashoffset?: SvgNumber | undefined;
+	strokeOpacity?: SvgNumber | undefined;
+	opacity?: SvgNumber | undefined;
+};
+/** `width` and `height` are the intrinsic size in CSS pixels; `style` sizes the box like an `img`. */
+export type SvgProps = CommonProps &
+	SvgPresentation & {
+		width?: SvgNumber | undefined;
+		height?: SvgNumber | undefined;
+		viewBox?: string | undefined;
+		preserveAspectRatio?: string | undefined;
+		"aria-label"?: string | undefined;
+		xmlns?: string | undefined;
+		children?: PdfNode | undefined;
+	};
+/** A shape inside `<svg>`; `Geometry` names its numeric attributes. */
+export type SvgShapeProps<Geometry extends string = never> = SvgPresentation & {
+	[Attribute in Geometry]?: SvgNumber | undefined;
+} & {
+	key?: string | number | undefined;
+	id?: string | undefined;
+	transform?: string | undefined;
+	style?: SvgPresentation | string | undefined;
+	children?: never;
+};
+export type PdfProps = BlockProps | VoidProps | ImageProps | LinkProps | SvgProps;

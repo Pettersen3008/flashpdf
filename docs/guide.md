@@ -41,10 +41,12 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `PageOverflow: use document margins or split this decorated box` | A box with padding, a border, or a background cannot split across pages. A decorated root holding more than one page of content overflows. | Move the root's padding to the `margin` option. Drop its border and background, and decorate the cards inside it instead. |
 | `PageOverflow: the table is taller than a page` or `the image is taller than the page` | An atomic block has to fit one page. | Remove `break-inside: avoid` from the table, or reduce the image height. |
 | `Helvetica has no glyph for "−" (U+2212)` | The default font covers WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
-| `src must be the image's PNG or JPEG bytes as a Uint8Array` | `img` does not take a URL, path, or `data:` URL. | Read or fetch the file and pass its bytes. |
+| `src must be the image's PNG, JPEG, or SVG bytes as a Uint8Array` | `img` does not take a URL, path, or `data:` URL. | Read or fetch the file and pass its bytes. |
+| `SVG text is not supported` | A drawing has no text layout. | Convert the text to outlines in the editor, or put a `<p>` beside the drawing. |
+| `gradients and patterns are not supported`, `clipPath is not supported`, `CSS inside <svg> is not supported` | A drawing has solid paint and no references or stylesheet. | Flatten the file with SVGO or the editor's export settings, or export a PNG. |
 | `unsupported element <ul>` | There are no lists. | One `<p>` per item that starts with `•`. |
 | `unsupported style property: borderRadius`, `position`, `opacity`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
-| `height applies only to <img>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
+| `height applies only to <img> and <svg>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
@@ -123,7 +125,8 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | A second `Page`, or `break` | `breakBefore: 'page'` on a direct child of the root. |
 | `View` | `div`, `section`, `article`, `header`, `footer`, or `main`. |
 | `Text` | `p`, `span`, `b`, `strong`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span` or `b` inside a `p`. |
-| `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG or JPEG bytes. |
+| `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG, JPEG, or SVG bytes. |
+| `Svg`, `Path`, `Rect`, `G`, … | `svg`, `path`, `rect`, `g`, … in lowercase with the same attributes. Text, gradients, and clip paths reject. |
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
 | `Font.register` | `fonts: [{ family, regular, bold }]` with TTF bytes. Regular and bold only. |
@@ -139,4 +142,4 @@ Three differences cause most surprises:
 - Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `em`, and `rem`.
 - `justifyContent`, `alignItems`, `flexWrap`, and `position` reject. Use `flex`, `width`, `gap`, and `textAlign`.
 
-`Svg`, `Canvas`, `Note`, italic text, and lists have no equivalent.
+`Canvas`, `Note`, italic text, and lists have no equivalent.

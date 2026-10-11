@@ -83,4 +83,17 @@ const _imgPath = <img src="/logo.png" />;
 const _bareLink = <a>site</a>;
 // @ts-expect-error Images have no children.
 const _imgChildren = <img src={new Uint8Array()}>x</img>;
+const _vector = (
+	<svg viewBox="0 0 24 24" width={32} aria-label="Paid" style={{ color: "#0a7", marginBottom: 4 }}>
+		<title>Paid</title>
+		<g transform="rotate(45 12 12)" opacity={0.8}>
+			<rect width={24} height={24} rx={4} fill="none" stroke="currentColor" strokeWidth={2} />
+			<path d="M7 12l3 3 7-7" fill="none" stroke="currentColor" strokeLinecap="round" />
+		</g>
+	</svg>
+);
+// @ts-expect-error Shapes take no children.
+const _shapeChildren = <circle r={2}>x</circle>;
+// @ts-expect-error A path needs its d.
+const _bareShape = <path />;
 void import("@pettersen3008/flashpdf/jsx-runtime");
