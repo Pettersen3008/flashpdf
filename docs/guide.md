@@ -136,9 +136,10 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `renderToBuffer`, `renderToStream`, `pdf().toBlob()` | `await render(…)` returns a `Uint8Array`. Wrap it in a `Blob` yourself. |
 | `PDFViewer`, `PDFDownloadLink` | None. FlashPDF ships no viewer or download helper. |
 
-Three differences cause most surprises:
+Four differences cause most surprises:
 
 - A `View` stacks its children in a flex column. A FlashPDF `div` is a block, which also stacks them. For a row, set `display: 'flex'`. FlashPDF follows CSS here, so a flex box is a row unless you set `flexDirection: 'column'`.
+- react-pdf adds vertical margins. FlashPDF collapses adjoining ones in a block, as a browser does, so `marginBottom: 12` above `marginTop: 8` leaves 12 points, not 20. To keep react-pdf's spacing, give the parent `display: 'flex'` and `flexDirection: 'column'`: flex items never collapse.
 - Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `em`, and `rem`.
 - `justifyContent`, `alignItems`, `flexWrap`, and `position` reject. Use `flex`, `width`, `gap`, and `textAlign`.
 

@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Vertical margins collapse as in CSS 2.1. Adjacent siblings, a box and its first or last child with no border or padding between them, and an empty block share the largest margin instead of adding them up, so two `blockquote`s in a row are `1em` apart, not `2em`. Flex items and table cells keep their margins. Documents with adjoining vertical margins get less space between blocks.
+- A margin that does not fit at the bottom of a page no longer moves to the top of the next one, and a forced page break drops the margin before it. Before, such a margin could push the next block a page further or leave a blank page.
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
 ### Fixed
 

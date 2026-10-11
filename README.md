@@ -65,7 +65,7 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 <pre style={{ fontSize: 9, lineHeight: 1.3 }}>{`IBAN  NO93 8601 1117 947\nBIC   DNBANOKK`}</pre>
 ```
 
-Vertical margins do not collapse, and tagged mode writes list items as paragraphs without list structure; see [CSS.md](./CSS.md).
+Vertical margins collapse as in a browser. Tagged mode writes list items as paragraphs without list structure; see [CSS.md](./CSS.md).
 
 ## Images and links
 

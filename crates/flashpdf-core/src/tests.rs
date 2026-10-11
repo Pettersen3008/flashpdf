@@ -248,6 +248,20 @@ fn given_empty_text_when_at_bottom_then_consumes_no_height() {
     assert!(pdf.get_page_content((4, 0)).is_empty());
 }
 
+#[test]
+fn given_a_margin_past_the_page_end_when_placed_then_the_next_page_starts_without_it() {
+    // 28.5pt remain after the first line; the 35pt margin fits an empty page.
+    let pdf = parsed(&[text("a"), Command::Spacer(Pt(35.0)), text("b")]);
+    let alone = parsed(&[text("b")]);
+    let pages = pdf.get_pages();
+    assert_eq!(pages.len(), 2);
+    assert_eq!(page_text(&pdf, 2), "b");
+    assert_eq!(
+        baselines(&pdf, pages[&2]),
+        baselines(&alone, alone.get_pages()[&1])
+    );
+}
+
 /// Line starts only; a later segment on the same line moves with `dx 0 Td`.
 fn baselines(pdf: &lopdf::Document, page: lopdf::ObjectId) -> Vec<f32> {
     String::from_utf8(pdf.get_page_content(page))

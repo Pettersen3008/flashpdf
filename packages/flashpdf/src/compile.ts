@@ -61,8 +61,8 @@ type TextState = {
 	/** The list item being compiled, which its first paragraph empties by taking the marker. */
 	item: { marker: Run | undefined } | undefined;
 };
-/** `cell` is set only for the direct children of a table row. */
-type Context = TextState & { inRow: boolean; cell?: boolean };
+/** `cell` is set only for the direct children of a table row, `inColumn` for those of a flex column. */
+type Context = TextState & { inRow: boolean; cell?: boolean; inColumn?: boolean };
 type Fonts = ReadonlyMap<string, FontSlots>;
 
 const ROOT: Context = {
@@ -394,16 +394,33 @@ function pageBreak(
 	writer.pageBreak();
 }
 
-function box(writer: ProtocolWriter, value: Box | undefined, body: () => void) {
-	if (value) writer.boxStart(value);
+/** In block flow the writer holds a box's vertical margins so they collapse with adjoining ones
+ *  (CSS 2.1 8.3.1). A flex item, table cell, or row keeps its margins, and its children's, inside. */
+function box(writer: ProtocolWriter, value: Box | undefined, collapses: boolean, body: () => void) {
+	const [top, right, bottom, left] = value?.margin ?? [0, 0, 0, 0];
+	const inner: Box | undefined =
+		value && collapses ? { ...value, margin: [0, right, 0, left] } : value;
+	const drawn =
+		inner &&
+		(!collapses ||
+			inner.background ||
+			[...inner.margin, ...inner.padding, ...inner.border].some(Boolean));
+	if (collapses && top) writer.margin(top);
+	if (drawn) writer.boxStart(inner, collapses && !inner.padding[0] && !inner.border[0]);
 	try {
 		body();
-		if (value) writer.boxEnd();
+		if (drawn) writer.boxEnd(collapses && !inner.padding[2] && !inner.border[2]);
 	} catch (error) {
-		if (value && error instanceof Error && error.message === "PageOverflow")
+		if (drawn && error instanceof Error && error.message === "PageOverflow")
 			throw new Error("PageOverflow: use document margins or split this decorated box");
 		throw error;
 	}
+	if (collapses && bottom) writer.margin(bottom);
+}
+
+/** Margins collapse in block flow, not around flex items or table cells. */
+function collapses(context: Context) {
+	return !context.inRow && !context.inColumn;
 }
 
 /** Block flow: consecutive inline children form one paragraph; layout nodes stand alone. */
@@ -444,22 +461,12 @@ function flow(
 		}
 		flush();
 		separate();
+		// A flex item's margins, and its children's, never collapse with its siblings'.
+		if (context.inColumn) writer.flush();
 		compile([child], writer, fonts, context, depth, pageTokens);
+		if (context.inColumn) writer.flush();
 	}
 	flush();
-}
-
-function streamMargin(box: Box | undefined, context: Context, style: NormalizedStyle): boolean {
-	return Boolean(
-		box &&
-		box.margin[1] === 0 &&
-		box.margin[3] === 0 &&
-		box.padding.every((edge) => edge === 0) &&
-		box.border.every((edge) => edge === 0) &&
-		box.background === undefined &&
-		!context.inRow &&
-		style.breakInside !== "avoid",
-	);
 }
 
 function column(value: StyledNode): Column {
@@ -572,11 +579,9 @@ function element(
 			listState(node, next, context);
 			const owed = node.tag === "li" ? next.item : undefined;
 			const paint = boxStyle(style, next.size);
-			const streamed = streamMargin(paint, context, style);
-			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
-			box(writer, streamed ? undefined : paint, () => {
+			box(writer, paint, collapses(context), () => {
 				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
-				const inner = { ...next, inRow: false };
+				const inner = { ...next, inRow: false, inColumn: style.display === "flex" && !row };
 				const alone = () => writeParagraph(writer, [run(inner, NBSP)], inner, pageTokens);
 				const first = node.children.find(
 					(child) => child.kind === "element" || !blank(child.value),
@@ -598,13 +603,12 @@ function element(
 					}
 					writer.rowEnd();
 				} else if (context.inRow || style.breakInside === "avoid") {
-					writer.stackStart(gap);
+					writer.stackStart(gap, collapses(context));
 					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
-					writer.stackEnd();
+					writer.stackEnd(collapses(context));
 				} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
 				if (owed?.marker) alone();
 			});
-			if (streamed && paint?.margin[2]) writer.spacer(paint.margin[2]);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 		}
@@ -647,7 +651,7 @@ function element(
 				throw new Error(
 					`vertical-align: ${style.verticalAlign} shifts text within a line, and <${node.tag}> has box styles that make it a block`,
 				);
-			box(writer, paint, () =>
+			box(writer, paint, collapses(context), () =>
 				runs === undefined
 					? flow(children, writer, fonts, inner, depth, pageTokens, 0)
 					: writeParagraph(writer, runs, next, pageTokens),
@@ -665,7 +669,7 @@ function element(
 			const width = style.width === undefined ? undefined : dimension(style.width, "width");
 			const height =
 				style.height === undefined ? undefined : dimension(style.height, "height").value;
-			box(writer, boxStyle(style, next.size), () => {
+			box(writer, boxStyle(style, next.size), collapses(context), () => {
 				try {
 					writer.image(node.src!, width, height, node.alt ?? "", context.link);
 				} catch (error) {
@@ -694,7 +698,12 @@ function element(
 		case "hr":
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
-			box(writer, boxStyle(style, inherit(style, context, fonts).size), () => {});
+			box(
+				writer,
+				boxStyle(style, inherit(style, context, fonts).size),
+				collapses(context),
+				() => {},
+			);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 	}
@@ -777,7 +786,7 @@ function table(
 	}
 	// A parent flex row already consumed `width` as this table's track.
 	const width: Column = context.inRow ? { kind: 1, value: 1 } : column(node);
-	if (paint?.margin[0]) writer.spacer(paint.margin[0]);
+	if (paint?.margin[0]) writer.margin(paint.margin[0]);
 	const inner = { ...next, inRow: false };
 	/** Element path of each table child, indexed as the renderer reports an overflowing row. */
 	const wheres: string[] = [];
@@ -786,7 +795,7 @@ function table(
 			rowOnly(tr.style, false);
 			for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
 			const own = inherit(tr.style, state, fonts);
-			box(writer, boxStyle(tr.style, own.size), () => {
+			box(writer, boxStyle(tr.style, own.size), false, () => {
 				writer.rowStart(columns);
 				compile(
 					tr.children,
@@ -858,7 +867,7 @@ function table(
 			);
 		throw error;
 	}
-	if (paint?.margin[2]) writer.spacer(paint.margin[2]);
+	if (paint?.margin[2]) writer.margin(paint.margin[2]);
 	pageBreak(writer, style, "breakAfter", depth);
 }
 

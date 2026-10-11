@@ -241,6 +241,10 @@ impl Renderer {
         if !splittable(element) {
             self.page.validate_block(height)?;
             if !self.cursor.fits(height, self.page) {
+                // CSS truncates a margin at an unforced page break.
+                if let Element::Spacer(_) = element {
+                    return self.paint_block(layout, self.cursor.remaining(self.page));
+                }
                 self.start_page();
             }
             return self.paint_block(layout, height);

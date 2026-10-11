@@ -5,6 +5,7 @@ import { test } from "vitest";
 
 import { compile } from "../dist/compile.js";
 import { resolveStyles } from "../dist/css.js";
+import { ProtocolWriter } from "../dist/protocol.js";
 import { helvetica } from "../dist/style.js";
 import { resolveTree } from "../dist/tree.js";
 
@@ -22,6 +23,35 @@ async function compiled(element, fonts = new Map([["Helvetica", helvetica]])) {
 	);
 	compile(resolveStyles(await resolveTree(element)), writer, fonts);
 	return calls;
+}
+
+/** Records written through the real writer, which collapses margins: a spacer with its height,
+ *  a box start with its top and bottom margins. */
+async function written(element) {
+	const records = [];
+	let values = [];
+	const binary = new Proxy(
+		{},
+		{
+			get: (_, method) =>
+				method === "record"
+					? (opcode, payload) => {
+							values = [];
+							payload?.();
+							records.push(
+								opcode === 2
+									? ["spacer", values[0]]
+									: opcode === 17
+										? ["boxStart", values[0], values[2]]
+										: { 7: "pageBreak", 9: "paragraph", 18: "boxEnd" }[opcode],
+							);
+						}
+					: (value) => values.push(value),
+		},
+	);
+	const fonts = new Map([["Helvetica", helvetica]]);
+	compile(resolveStyles(await resolveTree(element)), new ProtocolWriter(binary, {}), fonts);
+	return records;
 }
 
 const run = (font, text, extra = {}) => ({
@@ -153,9 +183,9 @@ test("given a table with thead and tbody, when compiling, then emits the contain
 	const row = (font, ...texts) => [
 		["rowStart", columns],
 		...texts.flatMap((text) => [
-			["stackStart", 0],
+			["stackStart", 0, false],
 			["paragraph", [run(font, text)], "left"],
-			["stackEnd"],
+			["stackEnd", false],
 		]),
 		["rowEnd"],
 	];
@@ -214,7 +244,11 @@ test("given a flex row with a 12pt gap, when compiling, then a fixed 12pt empty 
 			children: [jsx("div", { children: "a" }), jsx("div", { children: "b" })],
 		}),
 	);
-	const cell = (text) => [["stackStart", 0], ["paragraph", [run(0, text)], "left"], ["stackEnd"]];
+	const cell = (text) => [
+		["stackStart", 0, false],
+		["paragraph", [run(0, text)], "left"],
+		["stackEnd", false],
+	];
 	assert.deepEqual(calls, [
 		[
 			"rowStart",
@@ -248,6 +282,7 @@ test("given whitespace-only text between flex items and column children, when co
 		}),
 	);
 	assert.deepEqual(calls, [
+		["flush"],
 		[
 			"rowStart",
 			[
@@ -258,8 +293,11 @@ test("given whitespace-only text between flex items and column children, when co
 		["paragraph", [run(0, "a")], "left"],
 		["paragraph", [run(0, "b")], "left"],
 		["rowEnd"],
+		["flush"],
 		["spacer", 10],
+		["flush"],
 		["paragraph", [run(0, "c "), run(1, "d")], "left"],
+		["flush"],
 	]);
 });
 
@@ -518,4 +556,83 @@ test("given vertical-align on a block, a box, or with an unknown value, when com
 		),
 		/invalid verticalAlign: middle/,
 	);
+});
+
+test("given a p with a 10pt bottom margin before an h2 with a 16pt top margin, when compiling, then one 16pt spacer separates them", async () => {
+	const records = await written(
+		jsxs("main", {
+			children: [
+				jsx("p", { style: { marginBottom: 10 }, children: "a" }),
+				jsx("h2", { style: { marginTop: 16 }, children: "b" }),
+			],
+		}),
+	);
+	assert.deepEqual(records, ["paragraph", ["spacer", 16], "paragraph"]);
+});
+
+test("given a box with a left border and bottom padding, when compiling, then a child's top margin collapses through it and its bottom margin stays inside", async () => {
+	const records = await written(
+		jsxs("main", {
+			children: [
+				jsx("blockquote", {
+					style: { margin: "8pt 0", borderLeft: "2pt solid", paddingBottom: 4 },
+					children: jsx("p", { style: { margin: "12pt 0" }, children: "a" }),
+				}),
+				"b",
+			],
+		}),
+	);
+	assert.deepEqual(records, [
+		["spacer", 12],
+		["boxStart", 0, 0],
+		"paragraph",
+		["spacer", 12],
+		"boxEnd",
+		["spacer", 8],
+		"paragraph",
+	]);
+});
+
+test("given an empty bordered div with 20pt margins between paragraphs, when compiling, then its margins collapse with theirs and it writes no box", async () => {
+	const records = await written(
+		jsxs("main", {
+			children: [
+				jsx("p", { style: { marginBottom: 8 }, children: "a" }),
+				jsx("div", { style: { margin: "20pt 0", borderLeft: "1pt solid" } }),
+				jsx("p", { style: { marginTop: 8 }, children: "b" }),
+			],
+		}),
+	);
+	assert.deepEqual(records, ["paragraph", ["spacer", 20], "paragraph"]);
+});
+
+test("given flex column items with margins, when compiling, then their margins and their children's add up", async () => {
+	const records = await written(
+		jsxs("main", {
+			style: { display: "flex", flexDirection: "column" },
+			children: [
+				jsx("div", { style: { marginBottom: 10 }, children: "a" }),
+				jsx("div", { children: jsx("p", { style: { marginTop: 6 }, children: "b" }) }),
+			],
+		}),
+	);
+	assert.deepEqual(records, [
+		["boxStart", 0, 10],
+		"paragraph",
+		"boxEnd",
+		["spacer", 6],
+		"paragraph",
+	]);
+});
+
+test("given margins around a forced page break, when compiling, then drops the one before and keeps the one after", async () => {
+	const records = await written(
+		jsxs("main", {
+			children: [
+				jsx("p", { style: { marginBottom: 20 }, children: "a" }),
+				jsx("p", { style: { breakBefore: "page", marginTop: 12 }, children: "b" }),
+			],
+		}),
+	);
+	assert.deepEqual(records, ["paragraph", "pageBreak", ["spacer", 12], "paragraph"]);
 });

@@ -71,6 +71,9 @@ export class ProtocolWriter {
 	private repeatWritten = false;
 	/** Slot per registered byte array, so a logo reused on every row embeds once. */
 	private readonly images = new Map<Uint8Array, number>();
+	private held = 0;
+	/** Box and stack starts waiting for content, so a held margin lands outside them. */
+	private readonly starts: (() => void)[] = [];
 
 	constructor(
 		private readonly binary: Binary,
@@ -136,6 +139,7 @@ export class ProtocolWriter {
 			});
 			return;
 		}
+		this.body();
 		const links: string[] = [];
 		for (const run of runs)
 			if (run.link !== undefined && !links.includes(run.link)) links.push(run.link);
@@ -225,14 +229,29 @@ export class ProtocolWriter {
 		this.binary.record(opcode.spacer, () => this.binary.f32(height));
 	}
 
-	stackStart(gap: number) {
-		this.body();
-		this.binary.record(opcode.stackStart, () => this.binary.f32(gap));
+	/** Holds a vertical margin until content follows, so adjoining margins collapse to the largest (CSS 2.1 8.3.1). */
+	margin(height: number) {
+		this.body(false);
+		this.held = Math.max(this.held, height);
 	}
 
-	stackEnd() {
-		this.body();
-		this.binary.record(opcode.stackEnd);
+	/** Writes the held margin and starts, so no margin collapses across this point. */
+	flush() {
+		if (this.held) {
+			const held = this.held;
+			this.binary.record(opcode.spacer, () => this.binary.f32(held));
+		}
+		this.held = 0;
+		for (const start of this.starts.splice(0)) start();
+	}
+
+	/** `through` works as for `boxStart`. */
+	stackStart(gap: number, through = false) {
+		this.open(through, () => this.binary.record(opcode.stackStart, () => this.binary.f32(gap)));
+	}
+
+	stackEnd(through = false) {
+		this.close(through, opcode.stackEnd);
 	}
 
 	rowStart(columns: readonly Column[]) {
@@ -269,7 +288,9 @@ export class ProtocolWriter {
 		this.binary.record(opcode.tableEnd);
 	}
 
+	/** CSS drops the margin before a forced break and keeps the one after. */
 	pageBreak() {
+		this.held = 0;
 		this.body();
 		this.binary.record(opcode.pageBreak);
 	}
@@ -284,21 +305,23 @@ export class ProtocolWriter {
 		this.repeating = undefined;
 	}
 
-	boxStart(box: Box) {
-		this.body();
-		this.binary.record(opcode.boxStart, () => {
-			for (const edge of [...box.margin, ...box.padding, ...box.border]) this.binary.f32(edge);
-			if (box.background) {
-				this.binary.u8(1);
-				for (const channel of box.background) this.binary.u8(channel);
-			} else this.binary.u8(0);
-			for (const edge of box.borderColor) for (const channel of edge) this.binary.u8(channel);
-		});
+	/** With `through`, the start waits for content so a held margin collapses past it to land outside
+	 *  the box, and the end lets the last child's margin out; an empty box writes nothing. */
+	boxStart(box: Box, through = false) {
+		this.open(through, () =>
+			this.binary.record(opcode.boxStart, () => {
+				for (const edge of [...box.margin, ...box.padding, ...box.border]) this.binary.f32(edge);
+				if (box.background) {
+					this.binary.u8(1);
+					for (const channel of box.background) this.binary.u8(channel);
+				} else this.binary.u8(0);
+				for (const edge of box.borderColor) for (const channel of edge) this.binary.u8(channel);
+			}),
+		);
 	}
 
-	boxEnd() {
-		this.body();
-		this.binary.record(opcode.boxEnd);
+	boxEnd(through = false) {
+		this.close(through, opcode.boxEnd);
 	}
 
 	end() {
@@ -310,7 +333,22 @@ export class ProtocolWriter {
 		if (run.wordSpacing) this.binary.f32(run.wordSpacing);
 	}
 
-	private body() {
+	private open(through: boolean, write: () => void) {
+		this.body(!through);
+		if (through) this.starts.push(write);
+		else write();
+	}
+
+	private close(through: boolean, code: number) {
+		if (!through) this.body();
+		// The start is still held, so the box is empty and its margins collapse through it.
+		else if (this.starts.pop()) return;
+		this.binary.record(code);
+	}
+
+	/** Every body record first writes what is held, unless it is held itself. */
+	private body(flush = true) {
 		if (this.repeating) throw new Error(`${this.repeating} must be a single text line`);
+		if (flush) this.flush();
 	}
 }
