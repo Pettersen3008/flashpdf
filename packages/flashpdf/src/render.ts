@@ -1,13 +1,13 @@
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { props } from "./assert.js";
 import { asError, Binary } from "./binary.js";
-import { compile } from "./compile.js";
+import { compile, engineError } from "./compile.js";
 import { resolveStyles } from "./css.js";
 import type { Edges, Element, Length } from "./element.js";
-import { registerFonts } from "./fonts.js";
+import { glyphError, registerFonts } from "./fonts.js";
 import { pageSetup } from "./page.js";
 import { ProtocolWriter } from "./protocol.js";
-import { pageOverflow, resolveTree } from "./tree.js";
+import { locate, pageOverflow, resolveTree } from "./tree.js";
 
 export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array | undefined };
 export type PdfMetadata = {
@@ -33,8 +33,14 @@ export type RenderOptions = {
 	margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length } | undefined;
 	stylesheets?: readonly string[] | undefined;
 	fonts?: readonly EmbeddedFont[] | undefined;
-	footer?: Element | undefined;
-	header?: Element | undefined;
+	/** Paints on every page above the body; its height counts each page number as ten digits. */
+	header?: Element | Iterable<Element> | undefined;
+	/** Paints on every page below the body; its height counts each page number as ten digits. */
+	footer?: Element | Iterable<Element> | undefined;
+	/** Replaces `header` on the first page; `null` leaves the first page without one. */
+	firstPageHeader?: Element | Iterable<Element> | null | undefined;
+	/** Replaces `footer` on the first page; `null` leaves the first page without one. */
+	firstPageFooter?: Element | Iterable<Element> | null | undefined;
 	metadata?: PdfMetadata | undefined;
 	tagged?: boolean | undefined;
 	pdfa?: "3b" | undefined;
@@ -52,6 +58,13 @@ export type FacturX = { xml: Uint8Array; profile: (typeof PROFILES)[number] };
 
 const RELATIONSHIPS = ["Source", "Data", "Alternative", "Supplement", "Unspecified"] as const;
 const PROFILES = ["MINIMUM", "BASIC WL", "BASIC", "EN 16931", "EXTENDED", "XRECHNUNG"] as const;
+/** Option, the block it fills, and whether that block replaces the other on the first page. */
+const FURNITURE = [
+	["header", "header", false],
+	["footer", "footer", false],
+	["firstPageHeader", "header", true],
+	["firstPageFooter", "footer", true],
+] as const;
 
 type LoadWasm = () => Promise<{ memory: { buffer: ArrayBufferLike } }>;
 
@@ -66,8 +79,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			"margin",
 			"stylesheets",
 			"fonts",
-			"footer",
-			"header",
+			...FURNITURE.map(([option]) => option),
 			"metadata",
 			"tagged",
 			"pdfa",
@@ -114,21 +126,29 @@ export function createRenderer(loadWasm: LoadWasm) {
 			writer.header(page.width, page.height, page.margin);
 			writer.metadata(metadata, p.tagged === true);
 			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
-			for (const position of ["header", "footer"] as const) {
-				if (p[position] === undefined) continue;
-				const repeating = await resolveTree(p[position]);
-				if (repeating.length !== 1 || repeating[0]?.kind !== "element")
-					throw new Error(`${position} must resolve to one element`);
-				writer.repeatStart(position);
-				compile(
-					resolveStyles(repeating, p.stylesheets as readonly string[] | undefined),
-					writer,
-					fonts,
-					undefined,
-					0,
-					true,
-				);
-				writer.repeatEnd();
+			for (const [option, position, first] of FURNITURE) {
+				if (p[option] === undefined) continue;
+				const nodes = await resolveTree(p[option]);
+				if (nodes.some((node) => node.kind !== "element"))
+					throw new Error(`${option} expects elements; wrap its text in one`);
+				writer.repeatStart(position, first, option);
+				try {
+					compile(
+						resolveStyles(nodes, p.stylesheets as readonly string[] | undefined),
+						writer,
+						fonts,
+						undefined,
+						0,
+						true,
+					);
+					writer.repeatEnd();
+				} catch (error) {
+					if (error instanceof Error && error.message === "PageOverflow")
+						throw new Error(
+							`PageOverflow: with ${option}, the header and footer take more than half the page between its margins; shorten them`,
+						);
+					throw locate(engineError(glyphError(error)), `the ${option} option`);
+				}
 			}
 			compile(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
 			writer.end();
@@ -136,6 +156,11 @@ export function createRenderer(loadWasm: LoadWasm) {
 			try {
 				return renderer.finish();
 			} catch (error) {
+				// Only headers and footers lay out in finish, once per page with its real numbers.
+				if (asError(error).message === "PageOverflow")
+					throw new Error(
+						"PageOverflow: a real page number rewrapped a header or footer line taller than its ten-digit measure; keep the number on a line of one font size",
+					);
 				throw asError(error);
 			}
 		} catch (error) {

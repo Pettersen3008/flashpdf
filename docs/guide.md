@@ -46,7 +46,8 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `unsupported style property: borderRadius`, `position`, `opacity`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
 | `height applies only to <img>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
-| `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
+| `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into a `header`, `footer`, `firstPageHeader`, or `firstPageFooter` option. |
+| `PageOverflow: with footer, the header and footer take more than half the page` | The body keeps at least half the page between the margins. | Shorten the header or footer, or move the tall part into the body. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
 
 ## Recipes
@@ -83,21 +84,31 @@ const tax = Math.round(subtotal * 0.25);
 
 Add amounts as integer cents and round once. `breakInside: 'avoid'` keeps the three rows on one page.
 
-### Page X of Y footer
+### Page X of Y footer and a first-page letterhead
 
 ```tsx
 import { PageNumber, TotalPages, render } from '@pettersen3008/flashpdf';
 
 const pdf = await render(<Invoice />, {
+  firstPageHeader: (
+    <header style={{ backgroundColor: '#eef3fb', padding: '10pt', marginBottom: '12pt' }}>
+      <img src={logo} alt="Acme Supply AS" style={{ width: 120 }} />
+    </header>
+  ),
+  header: <header style={{ fontSize: '9pt', textAlign: 'right' }}>Invoice 2026-0042</header>,
   footer: (
-    <footer style={{ fontSize: '9pt', textAlign: 'center' }}>
-      Page <PageNumber /> of <TotalPages />
+    <footer style={{ display: 'flex', gap: '12pt', fontSize: '8pt', borderTop: '1px solid #ccc' }}>
+      <p>Acme Supply AS<br />Storgata 1, 0150 Oslo</p>
+      <p><b>Bank</b><br />IBAN NO93 8601 1117 947</p>
+      <p style={{ textAlign: 'right' }}>Org. no. 912 345 678<br />Page <PageNumber /> of <TotalPages /></p>
     </footer>
   ),
 });
 ```
 
-A header or footer is one styled text line that repeats on every page and reserves its height. Footer text takes no links or decoration.
+A header or footer takes anything the body takes and paints on every page, as an artifact in tagged mode. `firstPageHeader` and `firstPageFooter` replace them on page one; pass `null` to leave page one without one. Each page reserves the height of the header and footer it paints, so the body starts lower under a tall letterhead.
+
+The height is measured once, before the body, with every page number counted as ten digits. Each page then lays out its header and footer again with its real numbers, so alignment fits the actual digits. Give a page number room for ten digits on its line, or the header or footer reserves an extra line it does not paint.
 
 ### Payment QR code
 
@@ -127,8 +138,8 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
 | `Font.register` | `fonts: [{ family, regular, bold }]` with TTF bytes. Regular and bold only. |
-| `fixed` header or footer | The `header` and `footer` options, one text line each. |
-| `render={({ pageNumber, totalPages }) => …}` | `<PageNumber />` and `<TotalPages />` inside `header` or `footer`. |
+| `fixed` header or footer | The `header` and `footer` options, which take any element tree. `firstPageHeader` and `firstPageFooter` cover a different first page. |
+| `render={({ pageNumber, totalPages }) => …}` | `<PageNumber />` and `<TotalPages />` anywhere inside a header or footer option. |
 | `wrap={false}` | `breakInside: 'avoid'`. |
 | `renderToBuffer`, `renderToStream`, `pdf().toBlob()` | `await render(…)` returns a `Uint8Array`. Wrap it in a `Blob` yourself. |
 | `PDFViewer`, `PDFDownloadLink` | None. FlashPDF ships no viewer or download helper. |

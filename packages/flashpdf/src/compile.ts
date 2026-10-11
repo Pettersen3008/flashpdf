@@ -72,11 +72,11 @@ const ENGINE_ERRORS = new Map([
 	],
 	[
 		"TextTooWide",
-		"TextTooWide: a character, or a header or footer line, is wider than its space; reduce the font size or widen the column",
+		"TextTooWide: a character is wider than its column; reduce the font size or widen the column",
 	],
 ]);
 /** Explains the engine's bare error codes; `locate` then names the element. */
-function engineError(error: unknown): unknown {
+export function engineError(error: unknown): unknown {
 	const message = error instanceof Error ? ENGINE_ERRORS.get(error.message) : undefined;
 	return message ? new Error(message, { cause: error }) : error;
 }

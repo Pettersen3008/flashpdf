@@ -101,6 +101,10 @@ fn box_start() -> Vec<u8> {
 /// forces the stream across four pages.
 fn representative() -> Vec<u8> {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(record(13, &[1]));
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    bytes.extend(paragraph(0, &[(0, 1.0, [0, 0, 0], 0, b"\x1f")]));
+    bytes.extend(record(4, &[]));
     bytes.extend(plain(b"Before"));
     bytes.extend(box_start());
     bytes.extend(plain(b"Boxed"));
@@ -146,19 +150,20 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[test]
-fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
+fn given_a_footer_and_a_first_page_footer_when_decoding_then_page_one_paints_the_first_and_later_pages_resolve_numbers(
+) {
     let mut bytes = header(VERSION, 595.0, 842.0, 36.0);
-    let mut footer = 10.0_f32.to_le_bytes().to_vec();
-    footer.extend([0, 0, 0, 0, 0]);
-    footer.extend(text("Page \u{1e} of \u{1f}".as_bytes()));
-    bytes.extend(record(8, &footer));
+    bytes.extend(record(8, &[0]));
+    bytes.extend(plain("Page \u{1e} of \u{1f}".as_bytes()));
+    bytes.extend(record(8, &[1]));
+    bytes.extend(plain(b"Cover"));
     bytes.extend(plain(b"First"));
     bytes.extend(record(7, &[]));
     bytes.extend(plain(b"Second"));
     bytes.extend(record(255, &[]));
 
     let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "First\nPage 1 of 2");
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "First\nCover");
     assert_eq!(
         pdf.extract_text(&[2]).unwrap().trim(),
         "Second\nPage 2 of 2"
@@ -257,7 +262,7 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     assert_eq!(pdf.get_pages().len(), 4);
     assert_eq!(
         pdf.extract_text(&[1]).unwrap().trim(),
-        "Before\nBoxed\nrow\n1"
+        "Before\nBoxed\nrow\n1\n4"
     );
     assert_eq!(
         pdf.extract_text(&[2]).unwrap().trim(),
@@ -347,12 +352,27 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&invalid_metadata), "invalid metadata language");
 
     let mut duplicate_header = header(VERSION, 120.0, 60.0, 10.0);
-    let mut line = 10.0_f32.to_le_bytes().to_vec();
-    line.extend([0, 0, 0, 0, 0]);
-    line.extend(text(b"Header"));
-    duplicate_header.extend(record(13, &line));
-    duplicate_header.extend(record(13, &line));
+    for _ in 0..2 {
+        duplicate_header.extend(record(13, &[0]));
+        duplicate_header.extend(plain(b"Header"));
+    }
     assert_eq!(push_error(&duplicate_header), "InvalidLayout");
+
+    let mut bad_page = header(VERSION, 120.0, 60.0, 10.0);
+    bad_page.extend(record(8, &[2]));
+    assert_eq!(push_error(&bad_page), "invalid furniture page");
+
+    for after in [record(7, &[]), record(255, &[]), record(13, &[1])] {
+        let mut empty = header(VERSION, 120.0, 60.0, 10.0);
+        empty.extend(record(8, &[0]));
+        empty.extend(after);
+        assert_eq!(push_error(&empty), "invalid nesting");
+    }
+
+    let mut late = header(VERSION, 120.0, 60.0, 10.0);
+    late.extend(plain(b"Body"));
+    late.extend(record(13, &[0]));
+    assert_eq!(push_error(&late), "invalid nesting");
 }
 
 #[test]
