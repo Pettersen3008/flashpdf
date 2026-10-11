@@ -97,17 +97,20 @@ test("given images totalling over 64 MiB, when writing them, then rejects the la
 
 test("given page breaks past 10000 pages, when writing them, then rejects before the core sees the extra page", () => {
 	const memory = { buffer: new ArrayBuffer(4096) };
-	let pushes = 0;
+	let bytes = 0;
 	const renderer = {
 		input_ptr: () => 0,
 		input_capacity: () => 4096,
-		push: () => pushes++,
+		push: (length) => {
+			bytes += length;
+		},
 		finish: () => new Uint8Array(),
 	};
 	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
 	for (let page = 1; page < 10_000; page++) writer.pageBreak();
 	assert.throws(() => writer.pageBreak(), /^Error: document exceeds 10000 pages; split it/);
-	assert.equal(pushes, 9_999);
+	writer.end();
+	assert.equal(bytes, 10_000 * 5);
 });
 
 test("given a WASM fetch that fails once, when loading again, then retries instead of keeping the failure", async () => {

@@ -38,4 +38,9 @@ export type Box = {
  *  of `percent` makes value `i` a percent of the box's width (even `i`) or height (odd `i`). */
 export type Radius = { values: number[]; percent: number };
 
-export type FontSlots = { regular: number; bold?: number | undefined };
+export type FontSlots = {
+	regular: number;
+	bold?: number | undefined;
+	italic?: number | undefined;
+	boldItalic?: number | undefined;
+};

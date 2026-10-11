@@ -21,7 +21,8 @@ use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
 use crate::{
-    Edges, FontId, LineStyle, OwnedCommand, Radii, RunDecoration, TextRun, TextStyle, OPAQUE,
+    Edges, FontId, LineStyle, Marker, OwnedCommand, Radii, RunDecoration, TextRun, TextStyle,
+    BUILT_IN, OPAQUE,
 };
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
@@ -35,7 +36,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 17;
+const VERSION: u16 = 20;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -87,7 +88,7 @@ impl Decoder {
         if self.page.is_some() {
             return Err(ProtocolError::FontsAfterDocument);
         }
-        if self.fonts.len() >= 254 {
+        if self.fonts.len() + BUILT_IN >= 256 {
             return Err(ProtocolError::TooManyFonts);
         }
         let total = self
@@ -98,7 +99,7 @@ impl Decoder {
         self.fonts
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
         self.font_bytes = total;
-        Ok((self.fonts.len() + 1) as u8)
+        Ok((self.fonts.len() + BUILT_IN - 1) as u8)
     }
 
     /// Images register at any point before the record that paints them, and are
@@ -276,6 +277,12 @@ impl Decoder {
                 let align = cursor.align()?;
                 let color = cursor.rgb()?;
                 let font = self.font(cursor.take(1)?[0])?;
+                // Only the run flags for slant and spacing; a header has no breaks, decoration, or links.
+                let flags = cursor.u16()?;
+                if flags & !0x2e0 != 0 {
+                    return Err(ProtocolError::InvalidValue("header flags"));
+                }
+                let typography = cursor.typography(flags)?;
                 let text = cursor.text(true)?.to_owned();
                 cursor.done()?;
                 if self.body_started || !self.frames.is_empty() {
@@ -286,6 +293,7 @@ impl Decoder {
                     align,
                     color,
                     font,
+                    typography,
                 };
                 let renderer = self.ensure_renderer()?;
                 if matches!(opcode, Opcode::Header) {
@@ -423,11 +431,9 @@ impl Decoder {
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
                     // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-                    // 4 an f32 line height follows, 5 a u8 alpha follows.
-                    let flags = cursor.take(1)?[0];
-                    if flags > 0x3f {
-                        return Err(ProtocolError::InvalidValue("run flags"));
-                    }
+                    // 4 an f32 line height follows, 5 to 7, 9, and 11 to 14 typography, 8 a decoration
+                    // colour follows, and 10 a background colour.
+                    let flags = cursor.u16()?;
                     let link = if flags & 8 != 0 {
                         Some(cursor.u16()?)
                             .filter(|index| usize::from(*index) < links.len())
@@ -441,7 +447,21 @@ impl Decoder {
                     } else {
                         None
                     };
-                    let alpha = if flags & 32 != 0 {
+                    let typography = cursor.typography(flags)?;
+                    if typography.marker != Marker::None && !runs.is_empty() {
+                        return Err(ProtocolError::InvalidValue("marker run"));
+                    }
+                    let decoration_color = if flags & 256 != 0 {
+                        Some(cursor.rgb()?)
+                    } else {
+                        None
+                    };
+                    let background = if flags & 1024 != 0 {
+                        Some(cursor.rgb()?)
+                    } else {
+                        None
+                    };
+                    let alpha = if flags & 32768 != 0 {
                         cursor.take(1)?[0]
                     } else {
                         OPAQUE
@@ -458,9 +478,12 @@ impl Decoder {
                         decoration: RunDecoration {
                             underline: flags & 2 != 0,
                             line_through: flags & 4 != 0,
+                            color: decoration_color,
                             link,
                             alpha,
+                            background,
                         },
+                        typography,
                     });
                 }
                 cursor.done()?;
@@ -581,16 +604,16 @@ impl Decoder {
         }
     }
 
-    /// Slots 0 and 1 are Helvetica; the rest are registered fonts.
+    /// The built-in fonts take the first slots; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
-        if self.pdfa && font.index() < 2 {
+        if self.pdfa && font.index() < BUILT_IN {
             return Err(ProtocolError::PdfAFont);
         }
         let count = self
             .renderer
             .as_ref()
-            .map_or(self.fonts.len() + 2, crate::Renderer::font_count);
+            .map_or(self.fonts.len() + BUILT_IN, crate::Renderer::font_count);
         if font.index() < count {
             Ok(font)
         } else {

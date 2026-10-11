@@ -13,10 +13,7 @@ const resolve = async (value, sheets, width) =>
 
 test("given CSS outside the supported subset, when parsing a stylesheet, then rejects it with its source position", () => {
 	for (const [source, message] of [
-		[
-			".a { letter-spacing: 1pt }",
-			/letter-spacing \(text shaping is not implemented\).*"\.a" at 1:1/,
-		],
+		[".a { box-shadow: 1pt }", /box-shadow.*"\.a" at 1:1/],
 		[
 			".a { grid-template-columns: 1fr }",
 			/unsupported CSS property: grid-template-columns.*"\.a" at 1:1/,
@@ -25,7 +22,7 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 		[".a { color: #000 } oops", /invalid CSS stylesheet at 1:20/],
 		["{bad}p { color: red }", /invalid CSS stylesheet/],
 		["@layer x { .a { color: red }", /invalid CSS stylesheet at 1:1/],
-		["/* one\n\n\n*/\n.a { letter-spacing: 1pt }", /"\.a" at 5:1/],
+		["/* one\n\n\n*/\n.a { box-shadow: 1pt }", /"\.a" at 5:1/],
 	]) {
 		assert.throws(() => stylesheet(source), message, source);
 	}
@@ -361,4 +358,32 @@ test("given Tailwind's rounded-full and opacity-50, when resolving a box, then a
 	const { radius } = boxStyle(box.style, 12);
 	assert.ok(radius.values.every((value) => Number.isFinite(value) && value > 1e38));
 	assert.equal(opacity(box.style.opacity), 0.5);
+});
+
+test("given paragraphs and headings, when cascading browser defaults, then scales their margins and honors author overrides", async () => {
+	const tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "hr"];
+	const sizes = [1, 2, 1.5, 1.17, 1, 0.83, 0.67, 1];
+	const margins = [1, 0.67, 0.83, 1, 1.33, 1.67, 2.33, 0.5];
+	const [root] = await resolve(
+		jsx("main", {
+			style: { fontSize: 20 },
+			children: tags.map((tag) => jsx(tag, { children: tag === "hr" ? undefined : "text" })),
+		}),
+	);
+	for (const [index, child] of root.children.entries()) {
+		const size = sizes[index] * 20;
+		const edges = boxStyle(child.style, size).margin;
+		assert.ok(Math.abs(edges[0] - size * margins[index]) < 0.00001, child.tag);
+		assert.equal(edges[1], 0);
+		assert.equal(edges[2], edges[0]);
+		assert.equal(edges[3], 0);
+	}
+	const [heading] = await resolve(jsx("h1", { style: { marginBottom: 3 }, children: "x" }), [
+		"h1 { margin: 0 }",
+	]);
+	assert.deepEqual(boxStyle(heading.style, 24).margin, [0, 0, 3, 0]);
+	const [table] = await resolve(
+		jsx("table", { children: jsx("tr", { children: jsx("th", { children: "Heading" }) }) }),
+	);
+	assert.equal(table.children[0].children[0].style.textAlign, "center");
 });

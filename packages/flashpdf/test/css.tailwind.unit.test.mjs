@@ -97,11 +97,8 @@ test("given border-style, when resolving styles, then none and hidden clear the 
 		await widths(".a { border-style: solid; border-left-width: 3pt }"),
 		[0, 0, 0, 3],
 	);
-	await rejects(
-		".a { border-style: dashed }",
-		/unsupported border style: dashed \(only solid, none, and hidden are drawn\)/,
-	);
-	await rejects(".a { border-top-style: dotted }", /unsupported border style: dotted/);
+	await rejects(".a { border-style: double }", /unsupported border style: double/);
+	await rejects(".a { border-top-style: groove }", /unsupported border style: groove/);
 });
 
 test("given an @property rule, when an element sets the property, then initial-value is the default, inherits: false stops inheritance, and it beats a var() fallback", async () => {
@@ -167,8 +164,8 @@ test("given @media blocks, when resolving styles, then print applies, screen is 
 
 test("given an @media query outside the subset, when validating and resolving, then stylesheet() accepts it and render rejects only where a rule matches", async () => {
 	const css = `@media (prefers-color-scheme: dark) { .d { color: white } }
-		@media (width >= 48rem) { .e { letter-spacing: 1pt } }`;
-	assert.throws(() => stylesheet(css), /letter-spacing/);
+		@media (width >= 48rem) { .e { box-shadow: 1pt } }`;
+	assert.throws(() => stylesheet(css), /box-shadow/);
 	const dark = "@media (prefers-color-scheme: dark) { .d { color: white } }";
 	assert.equal(stylesheet(dark), dark);
 	assert.equal((await one(dark, "other")).color, undefined);

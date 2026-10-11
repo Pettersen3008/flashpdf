@@ -8,6 +8,8 @@ import type {
 	SvgProps,
 	SvgShapeProps,
 	HeadingProps,
+	ListItemProps,
+	OrderedListProps,
 	VoidProps,
 } from "./element.js";
 import type { BlockTag, TableTag, TextTag } from "./tree.js";
@@ -65,5 +67,7 @@ export namespace JSX {
 		h4: HeadingProps;
 		h5: HeadingProps;
 		h6: HeadingProps;
+		ol: OrderedListProps;
+		li: ListItemProps;
 	}
 }

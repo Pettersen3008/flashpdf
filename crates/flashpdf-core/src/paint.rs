@@ -7,7 +7,7 @@ use pdf_writer::{Content, Name, Str};
 
 use crate::font::font_name;
 use crate::geometry::Point;
-use crate::layout::{LayoutBuffer, Segment};
+use crate::layout::{Gap, LayoutBuffer, Segment, MARKER_SHAPE};
 use crate::vector::{alpha_name, dash, op};
 use crate::{BoxStyle, LineStyle, Pt, Radii, Rgb, TextAlign, OPAQUE};
 
@@ -306,7 +306,6 @@ impl<'a> PdfPainter<'a> {
                     .properties()
                     .identify(id);
             }
-            self.content.begin_text();
             let x = origin.x
                 + aligned(
                     line.origin.x,
@@ -315,6 +314,34 @@ impl<'a> PdfPainter<'a> {
                     line.text_width,
                 );
             let baseline = (origin.y - line.origin.y).get();
+            // A segment's start and width on the line; it ends where the next one starts.
+            let extent = |index: usize| {
+                let segment = &segments[index];
+                let end = segments
+                    .get(index + 1)
+                    .map_or(line.text_width, |next| next.x);
+                ((x + segment.x).get(), (end - segment.x).get())
+            };
+            for (index, segment) in segments.iter().enumerate() {
+                let decoration = &layout.decorations[line.segments.start + index];
+                if let Some(color) = decoration.background {
+                    self.set_alpha(decoration.alpha);
+                    let (start, width) = extent(index);
+                    self.set_fill(color);
+                    let (bottom, top) = (
+                        baseline + segment.rise - decoration.descent.get(),
+                        baseline + segment.rise + decoration.ascent.get(),
+                    );
+                    self.polygon(&[
+                        (start, bottom),
+                        (start + width, bottom),
+                        (start + width, top),
+                        (start, top),
+                    ]);
+                    self.content.fill_nonzero();
+                }
+            }
+            self.content.begin_text();
             let mut previous: Option<&Segment> = None;
             for (index, segment) in segments.iter().enumerate() {
                 self.set_alpha(layout.decorations[line.segments.start + index].alpha);
@@ -330,37 +357,70 @@ impl<'a> PdfPainter<'a> {
                         segment.size.get(),
                     );
                 }
+                let spacing = previous.map_or(0.0, |last| last.letter_spacing);
+                if segment.letter_spacing != spacing {
+                    self.content.set_char_spacing(segment.letter_spacing);
+                }
                 match previous {
-                    None => self.content.next_line(x.get(), baseline),
-                    Some(last) => self.content.next_line((segment.x - last.x).get(), 0.0),
+                    Some(last) if last.oblique == segment.oblique => self
+                        .content
+                        .next_line((segment.x - last.x).get(), segment.rise - last.rise),
+                    None if !segment.oblique => self
+                        .content
+                        .next_line((x + segment.x).get(), baseline + segment.rise),
+                    _ => self.content.set_text_matrix(slant(
+                        segment.oblique,
+                        (x + segment.x).get(),
+                        baseline + segment.rise,
+                    )),
                 };
-                self.content.show(Str(&layout.text[segment.text.clone()]));
+                let first = layout
+                    .gaps
+                    .partition_point(|gap| gap.at as usize <= segment.text.start);
+                let last = layout
+                    .gaps
+                    .partition_point(|gap| (gap.at as usize) < segment.text.end);
+                if segment.shape == 0 {
+                    show(
+                        self.content,
+                        &layout.text[segment.text.clone()],
+                        segment.text.start,
+                        &layout.gaps[first..last],
+                    );
+                }
                 previous = Some(segment);
+            }
+            // Text state outlives the text object, and every other line starts from Tc 0.
+            if previous.is_some_and(|last| last.letter_spacing != 0.0) {
+                self.content.set_char_spacing(0.0);
             }
             self.content.end_text();
             for (index, segment) in segments.iter().enumerate() {
                 let decoration = &layout.decorations[line.segments.start + index];
-                let start = (x + segment.x).get();
-                let end = segments
-                    .get(index + 1)
-                    .map_or(line.text_width, |next| next.x);
-                let width = (end - segment.x).get();
-                let size = segment.size.get();
-                let thickness = size / 14.0;
-                if decoration.underline || decoration.line_through {
-                    self.set_alpha(decoration.alpha);
-                    self.set_fill(segment.color);
+                self.set_alpha(decoration.alpha);
+                let (start, width) = extent(index);
+                let baseline = baseline + segment.rise;
+                let scale = segment.size.get() / 1000.0;
+                if segment.shape != 0 {
+                    self.set_fill(decoration.color);
+                    let middle = baseline + decoration.ascent.get() / 2.0;
+                    self.marker_shape(
+                        segment.shape,
+                        start,
+                        middle,
+                        segment.size.get() * MARKER_SHAPE,
+                    );
                 }
-                if decoration.underline {
-                    self.content
-                        .rect(start, baseline - size / 8.0 - thickness, width, thickness)
-                        .fill_nonzero();
+                let strokes = [decoration.underline, decoration.line_through];
+                if strokes.iter().any(Option::is_some) {
+                    self.set_fill(decoration.color);
                 }
-                if decoration.line_through {
+                for stroke in strokes.into_iter().flatten() {
+                    let thickness = stroke.thickness * scale;
                     self.content
                         .rect(
                             start,
-                            baseline + size * 0.3 - thickness / 2.0,
+                            baseline + stroke.offset * scale - thickness / 2.0,
                             width,
                             thickness,
                         )
@@ -384,9 +444,52 @@ impl<'a> PdfPainter<'a> {
         }
     }
 
+    /// A list marker's disc, ring, or square: `size` wide with its left edge at `x`, centred at `y`.
+    /// Discs and rings are 12-sided polygons, which read as round at marker size.
+    #[inline(never)]
+    fn marker_shape(&mut self, shape: u8, x: f32, y: f32, size: f32) {
+        let half = size / 2.0;
+        // A disc is one outline, a ring two, and a square four corners.
+        let rings = if shape == 3 { 0 } else { usize::from(shape) };
+        if shape == 3 {
+            self.polygon(&[
+                (x, y - half),
+                (x + size, y - half),
+                (x + size, y + half),
+                (x, y + half),
+            ]);
+        }
+        for radius in [half, half * 0.65].into_iter().take(rings) {
+            let (mut dx, mut dy) = (radius, 0.0);
+            let mut points = [(0.0, 0.0); 12];
+            for point in &mut points {
+                *point = (x + half + dx, y + dy);
+                (dx, dy) = (dx * 0.866 - dy * 0.5, dx * 0.5 + dy * 0.866);
+            }
+            self.polygon(&points);
+        }
+        if shape == 2 {
+            self.content.fill_even_odd();
+        } else {
+            self.content.fill_nonzero();
+        }
+    }
+
+    /// Every marker and background outline goes through here, so the float formatting is compiled once.
+    #[inline(never)]
+    fn polygon(&mut self, points: &[(f32, f32)]) {
+        for (index, point) in points.iter().enumerate() {
+            self.content
+                .op(if index == 0 { "m" } else { "l" })
+                .operands([point.0, point.1]);
+        }
+        self.content.close_path();
+    }
+
     pub(crate) fn paint_line(
         &mut self,
         text: &[u8],
+        gaps: &[Gap],
         style: crate::TextStyle,
         origin: Point,
         available_width: Pt,
@@ -397,9 +500,21 @@ impl<'a> PdfPainter<'a> {
         let mut buffer = [0_u8; 4];
         self.content
             .set_font(Name(font_name(style.font, &mut buffer)), style.size.get());
+        let spacing = style.typography.letter_spacing;
+        if spacing != 0.0 {
+            self.content.set_char_spacing(spacing);
+        }
         let x = aligned(origin.x, style.align, available_width, text_width);
-        self.content.next_line(x.get(), origin.y.get());
-        self.content.show(Str(text));
+        if style.typography.oblique {
+            self.content
+                .set_text_matrix(slant(true, x.get(), origin.y.get()));
+        } else {
+            self.content.next_line(x.get(), origin.y.get());
+        }
+        show(self.content, text, 0, gaps);
+        if spacing != 0.0 {
+            self.content.set_char_spacing(0.0);
+        }
         self.content.end_text();
     }
 
@@ -409,9 +524,41 @@ impl<'a> PdfPainter<'a> {
     }
 }
 
+/// Shows `text`, which starts at byte `start`, with each nonzero gap as a `TJ` adjustment.
+fn show(content: &mut Content, text: &[u8], start: usize, gaps: &[Gap]) {
+    if gaps.iter().all(|gap| gap.amount == 0.0) {
+        content.show(Str(text));
+        return;
+    }
+    let mut operation = content.show_positioned();
+    let mut items = operation.items();
+    let mut from = 0;
+    for gap in gaps.iter().filter(|gap| gap.amount != 0.0) {
+        let at = gap.at as usize - start;
+        items.show(Str(&text[from..at])).adjust(-gap.amount);
+        from = at;
+    }
+    items.show(Str(&text[from..]));
+}
+
+/// Chrome's synthetic italic skews by a quarter, about 14 degrees.
+const OBLIQUE_SKEW: f32 = 0.25;
+
+fn slant(oblique: bool, x: f32, y: f32) -> [f32; 6] {
+    [
+        1.0,
+        0.0,
+        if oblique { OBLIQUE_SKEW } else { 0.0 },
+        1.0,
+        x,
+        y,
+    ]
+}
+
 fn aligned(x: Pt, align: TextAlign, available_width: Pt, text_width: Pt) -> Pt {
     match align {
-        TextAlign::Left => x,
+        // A wrapped justified line fills its width, and its last line starts left.
+        TextAlign::Left | TextAlign::Justify => x,
         TextAlign::Center => x + Pt((available_width - text_width).get() / 2.0),
         TextAlign::Right => x + available_width - text_width,
     }

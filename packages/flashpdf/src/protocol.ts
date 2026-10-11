@@ -1,5 +1,5 @@
 import { asError, Binary } from "./binary.js";
-import type { Box } from "./style.js";
+import type { Box, Transform, WhiteSpace } from "./style.js";
 
 export type Column = { kind: 0 | 1 | 2; value: number };
 /** An image dimension: 1 is points, 2 is percent of the container width. */
@@ -15,10 +15,37 @@ export type Run = {
 	break: boolean;
 	underline: boolean;
 	lineThrough: boolean;
+	/** Undefined is the text colour. */
+	decorationColor: readonly [number, number, number] | undefined;
 	link: string | undefined;
 	/** 0 to 1, with every ancestor's opacity multiplied in. */
 	opacity: number;
+	/** Slant the upright face: the family has no italic face for this weight. */
+	oblique: boolean;
+	letterSpacing: number;
+	wordSpacing: number;
+	kerning: boolean;
+	/** Baseline shift in points, up positive. */
+	rise: number;
+	/** The background behind the run's text, as `<mark>` paints it; undefined is none. */
+	background: readonly [number, number, number] | undefined;
+	/** 1 hangs a list marker before the paragraph's first line and 2 starts the line with it. */
+	marker: 0 | 1 | 2;
+	/** Applied by the compiler before writing; only `pre` and `nowrap` reach the engine, as a flag. */
+	whiteSpace: WhiteSpace;
+	/** Applied by the compiler before writing; not part of the protocol. */
+	transform: Transform;
 };
+
+/** Run flag bits 5 to 7: slant, then an f32 letter and word spacing follow; bit 9: no kerning. */
+function typography(run: Run): number {
+	return (
+		(run.oblique ? 32 : 0) |
+		(run.letterSpacing ? 64 : 0) |
+		(run.wordSpacing ? 128 : 0) |
+		(run.kerning ? 0 : 512)
+	);
+}
 
 /** The engine's alpha byte; 255 is opaque. */
 const alpha = (opacity: number) => Math.round(opacity * 255);
@@ -58,6 +85,9 @@ export class ProtocolWriter {
 	/** Drawings are encoded per element, so an icon on every row needs a key by content. */
 	private readonly drawings = new Map<string, Uint8Array>();
 	private readonly latin1 = new TextDecoder("latin1");
+	private held = 0;
+	/** Box and stack starts waiting for content, so a held margin lands outside them. */
+	private readonly starts: (() => void)[] = [];
 
 	constructor(
 		private readonly binary: Binary,
@@ -105,13 +135,22 @@ export class ProtocolWriter {
 	}
 
 	paragraph(runs: readonly Run[], align: string) {
-		const alignment = align === "center" ? 1 : align === "right" ? 2 : 0;
+		const alignment = ["left", "center", "right", "justify"].indexOf(align);
 		if (this.repeating) {
 			const [only] = runs;
 			if (this.repeatWritten || runs.length !== 1 || only!.break)
 				throw new Error(`${this.repeating} must be a single text line`);
-			if (only!.underline || only!.lineThrough || only!.link !== undefined)
-				throw new Error(`${this.repeating} text cannot be underlined or linked`);
+			if (
+				only!.underline ||
+				only!.lineThrough ||
+				only!.link !== undefined ||
+				only!.rise ||
+				only!.background ||
+				only!.marker
+			)
+				throw new Error(
+					`${this.repeating} text cannot be underlined, linked, raised, or highlighted`,
+				);
 			if (alpha(only!.opacity) !== 255)
 				throw new Error(`${this.repeating} text cannot take opacity`);
 			this.repeatWritten = true;
@@ -120,10 +159,13 @@ export class ProtocolWriter {
 				this.binary.u8(alignment);
 				for (const channel of only!.color) this.binary.u8(channel);
 				this.binary.u8(only!.font);
+				this.binary.u16(typography(only!));
+				this.spacing(only!);
 				this.binary.text(only!.text);
 			});
 			return;
 		}
+		this.body();
 		const links: string[] = [];
 		for (const run of runs)
 			if (run.link !== undefined && !links.includes(run.link)) links.push(run.link);
@@ -139,18 +181,30 @@ export class ProtocolWriter {
 					this.binary.f32(run.size);
 					for (const channel of run.color) this.binary.u8(channel);
 					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-					// 4 an f32 line height follows, 5 a u8 alpha follows.
+					// 4 an f32 line height follows, 5 to 7, 9, and 11 to 14 typography, 8 a decoration
+					// colour follows, 10 a background colour, 11 an f32 baseline shift, 12 no wrap,
+					// and 13 and 14 a marker.
 					const translucent = alpha(run.opacity) !== 255;
-					this.binary.u8(
+					this.binary.u16(
 						(run.break ? 1 : 0) |
 							(run.underline ? 2 : 0) |
 							(run.lineThrough ? 4 : 0) |
 							(run.link === undefined ? 0 : 8) |
 							(run.lineHeight ? 16 : 0) |
-							(translucent ? 32 : 0),
+							typography(run) |
+							(translucent ? 32768 : 0) |
+							(run.decorationColor ? 256 : 0) |
+							(run.background ? 1024 : 0) |
+							(run.rise ? 2048 : 0) |
+							(run.whiteSpace === "pre" || run.whiteSpace === "nowrap" ? 4096 : 0) |
+							(run.marker << 13),
 					);
 					if (run.link !== undefined) this.binary.u16(links.indexOf(run.link));
 					if (run.lineHeight) this.binary.f32(run.lineHeight);
+					this.spacing(run);
+					if (run.rise) this.binary.f32(run.rise);
+					for (const channel of run.decorationColor ?? []) this.binary.u8(channel);
+					for (const channel of run.background ?? []) this.binary.u8(channel);
 					if (translucent) this.binary.u8(alpha(run.opacity));
 					this.binary.text(run.text);
 				}
@@ -220,14 +274,29 @@ export class ProtocolWriter {
 		this.binary.record(opcode.spacer, () => this.binary.f32(height));
 	}
 
-	stackStart(gap: number) {
-		this.body();
-		this.binary.record(opcode.stackStart, () => this.binary.f32(gap));
+	/** Holds a vertical margin until content follows, so adjoining margins collapse to the largest (CSS 2.1 8.3.1). */
+	margin(height: number) {
+		this.body(false);
+		this.held = Math.max(this.held, height);
 	}
 
-	stackEnd() {
-		this.body();
-		this.binary.record(opcode.stackEnd);
+	/** Writes the held margin and starts, so no margin collapses across this point. */
+	flush() {
+		if (this.held) {
+			const held = this.held;
+			this.binary.record(opcode.spacer, () => this.binary.f32(held));
+		}
+		this.held = 0;
+		for (const start of this.starts.splice(0)) start();
+	}
+
+	/** `through` works as for `boxStart`. */
+	stackStart(gap: number, through = false) {
+		this.open(through, () => this.binary.record(opcode.stackStart, () => this.binary.f32(gap)));
+	}
+
+	stackEnd(through = false) {
+		this.close(through, opcode.stackEnd);
 	}
 
 	rowStart(columns: readonly Column[]) {
@@ -264,7 +333,9 @@ export class ProtocolWriter {
 		this.binary.record(opcode.tableEnd);
 	}
 
+	/** CSS drops the margin before a forced break and keeps the one after. */
 	pageBreak() {
+		this.held = 0;
 		this.body();
 		if (++this.pages > MAX_PAGES)
 			throw new Error(`document exceeds ${MAX_PAGES} pages; split it across several renders`);
@@ -281,32 +352,34 @@ export class ProtocolWriter {
 		this.repeating = undefined;
 	}
 
-	boxStart(box: Box) {
-		this.body();
-		this.binary.record(opcode.boxStart, () => {
-			for (const edge of [...box.margin, ...box.padding, ...box.border]) this.binary.f32(edge);
-			if (box.background) {
-				this.binary.u8(1);
-				for (const channel of box.background) this.binary.u8(channel);
-			} else this.binary.u8(0);
-			for (const edge of box.borderColor) for (const channel of edge) this.binary.u8(channel);
-			this.binary.u8(alpha(box.opacity));
-			// Two bits per side, top first.
-			this.binary.u8(
-				box.borderStyle.reduce((bits, style, side) => bits | (style << (side * 2)), 0),
-			);
-			const { radius } = box;
-			this.binary.u8(radius ? 1 : 0);
-			if (radius) {
-				this.binary.u8(radius.percent);
-				for (const value of radius.values) this.binary.f32(value);
-			}
-		});
+	/** With `through`, the start waits for content so a held margin collapses past it to land outside
+	 *  the box, and the end lets the last child's margin out; an empty box writes nothing. */
+	boxStart(box: Box, through = false) {
+		this.open(through, () =>
+			this.binary.record(opcode.boxStart, () => {
+				for (const edge of [...box.margin, ...box.padding, ...box.border]) this.binary.f32(edge);
+				if (box.background) {
+					this.binary.u8(1);
+					for (const channel of box.background) this.binary.u8(channel);
+				} else this.binary.u8(0);
+				for (const edge of box.borderColor) for (const channel of edge) this.binary.u8(channel);
+				this.binary.u8(alpha(box.opacity));
+				// Two bits per side, top first.
+				this.binary.u8(
+					box.borderStyle.reduce((bits, style, side) => bits | (style << (side * 2)), 0),
+				);
+				const { radius } = box;
+				this.binary.u8(radius ? 1 : 0);
+				if (radius) {
+					this.binary.u8(radius.percent);
+					for (const value of radius.values) this.binary.f32(value);
+				}
+			}),
+		);
 	}
 
-	boxEnd() {
-		this.body();
-		this.binary.record(opcode.boxEnd);
+	boxEnd(through = false) {
+		this.close(through, opcode.boxEnd);
 	}
 
 	end() {
@@ -314,7 +387,27 @@ export class ProtocolWriter {
 		this.binary.flush();
 	}
 
-	private body() {
+	private spacing(run: Run) {
+		if (run.letterSpacing) this.binary.f32(run.letterSpacing);
+		if (run.wordSpacing) this.binary.f32(run.wordSpacing);
+	}
+
+	private open(through: boolean, write: () => void) {
+		this.body(!through);
+		if (through) this.starts.push(write);
+		else write();
+	}
+
+	private close(through: boolean, code: number) {
+		if (!through) this.body();
+		// The start is still held, so the box is empty and its margins collapse through it.
+		else if (this.starts.pop()) return;
+		this.binary.record(code);
+	}
+
+	/** Every body record first writes what is held, unless it is held itself. */
+	private body(flush = true) {
 		if (this.repeating) throw new Error(`${this.repeating} must be a single text line`);
+		if (flush) this.flush();
 	}
 }

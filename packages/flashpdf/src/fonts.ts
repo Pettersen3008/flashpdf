@@ -22,25 +22,28 @@ export function registerFonts(renderer: PdfRenderer, value: unknown): Map<string
 		}
 	};
 	for (const entry of value) {
-		const font = props(entry, ["family", "regular", "bold"]);
+		const font = props(entry, ["family", "regular", "bold", "italic", "boldItalic"]);
 		if (typeof font.family !== "string" || !font.family.trim() || font.family.includes(","))
 			throw new Error("font family must name one registered family");
 		if (result.has(font.family.trim())) throw new Error(`duplicate font family: ${font.family}`);
-		if (!(font.regular instanceof Uint8Array) || !font.regular.byteLength)
-			throw new Error("font regular must be a non-empty Uint8Array");
-		const regular = addFont(font.regular, font.family);
-		let boldFace: number | undefined;
-		if (font.bold !== undefined) {
-			if (!(font.bold instanceof Uint8Array) || !font.bold.byteLength)
-				throw new Error("font bold must be a non-empty Uint8Array");
-			boldFace = addFont(font.bold, font.family);
-		}
-		result.set(font.family.trim(), { regular, bold: boldFace });
+		const face = (key: "regular" | "bold" | "italic" | "boldItalic") => {
+			const bytes = font[key];
+			if (bytes === undefined && key !== "regular") return undefined;
+			if (!(bytes instanceof Uint8Array) || !bytes.byteLength)
+				throw new Error(`font ${key} must be a non-empty Uint8Array`);
+			return addFont(bytes, font.family as string);
+		};
+		result.set(font.family.trim(), {
+			regular: face("regular")!,
+			bold: face("bold"),
+			italic: face("italic"),
+			boldItalic: face("boldItalic"),
+		});
 	}
 	return result;
 }
 
-/** The core reports a glyph it cannot show as `UnsupportedCharacter('x')` (Helvetica, WinAnsi
+/** The core reports a glyph it cannot show as `UnsupportedCharacter('x')` (a built-in font, WinAnsi
  *  only) or `MissingGlyph('x')` (the embedded font lacks it), with the character in Rust's
  *  debug escaping; this names the character and code point and says which font to blame. */
 export function glyphError(error: unknown): unknown {
@@ -57,6 +60,6 @@ export function glyphError(error: unknown): unknown {
 	return new Error(
 		match[1] === "MissingGlyph"
 			? `the font has no glyph for "${character}" (${codePoint})`
-			: `Helvetica has no glyph for "${character}" (${codePoint}); register a font that has it`,
+			: `the built-in font has no glyph for "${character}" (${codePoint}); register a font that has it`,
 	);
 }

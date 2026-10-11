@@ -5,11 +5,11 @@ use pdf_writer::types::{
 use pdf_writer::writers::{ExtGraphicsState, Resources, StructTreeRoot};
 use pdf_writer::{Content, Filter, Finish, Name, Null, Pdf, Rect, Ref, Str, TextStr};
 
-use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
+use crate::font::{base_font, font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
 use crate::paint::{image_name, PageLink, PageTag};
 use crate::vector::alpha_name;
-use crate::{FontId, Page, HELVETICA_BOLD};
+use crate::{FontId, Page};
 
 #[derive(Default)]
 pub(crate) struct Metadata {
@@ -78,7 +78,7 @@ pub(crate) fn finish_pdf(
         .map(Content::len)
         .chain(used.iter().filter_map(|slot| match &fonts[slot.index()] {
             Font::Embedded(font) => Some(font.bytes.len()),
-            Font::Helvetica { .. } => None,
+            Font::Standard(_) => None,
         }))
         .chain(images.iter().map(|image| image.data.len()))
         .try_fold(8 * 1024_usize, |total, length| total.checked_add(length));
@@ -291,13 +291,9 @@ pub(crate) fn finish_pdf(
 
     for refs in &font_refs {
         match &fonts[refs.slot.index()] {
-            Font::Helvetica { .. } => {
+            Font::Standard(face) => {
                 pdf.type1_font(refs.font)
-                    .base_font(Name(if refs.slot == HELVETICA_BOLD {
-                        b"Helvetica-Bold"
-                    } else {
-                        b"Helvetica"
-                    }))
+                    .base_font(Name(base_font(*face)))
                     .encoding_predefined(Name(b"WinAnsiEncoding"));
             }
             Font::Embedded(font) => write_embedded(

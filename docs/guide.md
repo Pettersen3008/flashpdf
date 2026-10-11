@@ -35,11 +35,12 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| `unsupported element <em>` or `<i>` | Only regular and bold faces exist, so there is no italic. | Use `<b>` or a `<span>` with a colour. |
-| `unsupported style property: fontStyle`, `unsupported CSS property: font-style` | Same. | Delete the declaration. |
-| `unsupported CSS property: letter-spacing (text shaping is not implemented)` | Text has no shaping, so no tracking. | Delete the declaration. A rule that matches no rendered element is ignored. |
+| `invalid fontStyle: oblique 10deg` | `oblique` takes no angle. Italic text uses the family's `italic` file, or slants the upright face when there is none. | Use `fontStyle: 'italic'`. Register an `italic` file for true italics. |
+| `invalid letterSpacing: 5%` | Spacing takes a length, not a percentage. | Use `em`, such as `0.05em`. |
+| `text-decoration: wavy is not supported; lines are solid` | Decoration lines are solid. | Drop the style keyword. |
 | `PageOverflow: use document margins or split this decorated box` | A box with padding, a border, or a background cannot split across pages. A decorated root holding more than one page of content overflows. | Move the root's padding to the `margin` option. Drop its border and background, and decorate the cards inside it instead. |
 | `PageOverflow: the table is taller than a page` or `the image is taller than the page` | An atomic block has to fit one page. | Remove `break-inside: avoid` from the table, or reduce the image height. |
+<<<<<<< ours
 | `Helvetica has no glyph for "−" (U+2212)` | The default font covers WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
 | `src must be the image's PNG, JPEG, or SVG bytes as a Uint8Array` | `img` does not take a URL, path, or `data:` URL. | Read or fetch the file and pass its bytes. |
 | `SVG text is not supported` | A drawing has no text layout. | Convert the text to outlines in the editor, or put a `<p>` beside the drawing. |
@@ -51,6 +52,15 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `header text cannot take opacity` | The repeated header and footer line has no alpha. | Give the text a lighter colour instead. |
 | `unsupported style property: position`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
 | `height applies only to <img> and <svg>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
+=======
+| `the built-in font has no glyph for "−" (U+2212)` | The built-in fonts, Helvetica, Times, and Courier, cover WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
+| `unregistered font family: Inter` | No entry of the `fontFamily` list is a registered family or a built-in name. An entry that matches nothing is skipped for a later one, so only a list with no match rejects. | Register the font with `fonts` and spell `fontFamily` exactly as its `family`, which is case-sensitive. Or end the list with `serif`, `sans-serif`, or `monospace`. |
+| `src must be the image's PNG or JPEG bytes as a Uint8Array` | `img` does not take a URL, path, or `data:` URL. | Read or fetch the file and pass its bytes. |
+| `<li> belongs in a <ul> or <ol>` or `<ul> accepts only <li>` | An item sits outside a list, or a list holds something other than items. | Wrap each `li` directly in a `ul` or `ol`. |
+| `LineTooWide: a line of white-space: pre or nowrap text is wider than its container` | A `pre` line, or text under `white-space: nowrap`, does not fit the page. FlashPDF never clips or breaks it silently. | Shorten the line, reduce `fontSize`, or use `white-space: pre-wrap` to wrap it. |
+| `unsupported style property: borderRadius`, `position`, `opacity`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
+| `height applies only to <img>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
+>>>>>>> theirs
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
@@ -222,25 +232,36 @@ The guidelines ask for error correction level M, a 46 mm square symbol (130.4 pt
 | `Page style={{ padding }}` | `margin`, in points, on all four sides. |
 | A second `Page`, or `break` | `breakBefore: 'page'` on a direct child of the root. |
 | `View` | `div`, `section`, `article`, `header`, `footer`, or `main`. |
+<<<<<<< ours
 | `Text` | `p`, `span`, `b`, `strong`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span` or `b` inside a `p`. |
 | `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG, JPEG, or SVG bytes. |
 | `Svg`, `Path`, `Rect`, `G`, … | `svg`, `path`, `rect`, `g`, … in lowercase with the same attributes. Text, gradients, and clip paths reject. |
+=======
+| `Text` | `p`, `span`, `b`, `strong`, `em`, `i`, `code`, `sub`, `sup`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span`, `b`, or `em` inside a `p`. |
+| `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG or JPEG bytes. |
+>>>>>>> theirs
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
 | `borderRadius`, `borderStyle`, `opacity` | The same names with CSS meanings. A radius needs the same border on all four sides, and opacity applies per element rather than to the group. |
 | `id` with `Link src="#id"` | `id` with `a href="#id"`. The link lands on the page where the element does. |
 | `bookmark` | `outline: true` bookmarks `h1` to `h6`. `data-bookmark="Title"` renames one and `data-bookmark={false}` skips it. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
-| `Font.register` | `fonts: [{ family, regular, bold }]` with TTF bytes. Regular and bold only. |
+| `Font.register` | `fonts: [{ family, regular, bold, italic, boldItalic }]` with TTF bytes. Only `regular` is required. |
+| `fontFamily: 'Times-Roman'`, `'Courier'`, `'Helvetica-Bold'` | The built-in families are `Helvetica`, `Times`, and `Courier`, or `sans-serif`, `serif`, and `monospace`. Choose the face with `fontWeight` and `fontStyle`. Other react-pdf standard names, such as `Times-Roman`, are not family names here. |
 | `fixed` header or footer | The `header` and `footer` options, one text line each. |
 | `render={({ pageNumber, totalPages }) => …}` | `<PageNumber />` and `<TotalPages />` inside `header` or `footer`. |
 | `wrap={false}` | `breakInside: 'avoid'`. |
 | `renderToBuffer`, `renderToStream`, `pdf().toBlob()` | `await render(…)` returns a `Uint8Array`. Wrap it in a `Blob` yourself. |
 | `PDFViewer`, `PDFDownloadLink` | None. FlashPDF ships no viewer or download helper. |
 
-Three differences cause most surprises:
+Four differences cause most surprises:
 
 - A `View` stacks its children in a flex column. A FlashPDF `div` is a block, which also stacks them. For a row, set `display: 'flex'`. FlashPDF follows CSS here, so a flex box is a row unless you set `flexDirection: 'column'`.
+- react-pdf adds vertical margins. FlashPDF collapses adjoining ones in a block, as a browser does, so `marginBottom: 12` above `marginTop: 8` leaves 12 points, not 20. To keep react-pdf's spacing, give the parent `display: 'flex'` and `flexDirection: 'column'`: flex items never collapse.
 - Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `em`, and `rem`.
 - `justifyContent`, `alignItems`, `flexWrap`, and `position` reject. Use `flex`, `width`, `gap`, and `textAlign`.
 
+<<<<<<< ours
 `Canvas`, `Note`, italic text, and lists have no equivalent.
+=======
+`Svg`, `Canvas`, and `Note` have no equivalent. A react-pdf list is a `View` per item with a bullet `Text`; use `ul`, `ol`, and `li` instead, which number themselves and keep a marker with its first line.
+>>>>>>> theirs

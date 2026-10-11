@@ -34,7 +34,7 @@ fn columns(values: &[(u8, f32)]) -> Vec<u8> {
 }
 
 /// `(font, size, colour, flags, text)`.
-type Run<'a> = (u8, f32, [u8; 3], u8, &'a [u8]);
+type Run<'a> = (u8, f32, [u8; 3], u16, &'a [u8]);
 
 fn paragraph(align: u8, runs: &[Run<'_>]) -> Vec<u8> {
     let runs: Vec<LinkedRun<'_>> = runs
@@ -45,7 +45,7 @@ fn paragraph(align: u8, runs: &[Run<'_>]) -> Vec<u8> {
 }
 
 /// `(font, size, colour, flags, link index, text)`; a link index sets flag bit 3.
-type LinkedRun<'a> = (u8, f32, [u8; 3], u8, Option<u16>, &'a [u8]);
+type LinkedRun<'a> = (u8, f32, [u8; 3], u16, Option<u16>, &'a [u8]);
 
 /// `links` is the URI table the runs' link indices point into.
 fn linked_paragraph(align: u8, links: &[&[u8]], runs: &[LinkedRun<'_>]) -> Vec<u8> {
@@ -59,7 +59,7 @@ fn linked_paragraph(align: u8, links: &[&[u8]], runs: &[LinkedRun<'_>]) -> Vec<u
         payload.push(*font);
         payload.extend(size.to_le_bytes());
         payload.extend(color);
-        payload.push(*flags | if link.is_some() { 8 } else { 0 });
+        payload.extend((*flags | if link.is_some() { 8 } else { 0 }).to_le_bytes());
         if let Some(link) = link {
             payload.extend(link.to_le_bytes());
         }
@@ -162,7 +162,7 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
 fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
     let mut bytes = header(VERSION, 595.0, 842.0, 36.0);
     let mut footer = 10.0_f32.to_le_bytes().to_vec();
-    footer.extend([0, 0, 0, 0, 0]);
+    footer.extend([0, 0, 0, 0, 0, 0, 0]);
     footer.extend(text("Page \u{1e} of \u{1f}".as_bytes()));
     bytes.extend(record(8, &footer));
     bytes.extend(plain(b"First"));
@@ -171,11 +171,8 @@ fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
     bytes.extend(record(255, &[]));
 
     let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "First\nPage 1 of 2");
-    assert_eq!(
-        pdf.extract_text(&[2]).unwrap().trim(),
-        "Second\nPage 2 of 2"
-    );
+    assert_eq!(crate::tests::page_text(&pdf, 1), "First\nPage 1 of 2");
+    assert_eq!(crate::tests::page_text(&pdf, 2), "Second\nPage 2 of 2");
 }
 
 #[test]
@@ -191,7 +188,7 @@ fn given_a_paragraph_with_bold_and_break_runs_when_decoding_then_paints_one_line
     ));
     bytes.extend(record(255, &[]));
     let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "Hello World\nagain");
+    assert_eq!(crate::tests::page_text(&pdf, 1), "Hello World\nagain");
     let page = *pdf.get_pages().values().next().unwrap();
     let content = String::from_utf8(pdf.get_page_content(page)).unwrap();
     let objects: Vec<&str> = content.split("ET").collect();
@@ -210,10 +207,10 @@ fn push_error(bytes: &[u8]) -> String {
 fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
     let font_bytes = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
     let mut decoder = Decoder::default();
-    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 2);
-    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 3);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 12);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 13);
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
-    for slot in [2, 3] {
+    for slot in [12, 13] {
         bytes.extend(paragraph(0, &[(slot, 10.0, [0, 0, 0], 0, b"Font")]));
     }
     bytes.extend(record(255, &[]));
@@ -268,16 +265,10 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     assert!(expected.starts_with(b"%PDF-"));
     let pdf = lopdf::Document::load_mem(&expected).unwrap();
     assert_eq!(pdf.get_pages().len(), 4);
-    assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
-        "Before\nBoxed\nrow\n1"
-    );
-    assert_eq!(
-        pdf.extract_text(&[2]).unwrap().trim(),
-        "head\nbody\nStacked"
-    );
-    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Styled top");
-    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
+    assert_eq!(crate::tests::page_text(&pdf, 1), "Before\nBoxed\nrow\n1");
+    assert_eq!(crate::tests::page_text(&pdf, 2), "head\nbody\nStacked");
+    assert_eq!(crate::tests::page_text(&pdf, 3), "Styled top");
+    assert_eq!(crate::tests::page_text(&pdf, 4), "After");
     for split in 0..=bytes.len() {
         let mut decoder = decoder();
         decoder.push(&bytes[..split]).unwrap();
@@ -333,22 +324,32 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     let mut bad_length = header(VERSION, 120.0, 60.0, 10.0);
     let mut payload = vec![0, 0, 0, 1, 0, 0];
     payload.extend(10.0_f32.to_le_bytes());
-    payload.extend([0, 0, 0, 0]);
+    payload.extend([0, 0, 0, 0, 0]);
     payload.extend(4_u32.to_le_bytes());
     payload.push(b'x');
     bad_length.extend(record(9, &payload));
     assert_eq!(push_error(&bad_length), "truncated record");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
-    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 64, b"x")]));
+    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 3 << 13, b"x")]));
     assert_eq!(push_error(&bad_flags), "invalid run flags");
 
+    let mut late_marker = header(VERSION, 120.0, 60.0, 10.0);
+    late_marker.extend(paragraph(
+        0,
+        &[
+            (0, 10.0, [0, 0, 0], 0, b"x"),
+            (0, 10.0, [0, 0, 0], 1 << 13, b"1."),
+        ],
+    ));
+    assert_eq!(push_error(&late_marker), "invalid marker run");
+
     let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);
-    bad_align.extend(paragraph(3, &[(0, 10.0, [0, 0, 0], 0, b"x")]));
+    bad_align.extend(paragraph(4, &[(0, 10.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&bad_align), "invalid text alignment");
 
     let mut unknown_font = header(VERSION, 120.0, 60.0, 10.0);
-    unknown_font.extend(paragraph(0, &[(2, 10.0, [0, 0, 0], 0, b"x")]));
+    unknown_font.extend(paragraph(0, &[(12, 10.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&unknown_font), "unknown font");
 
     let mut invalid_metadata = header(VERSION, 120.0, 60.0, 10.0);
@@ -361,7 +362,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
 
     let mut duplicate_header = header(VERSION, 120.0, 60.0, 10.0);
     let mut line = 10.0_f32.to_le_bytes().to_vec();
-    line.extend([0, 0, 0, 0, 0]);
+    line.extend([0, 0, 0, 0, 0, 0, 0]);
     line.extend(text(b"Header"));
     duplicate_header.extend(record(13, &line));
     duplicate_header.extend(record(13, &line));
@@ -411,6 +412,30 @@ fn given_invalid_box_decoration_when_decoding_then_rejects() {
     rounded.extend(record(18, &[]));
     rounded.extend(record(255, &[]));
     assert!(decode(&rounded).is_ok());
+}
+
+#[test]
+fn given_spacing_beyond_a_page_side_or_header_decoration_flags_when_decoding_then_rejects() {
+    for (flag, value, error) in [
+        (64_u16, f32::NAN, "invalid letter spacing"),
+        (128, -14_401.0, "invalid word spacing"),
+    ] {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        let mut payload = vec![0, 0, 0, 1, 0, 0];
+        payload.extend(10.0_f32.to_le_bytes());
+        payload.extend([0, 0, 0]);
+        payload.extend(flag.to_le_bytes());
+        payload.extend(value.to_le_bytes());
+        payload.extend(text(b"x"));
+        bytes.extend(record(9, &payload));
+        assert_eq!(push_error(&bytes), error);
+    }
+    let mut underlined_header = header(VERSION, 120.0, 60.0, 10.0);
+    let mut line = 10.0_f32.to_le_bytes().to_vec();
+    line.extend([0, 0, 0, 0, 0, 2, 0]);
+    line.extend(text(b"Header"));
+    underlined_header.extend(record(13, &line));
+    assert_eq!(push_error(&underlined_header), "invalid header flags");
 }
 
 #[test]
@@ -1140,7 +1165,10 @@ fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_
     let pdfa = record(20, &[0]);
     let facturx = record(20, &[4, 0, 0]);
 
-    assert!(error(&[], &[pdfa.clone(), plain(b"Total")]).starts_with("PDF/A embeds every font"));
+    for slot in [0, 4, 11] {
+        let total = paragraph(0, &[(slot, 10.0, [0, 0, 0], 0, b"Total")]);
+        assert!(error(&[], &[pdfa.clone(), total]).starts_with("PDF/A embeds every font"));
+    }
     assert_eq!(
         error(&[b"Total: 42"], std::slice::from_ref(&facturx)),
         "invalid Factur-X XML"

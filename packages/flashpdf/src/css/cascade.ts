@@ -15,19 +15,63 @@ export type StyledElement = Omit<ElementNode, "style" | "children"> & {
 };
 export type StyledNode = TextNode | StyledElement;
 
+// https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/resources/html.css
 const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	b: { fontWeight: "bold" },
 	strong: { fontWeight: "bold" },
-	th: { fontWeight: "bold", textAlign: "left" },
+	em: { fontStyle: "italic" },
+	i: { fontStyle: "italic" },
+	cite: { fontStyle: "italic" },
+	th: { fontWeight: "bold", textAlign: "center" },
+	p: { margin: "1em 0" },
 	a: { color: "#0000EE", textDecoration: "underline" },
-	hr: { borderBottom: "1pt solid black" },
-	h1: { fontSize: "2em", fontWeight: "bold" },
-	h2: { fontSize: "1.5em", fontWeight: "bold" },
-	h3: { fontSize: "1.17em", fontWeight: "bold" },
-	h4: { fontSize: "1em", fontWeight: "bold" },
-	h5: { fontSize: "0.83em", fontWeight: "bold" },
-	h6: { fontSize: "0.67em", fontWeight: "bold" },
+	u: { textDecoration: "underline" },
+	ins: { textDecoration: "underline" },
+	s: { textDecoration: "line-through" },
+	del: { textDecoration: "line-through" },
+	mark: { backgroundColor: "yellow", color: "black" },
+	small: { fontSize: "0.83em" },
+	sub: { fontSize: "0.83em", verticalAlign: "sub" },
+	sup: { fontSize: "0.83em", verticalAlign: "super" },
+	code: { fontFamily: "monospace" },
+	kbd: { fontFamily: "monospace" },
+	samp: { fontFamily: "monospace" },
+	pre: { fontFamily: "monospace", whiteSpace: "pre", margin: "1em 0" },
+	blockquote: { margin: "1em 40px" },
+	figure: { margin: "1em 40px" },
+	dd: { marginLeft: "40px" },
+	address: { fontStyle: "italic" },
+	hr: { borderBottom: "1pt solid black", margin: "0.5em 0" },
+	h1: { fontSize: "2em", fontWeight: "bold", margin: "0.67em 0" },
+	h2: { fontSize: "1.5em", fontWeight: "bold", margin: "0.83em 0" },
+	h3: { fontSize: "1.17em", fontWeight: "bold", margin: "1em 0" },
+	h4: { fontSize: "1em", fontWeight: "bold", margin: "1.33em 0" },
+	h5: { fontSize: "0.83em", fontWeight: "bold", margin: "1.67em 0" },
+	h6: { fontSize: "0.67em", fontWeight: "bold", margin: "2.33em 0" },
 };
+
+/** The user-agent rules that depend on nesting: a list inside a list has no vertical margin, and
+ *  an unordered one cycles through disc, circle, and square as it goes deeper. */
+function listStyles(tag: Tag, ancestor: Elem | undefined): CascadedStyle | undefined {
+	if (tag !== "ul" && tag !== "ol" && tag !== "dl") return undefined;
+	let depth = 0;
+	let nested = false;
+	for (; ancestor; ancestor = ancestor.parent) {
+		if (ancestor.tag === "ul" || ancestor.tag === "ol") depth++;
+		if (ancestor.tag === "dl") nested = true;
+	}
+	nested ||= depth > 0;
+	return {
+		margin: nested ? "0" : "1em 0",
+		...(tag === "dl"
+			? {}
+			: {
+					paddingLeft: "40px",
+					listStyleType:
+						tag === "ol" ? "decimal" : ["disc", "circle", "square"][Math.min(depth, 2)]!,
+				}),
+	};
+}
 
 function cascade(target: CascadedStyle, source: CascadedStyle | undefined) {
 	if (!source) return;
@@ -155,7 +199,8 @@ function visit(
 	const byStyle = (parent.children ??= new Map());
 	let cache = byStyle.get(value.style);
 	if (!cache) byStyle.set(value.style, (cache = new Map()));
-	const key = `${value.tag}\n${matched.map((rule) => rule.order).join(",")}`;
+	const list = listStyles(value.tag, elem.parent);
+	const key = `${value.tag}\n${list?.margin ?? ""},${list?.listStyleType ?? ""}\n${matched.map((rule) => rule.order).join(",")}`;
 	let computed = cache.get(key);
 	if (!computed) {
 		// No prototype, so an own `__proto__` key stays a key that style() rejects.
@@ -170,6 +215,7 @@ function visit(
 				if (initial !== undefined && !(name in result))
 					(result as Record<string, unknown>)[name] = initial;
 			cascade(result, uaStyles[value.tag]);
+			cascade(result, list);
 			const own = inline(value.style);
 			for (const rule of matched) cascade(result, rule.declarations().normal);
 			cascade(result, own.normal);

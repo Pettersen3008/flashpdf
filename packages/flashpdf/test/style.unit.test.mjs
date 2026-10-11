@@ -2,7 +2,18 @@ import assert from "node:assert/strict";
 
 import { test } from "vitest";
 
-import { color, dimension, edges, font, helvetica, point, style } from "../dist/style.js";
+import {
+	color,
+	counter,
+	courier,
+	dimension,
+	edges,
+	font,
+	helvetica,
+	point,
+	style,
+	times,
+} from "../dist/style.js";
 
 test("given pt, px, em, and rem lengths, when resolving a point value, then converts to points", () => {
 	assert.equal(point("12pt"), 12);
@@ -79,17 +90,36 @@ test("given a flex basis that a column would drop, when normalizing, then reject
 	assert.equal(style({ flex: "none", width: "80pt" }).flex, 0);
 });
 
-test("given a font-family list, when selecting a font, then uses the first registered family or a generic fallback", () => {
+test("given a font-family list, when selecting a font, then takes the first registered family or built-in match in order", () => {
 	const inter = { regular: 2, bold: 3 };
 	const fonts = new Map([
 		["Helvetica", helvetica],
 		["Inter", inter],
 	]);
-	const pick = (fontFamily) => font({ fontFamily }, helvetica, false, fonts).family;
+	const pick = (fontFamily, inherited = helvetica) =>
+		font({ fontFamily }, inherited, false, false, fonts).family;
 	assert.equal(pick("'Missing', \"Inter\", sans-serif"), inter);
 	assert.equal(pick("Missing, system-ui, sans-serif"), helvetica);
 	assert.equal(pick("Arial"), helvetica);
-	assert.throws(() => pick("Missing, monospace"), /unregistered font family: Missing, monospace/);
+	assert.equal(pick("Georgia, 'Times New Roman', serif"), times);
+	assert.equal(pick("Missing, monospace"), courier);
+	assert.equal(pick("Courier New, serif"), courier);
+	assert.equal(pick("Inter, serif"), inter);
+	// CSS reads a quoted generic keyword as a family name, so it matches nothing here.
+	assert.equal(pick("'serif', monospace"), courier);
+});
+
+test("given a font-family list with no match, when selecting a font, then rejects naming the families, and inherits when there is no list", () => {
+	const fonts = new Map([["Helvetica", helvetica]]);
+	assert.throws(
+		() => font({ fontFamily: "Missing, 'Also Missing', cursive" }, times, false, false, fonts),
+		/unregistered font family: Missing, 'Also Missing', cursive \(register it in fonts/,
+	);
+	assert.throws(
+		() => font({ fontFamily: "'serif'" }, times, false, false, fonts),
+		/unregistered font family: 'serif'/,
+	);
+	assert.equal(font({}, courier, false, false, fonts).family, courier);
 });
 
 test("given a font weight outside normal, bold, and 1 to 1000, when normalizing, then rejects it", () => {
@@ -104,4 +134,66 @@ test("given a rem width, as minified Tailwind emits, when parsing it, then conve
 
 test("given a width with more digits than a float holds, when normalizing, then rejects it", () => {
 	assert.throws(() => style({ width: `${"9".repeat(45)}pt` }), /invalid width: 9+pt/);
+});
+
+test("given an oblique angle, a percent spacing, a wavy line, or another transform, when normalizing, then rejects naming the value", () => {
+	for (const [value, message] of [
+		[{ fontStyle: "oblique 10deg" }, /invalid fontStyle: oblique 10deg/],
+		[{ letterSpacing: "10%" }, /invalid letterSpacing: 10%/],
+		[{ wordSpacing: "20000pt" }, /invalid wordSpacing: 20000pt/],
+		[{ textDecoration: "underline wavy" }, /text-decoration: wavy is not supported/],
+		[{ textTransform: "full-width" }, /invalid textTransform: full-width/],
+	])
+		assert.throws(() => style(value), message);
+});
+
+test("given list-style, when normalizing, then omitted parts reset and unsupported parts reject", () => {
+	assert.deepEqual(
+		[
+			style({ listStyle: "inside" }).listStyleType,
+			style({ listStyle: "inside" }).listStylePosition,
+		],
+		["disc", "inside"],
+	);
+	assert.equal(style({ listStyleType: "square", listStyle: "none" }).listStyleType, "none");
+	assert.equal(style({ listStyle: "none upper-roman" }).listStyleType, "upper-roman");
+	assert.throws(() => style({ listStyle: "url(x.png)" }), /list-style-image is not supported/);
+	assert.throws(
+		() => style({ listStyleType: "lower-greek" }),
+		/invalid listStyleType: lower-greek/,
+	);
+	assert.throws(() => style({ listStylePosition: "middle" }), /invalid listStylePosition/);
+	assert.throws(() => style({ listStyleImage: "none" }), /listStyleImage/);
+});
+
+test("given ordinals outside a counter's range, when numbering, then letters and numerals count and the rest fall back to decimal", () => {
+	assert.deepEqual(
+		[1, 26, 27, 703].map((n) => counter("lower-alpha", n)),
+		["a", "z", "aa", "aaa"],
+	);
+	assert.deepEqual(
+		[4, 9, 1994, 3999].map((n) => counter("upper-roman", n)),
+		["IV", "IX", "MCMXCIV", "MMMCMXCIX"],
+	);
+	assert.deepEqual(
+		[0, -3, 4000].map((n) => [counter("lower-alpha", n), counter("lower-roman", n)]),
+		[
+			["0", "0"],
+			["-3", "-3"],
+			["ewv", "4000"],
+		],
+	);
+	assert.deepEqual(
+		[7, 0, -5, 123].map((n) => counter("decimal-leading-zero", n)),
+		["07", "00", "-05", "123"],
+	);
+});
+
+test("given white-space and vertical-align values, when normalizing, then only the supported keywords pass", () => {
+	for (const whiteSpace of ["normal", "nowrap", "pre", "pre-wrap", "pre-line"])
+		style({ whiteSpace });
+	assert.throws(() => style({ whiteSpace: "break-spaces" }), /invalid whiteSpace: break-spaces/);
+	for (const verticalAlign of ["baseline", "sub", "super"]) style({ verticalAlign });
+	assert.throws(() => style({ verticalAlign: "top" }), /invalid verticalAlign: top/);
+	assert.throws(() => style({ verticalAlign: "toString" }), /invalid verticalAlign/);
 });

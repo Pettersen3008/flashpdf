@@ -19,7 +19,7 @@ test("given the core's glyph errors, when mapped, then names the character, code
 	);
 	assert.match(
 		glyphError(new Error("UnsupportedCharacter('\\u{ad}')")).message,
-		/^Helvetica has no glyph for "­" \(U\+00AD\); register a font that has it$/,
+		/^the built-in font has no glyph for "­" \(U\+00AD\); register a font that has it$/,
 	);
 	assert.equal(glyphError(new Error("PageOverflow")).message, "PageOverflow");
 });

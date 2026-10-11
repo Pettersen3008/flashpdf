@@ -15,8 +15,53 @@ const REACT_PROVIDER = Symbol.for("react.provider");
 type Render = (props: Record<string, unknown>) => unknown;
 type Component = { render: Render; name: string };
 
-export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
-export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
+export const blockTags = [
+	"main",
+	"div",
+	"section",
+	"article",
+	"header",
+	"footer",
+	"ul",
+	"ol",
+	"li",
+	"dl",
+	"dt",
+	"dd",
+	"blockquote",
+	"address",
+	"figure",
+	"figcaption",
+	"nav",
+	"aside",
+] as const;
+export const textTags = [
+	"p",
+	"span",
+	"b",
+	"strong",
+	"em",
+	"i",
+	"cite",
+	"small",
+	"sub",
+	"sup",
+	"u",
+	"ins",
+	"s",
+	"del",
+	"mark",
+	"code",
+	"kbd",
+	"samp",
+	"pre",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+] as const;
 export const tableTags = ["table", "thead", "tbody", "tfoot", "tr", "th", "td"] as const;
 export const tags = [
 	...blockTags,
@@ -48,18 +93,17 @@ export type ElementNode = {
 	readonly drawing?: Drawing | undefined;
 	/** `data-bookmark` on a heading: its outline title, or `false` to leave it out. */
 	readonly bookmark?: string | false | undefined;
+	/** `<ol start>`, `<ol reversed>`, and `<li value>`. */
+	readonly start?: number | undefined;
+	readonly reversed?: boolean | undefined;
+	readonly value?: number | undefined;
 };
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
-	em: "italic faces are not supported yet; use <span>",
-	i: "italic faces are not supported yet; use <span>",
 	colgroup: "column widths come from the first row's <th>/<td> width or flex",
 	col: "column widths come from the first row's <th>/<td> width or flex",
 	caption: "captions are not supported; use a <p> before the table",
-	ul: "lists are not supported yet; use one <p> per item",
-	ol: "lists are not supported yet; use one <p> per item",
-	li: "lists are not supported yet; use one <p> per item",
 };
 
 export function label(node: {
@@ -283,6 +327,22 @@ function image(input: Record<string, unknown>, where: string, chain: string, dep
 	return { drawing: svg.drawing, alt: alt ?? svg.alt };
 }
 
+/** An `ol` `start` or `li` `value`: a 32-bit integer, as a number or an integer string. */
+function ordinal(value: unknown, name: string, where: string): number | undefined {
+	if (value === undefined) return undefined;
+	const number =
+		typeof value === "string" && /^[+-]?\d+$/.test(value.trim()) ? Number(value) : value;
+	if (typeof number !== "number" || !Number.isInteger(number) || Math.abs(number) > 2 ** 31 - 1)
+		throw new Error(`${name} must be an integer${where}`);
+	return number;
+}
+
+function reversed(value: unknown, where: string): boolean | undefined {
+	if (value !== undefined && typeof value !== "boolean")
+		throw new Error(`reversed must be a boolean${where}`);
+	return value;
+}
+
 function isTag(value: unknown): value is Tag {
 	return typeof value === "string" && (tags as readonly string[]).includes(value);
 }
@@ -332,7 +392,11 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 					? Object.keys(object(element.props))
 					: heading
 						? ["data-bookmark"]
-						: [];
+						: element.type === "ol"
+							? ["start", "reversed"]
+							: element.type === "li"
+								? ["value"]
+								: [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
 		throw new Error(`<${element.type}> has no children${where}`);
@@ -359,6 +423,10 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		...(element.type === "a" ? { href: href(input.href, where) } : {}),
 		...(element.type === "svg" ? vector(input, chain, depth) : {}),
 		...(heading ? bookmark(input["data-bookmark"], where) : {}),
+		...(element.type === "ol"
+			? { start: ordinal(input.start, "start", where), reversed: reversed(input.reversed, where) }
+			: {}),
+		...(element.type === "li" ? { value: ordinal(input.value, "value", where) } : {}),
 	};
 	const self = label(node);
 	// An svg's children became its drawing.
