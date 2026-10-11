@@ -1,4 +1,5 @@
 import type { Style } from "../element.js";
+import { tags } from "../tree.js";
 import { property } from "./properties.js";
 import type {
 	Declarations,
@@ -39,7 +40,9 @@ function selectorPart(part: string): SelectorPart {
 	};
 }
 /** Returns undefined for selector syntax outside the subset (`*`, pseudo-classes,
- *  attributes, escapes, sibling combinators) so the caller can skip the rule. */
+ *  attributes, escapes, sibling combinators) so the caller can skip the rule. A type
+ *  selector FlashPDF never renders (`html`, `body`, `button`) can never match, so it
+ *  is skipped too. */
 export function selector(source: string): SelectorPiece[] | undefined {
 	const pieces = normalizeSelector(source).split(/(>| )/).filter(Boolean);
 	if (
@@ -47,7 +50,15 @@ export function selector(source: string): SelectorPiece[] | undefined {
 		pieces.some((part, index) => (index % 2 ? part !== " " && part !== ">" : !PART.test(part)))
 	)
 		return undefined;
-	return pieces.map((part, index) => (index % 2 === 0 ? selectorPart(part) : (part as " " | ">")));
+	const compiled = pieces.map((part, index) =>
+		index % 2 === 0 ? selectorPart(part) : (part as " " | ">"),
+	);
+	return compiled.some(
+		(part) =>
+			typeof part !== "string" && part.tag && !(tags as readonly string[]).includes(part.tag),
+	)
+		? undefined
+		: compiled;
 }
 function specificity(pieces: readonly SelectorPiece[]): Specificity {
 	let ids = 0;
@@ -159,12 +170,15 @@ function quoted(source: string, start: number) {
 	}
 	return source.length;
 }
-/** Index just past the `}` matching the `{` at `open`; braces inside strings do not count. */
+/** Index just past the `}` matching the `{` at `open`; braces inside strings do not count,
+ *  and an escape such as the `\'` in Tailwind's `.\[\&_svg\:not\(\[class\*\=\'size-\'\]\)\]`
+ *  opens no string. */
 function closing(source: string, open: number) {
 	let depth = 0;
 	for (let index = open; index < source.length; index++) {
 		const character = source[index];
-		if (character === '"' || character === "'") index = quoted(source, index);
+		if (character === "\\") index++;
+		else if (character === '"' || character === "'") index = quoted(source, index);
 		else if (character === "{") depth++;
 		else if (character === "}" && --depth === 0) return index + 1;
 	}
@@ -174,7 +188,8 @@ function closing(source: string, open: number) {
 function skipAtRule(source: string, start: number) {
 	for (let index = start; index < source.length; index++) {
 		const character = source[index];
-		if (character === '"' || character === "'") index = quoted(source, index);
+		if (character === "\\") index++;
+		else if (character === '"' || character === "'") index = quoted(source, index);
 		else if (character === ";") return index + 1;
 		else if (character === "{") return closing(source, index);
 		else if (character === "}") break;

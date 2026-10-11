@@ -24,7 +24,7 @@ export function point(value: unknown, parent = 12, positive = false): number {
 	return number(Number(match[1]) * scale, positive);
 }
 
-const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|%)$/;
+const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|rem|%)$/;
 /** A `width` or img `height`: points (kind 1) or percent of the container width (kind 2). */
 export function dimension(
 	value: unknown,
@@ -35,7 +35,7 @@ export function dimension(
 		typeof value === "number"
 			? value
 			: match
-				? Number(match[1]) * (match[2] === "px" ? 0.75 : 1)
+				? Number(match[1]) * (match[2] === "px" ? 0.75 : match[2] === "rem" ? 12 : 1)
 				: NaN;
 	// The engine takes f32, so a long digit string must not round to Infinity.
 	if (!(amount > 0) || !Number.isFinite(Math.fround(amount)))
@@ -43,15 +43,32 @@ export function dimension(
 	return { kind: match?.[2] === "%" ? 2 : 1, value: Math.fround(amount) };
 }
 
-const FLEX_KEYWORD: Record<string, number> = { none: 0, initial: 0, auto: 1 };
-/** Only grow survives from the `flex` shorthand; shrink and basis have no meaning without content sizing. */
-export function flexGrow(value: unknown): number {
-	if (typeof value === "number") return number(value);
+const FLEX_KEYWORD = new Map([
+	["none", 0],
+	["initial", 0],
+	["auto", 1],
+]);
+/** Only grow survives from the `flex` shorthand; shrink has no meaning without content sizing.
+ *  The basis is reported so a caller can reject one that would be dropped. */
+export function flexGrow(value: unknown): { grow: number; basis: "zero" | "auto" | "length" } {
+	if (typeof value === "number") return { grow: number(value), basis: "zero" };
 	if (typeof value !== "string") throw new Error(`invalid flex: ${String(value)}`);
-	const first = value.trim().split(/\s+/)[0]!;
-	const grow = FLEX_KEYWORD[first] ?? Number(first);
+	const [first, ...rest] = value.trim().split(/\s+/);
+	const keyword = FLEX_KEYWORD.get(first!);
+	if (keyword !== undefined) return { grow: keyword, basis: "auto" };
+	const grow = Number(first);
 	if (Number.isNaN(grow)) throw new Error(`invalid flex: ${value}`);
-	return number(grow);
+	// After grow and an optional unitless shrink, the first other token is the basis.
+	const basis = rest.find((token) => !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(token));
+	return {
+		grow: number(grow),
+		basis:
+			basis === undefined || /^(?:0+\.?0*|\.0+)(?:%|[a-z]+)?$/.test(basis)
+				? "zero"
+				: basis === "auto"
+					? "auto"
+					: "length",
+	};
 }
 
 /** Undefined is `normal`; a unitless number inherits as a factor, a length or percent as points. */

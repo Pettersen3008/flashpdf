@@ -83,9 +83,11 @@ const properties = {
 
 type PropertyName = keyof typeof properties;
 const propertyEntries = Object.entries(properties) as [PropertyName, PropertyDefinition][];
-const cssNames = Object.fromEntries(
+const cssNames = new Map<string, PropertyName>(
 	propertyEntries.map(([name, definition]) => [definition.css ?? name, name]),
-) as Record<string, PropertyName>;
+);
+// Tailwind's `underline` and `line-through`; text-decoration here takes only line values anyway.
+cssNames.set("text-decoration-line", "textDecoration");
 export const inherited = new Set<string>(
 	propertyEntries.filter(([, definition]) => definition.inherited).map(([name]) => name),
 );
@@ -109,10 +111,14 @@ export function property(
 	context = "",
 ): keyof Style | RejectedProperty | `--${string}` {
 	if (name.startsWith("--")) return name as `--${string}`;
-	const result = cssNames[name] ?? (name as keyof Style | RejectedProperty);
+	// CSS property names are ASCII case-insensitive; camelCase is the JSX spelling, not CSS.
+	const result = cssNames.get(name.toLowerCase());
+	if (result === undefined) {
+		const kebab = name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+		const hint = cssNames.has(kebab) ? ` (use kebab-case: ${kebab})` : "";
+		throw new Error(`unsupported CSS property: ${name}${hint}${context}`);
+	}
 	const reason = unsupported[result];
 	if (reason) throw new Error(`unsupported CSS property: ${name} (${reason})${context}`);
-	if (!supported.has(result as never))
-		throw new Error(`unsupported CSS property: ${name}${context}`);
 	return result;
 }

@@ -33,6 +33,8 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 test("given at-rules and selectors outside the subset, when validating a stylesheet, then skips them instead of failing", () => {
 	const source = `@import "x.css"; @layer a, b; @media print { .a { line-height: 1 } }
 		.a:hover, a[href], .a > *, :root, .md\\:flex, .a + .b, . { line-height: 1; content: "}" }
+		html, body button { -webkit-text-size-adjust: 100%; color: notacolor }
+		@layer utilities { .\\[class\\*\\=\\'size-\\'\\] { width: 1rem } }
 		.a { color: red }`;
 	assert.equal(stylesheet(source), source);
 });
@@ -95,7 +97,7 @@ const tailwind = `/*! tailwindcss v4.1.0 | MIT License | https://tailwindcss.com
 `;
 
 test("given a Tailwind v4 sheet, when only .p-4 is used, then unused rules are ignored and the padding applies", async () => {
-	assert.throws(() => stylesheet(tailwind), /unsupported color: oklch.*"\.text-red-500" at 12:1/);
+	stylesheet(tailwind);
 	const [main] = await resolve(jsx("main", { className: "p-4", children: "x" }), [tailwind]);
 	assert.deepEqual(boxStyle(main.style, 12).padding, [12, 12, 12, 12]);
 });
@@ -188,8 +190,8 @@ test("given cascading shorthands, selector whitespace, and transparent paint, wh
 	assert.deepEqual(boxStyle(style({ border: "1pt solid transparent" }), 12).border, [0, 0, 0, 0]);
 	assert.deepEqual(boxStyle(style({ border: "none" }), 12).border, [0, 0, 0, 0]);
 	assert.throws(
-		() => boxStyle(style({ border: "1pt solid oklch(50% 0.1 20)" }), 12),
-		/unsupported color: oklch\(50% 0.1 20\)/,
+		() => boxStyle(style({ border: "1pt solid lab(50% 40 20)" }), 12),
+		/unsupported color: lab\(50% 40 20\)/,
 	);
 	assert.throws(
 		() => style({ color: "transparent" }) && color("transparent"),
@@ -260,4 +262,55 @@ test("given an invalid value without var(), when validating a stylesheet, then r
 		/invalid length: banana.*"\.b" at 2:1/,
 	);
 	assert.equal(stylesheet(".c { color: var(--brand) }"), ".c { color: var(--brand) }");
+});
+
+test("given calc(), color-mix(), and custom property values, when validating a stylesheet, then defers them to render", async () => {
+	const css = stylesheet(
+		".a { --brand: notacolor; margin: calc(0.25rem * 2); background-color: color-mix(in oklab, #000 50%, transparent) }",
+	);
+	const [main] = await resolve(jsx("main", { className: "a", children: "x" }), [css]);
+	assert.throws(() => boxStyle(main.style, 12), /invalid length: calc\(0\.25rem/);
+});
+
+test("given oklch() and oklab() colours, when resolving them, then converts to clipped sRGB", () => {
+	assert.deepEqual(color("oklch(63.7% 0.237 25.331)"), [0xfb, 0x2c, 0x36]);
+	assert.deepEqual(color("oklab(0.62796 0.22486 0.12585)"), [255, 0, 0]);
+	assert.deepEqual(color("oklch(70% 0.4 150 / 1)"), [0, 0xd6, 0]);
+	assert.throws(() => color("oklch(50% 0.1 20 / 50%)"), /opacity is not supported/);
+});
+
+test("given inherit, initial, and currentcolor, when resolving styles, then they take the parent's value, the initial value, and the element's colour", async () => {
+	const [main] = await resolve(
+		jsx("main", {
+			style: { color: "red", backgroundColor: "blue", margin: "4pt" },
+			children: [
+				jsx("div", {
+					style: { backgroundColor: "inherit", margin: "inherit", color: "initial" },
+					children: "x",
+				}),
+				jsx("div", { style: { borderBottom: "1pt solid currentcolor" }, children: "x" }),
+			],
+		}),
+	);
+	const [inheriting, current] = main.children;
+	assert.equal(inheriting.style.color, "black");
+	assert.deepEqual(boxStyle(inheriting.style, 12).background, [0, 0, 255]);
+	assert.deepEqual(boxStyle(inheriting.style, 12).margin, [4, 4, 4, 4]);
+	assert.deepEqual(boxStyle(current.style, 12).borderColor[2], [255, 0, 0]);
+	const css = ".t { color: currentcolor; background-color: inherit; margin: initial }";
+	assert.equal(stylesheet(css), css);
+});
+
+test("given text-decoration-line and mixed-case names, when parsing a stylesheet, then maps them like text-decoration", async () => {
+	const [paragraph] = await resolve(jsx("p", { className: "u", children: "x" }), [
+		".u { TEXT-DECORATION-LINE: underline }",
+	]);
+	assert.equal(paragraph.style.textDecoration, "underline");
+});
+
+test("given a camelCase property name in a stylesheet, when parsing, then rejects with the kebab-case name", () => {
+	assert.throws(
+		() => stylesheet("p { fontSize: 20pt }"),
+		/unsupported CSS property: fontSize \(use kebab-case: font-size\) in selector "p" at 1:1/,
+	);
 });

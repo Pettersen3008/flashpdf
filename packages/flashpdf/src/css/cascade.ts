@@ -99,8 +99,10 @@ function resolveVariable(
 	return resolved;
 }
 
-function resolveFontSize(result: CascadedStyle, parent: CascadedStyle) {
-	if (typeof result.fontSize !== "string") return;
+function resolveFontSize(result: CascadedStyle, parent: NormalizedStyle) {
+	// `inherit` and `initial` resolve in normalize().
+	if (typeof result.fontSize !== "string" || /^\s*(?:inherit|initial)\s*$/i.test(result.fontSize))
+		return;
 	const parentSize = typeof parent.fontSize === "number" ? parent.fontSize : 12;
 	result.fontSize = point(result.fontSize, parentSize, true);
 }
@@ -110,6 +112,7 @@ function visit(
 	rules: Rule[],
 	ancestors: Identity[],
 	parent: CascadedStyle,
+	parentStyle: NormalizedStyle,
 	chain: string,
 ): StyledNode {
 	if (value.kind === "text") return value;
@@ -139,14 +142,14 @@ function visit(
 					new Set(key.startsWith("--") ? [key] : []),
 					(budget ??= { expansions: 0 }),
 				);
-		resolveFontSize(result, parent);
-		resolved = style(result);
+		resolveFontSize(result, parentStyle);
+		resolved = style(result, parentStyle);
 	} catch (error) {
 		throw locate(error, where);
 	}
 	ancestors.push(identity);
 	const children = value.children.map((child) =>
-		visit(child, rules, ancestors, result, chain ? `${self} > ${chain}` : self),
+		visit(child, rules, ancestors, result, resolved, chain ? `${self} > ${chain}` : self),
 	);
 	ancestors.pop();
 	return { ...value, style: resolved, where, children };
@@ -159,5 +162,5 @@ export function resolveStyles(
 	const rules = sheets.flatMap(parse);
 	for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
 	rules.sort((a, b) => compareSpecificity(a.specificity, b.specificity) || a.order - b.order);
-	return value.map((node) => visit(node, rules, [], {}, ""));
+	return value.map((node) => visit(node, rules, [], {}, {}, ""));
 }
