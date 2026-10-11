@@ -4,7 +4,7 @@ use pdf_writer::{Content, Name, Str};
 
 use crate::font::font_name;
 use crate::geometry::Point;
-use crate::layout::{LayoutBuffer, Segment};
+use crate::layout::{LayoutBuffer, PositionedBox, Segment};
 use crate::{FontId, Pt, Rgb, TextAlign};
 
 /// A `/Link` annotation rectangle in page coordinates: `[x1, y1, x2, y2]`.
@@ -74,19 +74,17 @@ impl<'a> PdfPainter<'a> {
                 }
             }
         }
-        if self.tags.is_some() {
-            self.content.begin_marked_content(Name(b"Artifact"));
-        }
-        self.paint_boxes(layout, origin);
-        if self.tags.is_some() {
-            self.content.end_marked_content();
-        }
+        self.paint_boxes(&layout.boxes, origin);
         self.paint_images(layout, lines.clone(), origin, &ids);
         self.paint_text(layout, lines, origin, &ids);
     }
 
-    fn paint_boxes(&mut self, layout: &LayoutBuffer, origin: Point) {
-        for paint in &layout.boxes {
+    /// Backgrounds and borders, as one artifact when tagged.
+    pub(crate) fn paint_boxes(&mut self, boxes: &[PositionedBox], origin: Point) {
+        if self.tags.is_some() {
+            self.content.begin_marked_content(Name(b"Artifact"));
+        }
+        for paint in boxes {
             let x = origin.x.get() + paint.origin.x.get();
             let y = origin.y.get() - paint.origin.y.get() - paint.height.get();
             if let Some(color) = paint.style.background {
@@ -109,6 +107,9 @@ impl<'a> PdfPainter<'a> {
                     self.content.rect(x, y, width, height).fill_nonzero();
                 }
             }
+        }
+        if self.tags.is_some() {
+            self.content.end_marked_content();
         }
     }
 

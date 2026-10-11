@@ -508,6 +508,71 @@ test("given a long margin-only wrapper, when rendering, then it paginates", asyn
 	assert.match(string(pdf), /\/Count 2/);
 });
 
+test("given a long table in a bordered card inside a padded main, when rendering, then both boxes split and the header row repeats on every page", async () => {
+	const items = Array.from({ length: 150 }, (_, index) => `Item ${index + 1}`);
+	const pdf = await render(
+		jsx("main", {
+			style: { padding: 24, background: "#f9fafb" },
+			children: jsx("div", {
+				style: { border: "1pt solid #d0d5dd", padding: 8 },
+				children: jsxs("table", {
+					children: [
+						jsx("thead", { children: jsx("tr", { children: jsx("th", { children: "Name" }) }) }),
+						jsx("tbody", {
+							children: items.map((item) => jsx("tr", { children: jsx("td", { children: item }) })),
+						}),
+					],
+				}),
+			}),
+		}),
+		{ header: jsx("header", { children: "Acme" }) },
+	);
+	const path = new URL("../../../dist/split-boxes.pdf", import.meta.url);
+	writeFileSync(path, pdf);
+	const pages = (...flags) => {
+		const parsed = spawnSync(
+			"cargo",
+			[
+				"run",
+				"--locked",
+				"-q",
+				"-p",
+				"flashpdf-core",
+				"--example",
+				"validate_pdf",
+				"--",
+				path.pathname,
+				"3",
+				...flags,
+			],
+			{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+		);
+		assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+		return parsed.stdout.split("\f");
+	};
+	const body = pages().flatMap((page) => {
+		assert.match(page, /^Name\n[\s\S]*\nAcme$/);
+		return page.split("\n").filter((line) => line.startsWith("Item"));
+	});
+	assert.deepEqual(body, items);
+	// The card's 475pt-wide top edge paints on the first page only, its bottom edge on the last.
+	assert.deepEqual(
+		pages("--operators").map((page) => page.match(/ 475 1 re/g)?.length ?? 0),
+		[1, 0, 1],
+	);
+	await assert.rejects(
+		render(
+			jsx("main", {
+				children: jsx("div", {
+					style: { padding: 8, breakInside: "avoid" },
+					children: items.map((item) => jsx("p", { children: item })),
+				}),
+			}),
+		),
+		/^Error: PageOverflow: the box is taller than a page; drop break-inside: avoid on <div> in <main>$/,
+	);
+});
+
 test("given per-edge borders and hr, when rendering, then emits native rules", async () => {
 	const pdf = await render(
 		jsx("main", {
@@ -730,6 +795,10 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 		[{ height: 40 }, /height applies only to <img> \(block height comes from content\) on <main>/],
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
 		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
+		[
+			{ boxDecorationBreak: "clone" },
+			/boxDecorationBreak \(.*clone is not implemented\) on <main>/,
+		],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
 		[{ width: "40pt" }, /width applies only to a flex row child on <main>/],

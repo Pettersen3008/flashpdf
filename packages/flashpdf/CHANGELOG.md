@@ -9,6 +9,8 @@
 - `mm`, `cm`, `in`, `pc`, and `Q` lengths wherever a length or width is accepted, converted at 72pt per inch.
 - `header` and `footer` take any element tree the body takes: several lines, bold and coloured runs, links, flex rows and columns, images, tables, borders, and backgrounds. `PageNumber` and `TotalPages` work anywhere inside them. Each page lays its header and footer out again with its own numbers; the reserved height counts every number as ten digits.
 - `firstPageHeader` and `firstPageFooter` replace the header and footer on the first page, and `null` leaves the first page without one. Each page reserves the height of the header and footer it paints.
+- A box with padding, a border, a background, or side margins splits across pages once it is taller than a page, like CSS `box-decoration-break: slice`. The first page draws its top border and padding, the last page its bottom ones, and every page its side borders, side padding, and background; the content continues below the page header. Nested boxes split too, and a table inside one streams its rows and repeats its header on every page. Before, such a box failed with `PageOverflow`, so an invoice wrapped in `<main style={{ padding: 24 }}>` could not pass one page. A box that fits on one page still moves whole, so documents that rendered before keep their bytes.
+- The engine measures a box it buffers each time its commands double past 64 KiB and streams the box once it is taller than a page, so memory stays near one page. A 10,000-row table in a padded, bordered card renders 176 pages in 4.6 MB of WASM memory, against 4.1 MB for the same table outside a box; before, it grew to 31.7 MB and failed. The WASM grows by 6 KB raw (4 KB gzip).
 
 ### Changed
 
@@ -21,6 +23,7 @@
 - Content streams set `rg` and `Tf` only when the page's fill colour or font changes, not again for every line and table cell, and print colours with three decimals instead of float noise such as `0.13333334`. The 10,000-row invoice's uncompressed content shrinks from 3.25 MB to 1.96 MB and the PDF from 288 KB to 265 KB.
 - The binary protocol is version 9: a `TableStart`'s footer rows follow its header rows, before the body rows. The JavaScript and WASM halves ship together, so this affects no public API.
 - The binary protocol is version 11: each `RowStart` column carries a slot byte that starts a cell with its vertical alignment and optional row span, joins the cell to its left, or marks a column a row span covers. The JavaScript and WASM halves ship together, so this affects no public API.
+- A `PageOverflow` inside a box names the content that does not fit instead of suggesting document margins, and a `break-inside: avoid` box taller than a page says to drop `break-inside: avoid`. `box-decoration-break` rejects with a reason, because a split box always paints as `slice` does.
 ### Fixed
 
 - A table's body rows stream: the engine lays out and places each row as it arrives and keeps only the header, footer, and current row. Before, the whole table buffered, so 20,000 padded rows (30,000 plain) failed with `block exceeds 16 MiB`, and 10,000 rows grew WASM memory to 29 MB. 50,000 rows now render in 16 MB. A table inside a box with padding, a border, a background, or horizontal margins, a flex row, or a `break-inside: avoid` group still buffers whole.

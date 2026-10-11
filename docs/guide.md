@@ -38,8 +38,7 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `unsupported element <em>` or `<i>` | Only regular and bold faces exist, so there is no italic. | Use `<b>` or a `<span>` with a colour. |
 | `unsupported style property: fontStyle`, `unsupported CSS property: font-style` | Same. | Delete the declaration. |
 | `unsupported CSS property: letter-spacing (text shaping is not implemented)` | Text has no shaping, so no tracking. | Delete the declaration. A rule that matches no rendered element is ignored. |
-| `PageOverflow: use document margins or split this decorated box` | A box with padding, a border, or a background cannot split across pages. A decorated root holding more than one page of content overflows. | Move the root's padding to the `margin` option. Drop its border and background, and decorate the cards inside it instead. |
-| `PageOverflow: the table is taller than a page` or `the image is taller than the page` | An atomic block has to fit one page. | Remove `break-inside: avoid` from the table, or reduce the image height. |
+| `PageOverflow: the box is taller than a page`, `the table is taller than a page`, or `the image is taller than the page` | An atomic block has to fit one page. | Remove `break-inside: avoid` from the box or table, or reduce the image height. |
 | `Helvetica has no glyph for "−" (U+2212)` | The default font covers WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
 | `src must be the image's PNG or JPEG bytes as a Uint8Array` | `img` does not take a URL, path, or `data:` URL. | Read or fetch the file and pass its bytes. |
 | `unsupported element <ul>` | There are no lists. | One `<p>` per item that starts with `•`. |

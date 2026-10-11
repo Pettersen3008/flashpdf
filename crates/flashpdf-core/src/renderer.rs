@@ -1,14 +1,14 @@
 use pdf_writer::Content;
 
 use crate::command::{uniform_rows, CommandParser, OwnedCommand};
-use crate::document::{Block, Document, Element, Table};
+use crate::document::{Block, BoxNode, Document, Element, Table};
 use crate::font::{EmbeddedFont, Font, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
-use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
+use crate::layout::{painted, table_width, LayoutBuffer, LayoutEngine, PositionedBox};
 use crate::paint::{PageLink, PageTag, PaintState, PdfPainter};
 use crate::pdf::{finish_pdf, Metadata};
-use crate::{Command, FontId, Page, Pt, RenderError};
+use crate::{BoxStyle, Command, FontId, Page, Pt, RenderError, TextStyle};
 
 /// Total content-stream bytes a document may paint before `finish`.
 pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
@@ -25,6 +25,11 @@ pub struct Renderer {
     /// The body of every page after the first.
     later: PageLayout,
     contents: Vec<Content>,
+    /// Per finished page, its split-box fragments, painted to go before its content.
+    underlays: Vec<Vec<u8>>,
+    /// The open page's split-box fragments in the order they start, so an outer box
+    /// paints beneath an inner one. `origin.y` is minus the fragment's top y.
+    fragments: Vec<PositionedBox>,
     /// Bytes in every page except the open last one.
     content_bytes: usize,
     cursor: PageCursor,
@@ -42,6 +47,12 @@ pub struct Renderer {
     table: Option<OpenTable>,
     /// The open page's fill colour and font.
     state: PaintState,
+    /// Boxes too tall to place whole, outermost first, while their children stream:
+    /// each one's fragment on this page, as an index into `fragments`, and the
+    /// column to restore when it closes.
+    boxes: Vec<(usize, LayoutArea)>,
+    /// Where children lay out: the page body, or the innermost open box's content area.
+    column: LayoutArea,
 }
 
 /// A top-level table between its start and end: the header and footer rows lay
@@ -76,6 +87,8 @@ impl Renderer {
             page,
             later: page,
             contents: vec![Content::new()],
+            underlays: Vec::new(),
+            fragments: Vec::new(),
             content_bytes: 0,
             cursor: PageCursor::new(page),
             fonts: FontBook::new(embedded),
@@ -89,6 +102,8 @@ impl Renderer {
             metadata: Metadata::default(),
             table: None,
             state: PaintState::default(),
+            boxes: Vec::new(),
+            column: LayoutArea::root(page.content_width()),
         }
     }
 
@@ -250,19 +265,139 @@ impl Renderer {
         if let Element::Table(table) = element {
             return self.render_table(table);
         }
-        self.layout.clear();
-        let height = LayoutEngine::new(&self.fonts, &self.images)
-            .layout(
-                element,
-                LayoutArea::root(self.page.content_width()),
-                &mut self.layout,
-            )
-            .map_err(RenderError::from)?;
+        let height = self.layout_element(element)?;
+        if let Element::Box(node) = element {
+            if self.streams(element, height) {
+                return self.stream_box(node);
+            }
+        }
         let layout = std::mem::take(&mut self.layout);
         self.mark_used(&layout);
         let result = self.place(element, &layout, height);
         self.layout = layout;
         result
+    }
+
+    fn layout_element(&mut self, element: &Element<'_>) -> Result<Pt, RenderError> {
+        self.layout.clear();
+        Ok(LayoutEngine::new(&self.fonts, &self.images).layout(
+            element,
+            self.column,
+            &mut self.layout,
+        )?)
+    }
+
+    /// A box that fits a page still places whole; an atomic one taller than a page streams.
+    fn streams(&self, element: &Element<'_>, height: Pt) -> bool {
+        matches!(element, Element::Box(_))
+            && !splittable(element)
+            && self.page.validate_block(height).is_err()
+    }
+
+    /// Whether a box the decoder still holds, closed early, can no longer place whole.
+    pub(crate) fn overflows(&mut self, commands: &[OwnedCommand]) -> bool {
+        let Ok(Block::Element(element)) = CommandParser::new(commands).parse_single_block() else {
+            return false;
+        };
+        self.layout_element(&element)
+            .is_ok_and(|height| self.streams(&element, height))
+    }
+
+    fn stream_box(&mut self, node: &BoxNode<'_>) -> Result<(), RenderError> {
+        self.open_box(node.style)?;
+        for child in &node.children {
+            self.render_element(child)?;
+            self.check_size()?;
+        }
+        self.close_box()
+    }
+
+    /// Lays a split box's top margin, border and padding at the cursor; its
+    /// children then place in its content area until `close_box`. The caller has
+    /// laid the box out, which checked its widths.
+    pub(crate) fn open_box(&mut self, style: BoxStyle) -> Result<(), RenderError> {
+        let column = self.column;
+        let top = style.margin.top + style.border.top + style.padding.top;
+        self.page
+            .validate_block(top + style.padding.bottom + style.border.bottom)?;
+        if !self.cursor.fits(top, self.page) {
+            self.start_page();
+        }
+        self.cursor.advance(style.margin.top);
+        self.boxes.push((self.fragments.len(), column));
+        let width = column.width - style.margin.left - style.margin.right;
+        self.fragments.push(PositionedBox {
+            origin: Point {
+                x: column.origin.x + style.margin.left,
+                y: Pt::ZERO - self.cursor.origin(self.page).y,
+            },
+            width,
+            height: Pt::ZERO,
+            style,
+        });
+        let inset = style.border.left + style.padding.left;
+        self.column = column
+            .translated(style.margin.left + inset, Pt::ZERO)
+            .with_width(width - inset - style.padding.right - style.border.right);
+        self.cursor.advance(style.border.top + style.padding.top);
+        Ok(())
+    }
+
+    /// Lays the bottom padding, border and margin; a split box's last fragment
+    /// is the only one with a bottom border, like CSS `box-decoration-break: slice`.
+    pub(crate) fn close_box(&mut self) -> Result<(), RenderError> {
+        let style = self.fragments[self.boxes.last().ok_or(RenderError::InvalidLayout)?.0].style;
+        let bottom = style.padding.bottom + style.border.bottom;
+        if !self.cursor.fits(bottom, self.page) {
+            self.start_page();
+        }
+        self.cursor.advance(bottom);
+        let (slot, column) = self.boxes.pop().unwrap();
+        self.column = column;
+        let fragment = &mut self.fragments[slot];
+        fragment.height = Pt::ZERO - fragment.origin.y - self.cursor.origin(self.page).y;
+        // Whatever places next checks that it fits, so a margin past the page end is harmless.
+        self.cursor.advance(style.margin.bottom);
+        self.check_size()
+    }
+
+    /// Paints the open page's fragments for `finish` to put before its content.
+    /// Open boxes end theirs at the body bottom without a bottom border and
+    /// continue on the next page without a top border.
+    fn end_page(&mut self) {
+        let mut next = Vec::with_capacity(self.boxes.len());
+        for (slot, _) in &mut self.boxes {
+            let fragment = &mut self.fragments[*slot];
+            let mut continued = *fragment;
+            continued.origin.y = Pt::ZERO - self.page.top();
+            continued.style.border.top = Pt::ZERO;
+            fragment.height = Pt::ZERO - fragment.origin.y - self.page.bottom();
+            fragment.style.border.bottom = Pt::ZERO;
+            *slot = next.len();
+            next.push(continued);
+        }
+        let mut fragments = std::mem::replace(&mut self.fragments, next);
+        fragments.retain(|fragment| fragment.height > Pt::ZERO && painted(&fragment.style));
+        let mut underlay = Vec::new();
+        if !fragments.is_empty() {
+            let mut content = Content::new();
+            PdfPainter::new(
+                &mut content,
+                self.links.last_mut().unwrap(),
+                self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
+                &mut PaintState::default(),
+            )
+            .paint_boxes(
+                &fragments,
+                Point {
+                    x: self.page.page().margin.left,
+                    y: Pt::ZERO,
+                },
+            );
+            underlay = content.finish().into_vec();
+        }
+        self.content_bytes += self.contents.last().unwrap().len() + underlay.len();
+        self.underlays.push(underlay);
     }
 
     fn place(
@@ -325,7 +460,9 @@ impl Renderer {
 
     /// Lays out the header and footer, the first `header_rows + footer_rows` rows.
     fn start_table(&mut self, table: &Table<'_>) -> Result<(), RenderError> {
-        let area = LayoutArea::root(table_width(table.width, self.page.content_width())?);
+        let area = self
+            .column
+            .with_width(table_width(table.width, self.column.width)?);
         let head = table.header_rows + table.footer_rows;
         let (header, header_height) = self.layout_rows(&table.rows[..table.header_rows], area)?;
         let (footer, footer_height) =
@@ -445,7 +582,7 @@ impl Renderer {
     }
 
     fn start_page(&mut self) {
-        self.content_bytes += self.contents.last().unwrap().len();
+        self.end_page();
         self.contents.push(Content::new());
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
@@ -455,8 +592,9 @@ impl Renderer {
     }
 
     pub fn finish(mut self) -> Result<Vec<u8>, RenderError> {
+        self.end_page();
         // The header and footer repeat on every page, so they count against the cap too.
-        let mut bytes = self.content_bytes + self.contents.last().unwrap().len();
+        let mut bytes = self.content_bytes;
         let page = self.page.page();
         let furniture = [
             (std::mem::take(&mut self.header), false),
@@ -513,9 +651,22 @@ impl Renderer {
             }
         }
         let (fonts, used) = self.fonts.into_parts();
+        let pages = self
+            .contents
+            .into_iter()
+            .zip(self.underlays)
+            .map(|(content, mut page)| {
+                // pdf-writer separates an operator from the one before it, not after.
+                if !page.is_empty() {
+                    page.push(b'\n');
+                }
+                page.extend_from_slice(&content.finish());
+                page
+            })
+            .collect();
         Ok(finish_pdf(
-            page,
-            self.contents,
+            self.page.page(),
+            pages,
             fonts,
             used,
             self.images,

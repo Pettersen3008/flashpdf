@@ -5,7 +5,8 @@ export type RejectedProperty =
 	| "maxWidth"
 	| "borderRadius"
 	| "letterSpacing"
-	| "objectFit";
+	| "objectFit"
+	| "boxDecorationBreak";
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
 type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: string };
 const properties = {
@@ -65,6 +66,11 @@ const properties = {
 	objectFit: {
 		css: "object-fit",
 		unsupported: "size an image with width and height; it always scales to fill them",
+	},
+	boxDecorationBreak: {
+		css: "box-decoration-break",
+		unsupported:
+			"a split box draws its top edge on the first page and its bottom edge on the last, as slice does; clone is not implemented",
 	},
 } as const satisfies Record<StyleProperty | RejectedProperty, PropertyDefinition>;
 
