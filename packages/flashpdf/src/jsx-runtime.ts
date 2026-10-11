@@ -1,4 +1,14 @@
-import type { BlockProps, Element, ImageProps, LinkProps, PdfProps, VoidProps } from "./element.js";
+import type {
+	BlockProps,
+	Element,
+	ImageProps,
+	LinkProps,
+	PdfNode,
+	PdfProps,
+	SvgProps,
+	SvgShapeProps,
+	VoidProps,
+} from "./element.js";
 import type { BlockTag, TableTag, TextTag } from "./tree.js";
 
 export const Fragment = Symbol.for("flashpdf.fragment");
@@ -37,5 +47,16 @@ export namespace JSX {
 		br: VoidProps;
 		img: ImageProps;
 		a: LinkProps;
+		svg: SvgProps;
+		g: Omit<SvgShapeProps, "children"> & { children?: PdfNode | undefined };
+		rect: SvgShapeProps<"x" | "y" | "width" | "height" | "rx" | "ry">;
+		circle: SvgShapeProps<"cx" | "cy" | "r">;
+		ellipse: SvgShapeProps<"cx" | "cy" | "rx" | "ry">;
+		line: SvgShapeProps<"x1" | "y1" | "x2" | "y2">;
+		polyline: SvgShapeProps & { points: string };
+		polygon: SvgShapeProps & { points: string };
+		path: SvgShapeProps & { d: string };
+		title: { children?: string | undefined };
+		desc: { children?: string | undefined };
 	}
 }

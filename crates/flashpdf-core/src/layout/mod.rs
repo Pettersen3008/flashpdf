@@ -14,9 +14,6 @@ use crate::image::Image;
 use crate::layout::output::{PositionedBox, PositionedLine};
 use crate::{BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun};
 
-/// CSS reference pixels are 96 per inch; PDF points are 72.
-const PT_PER_PX: f32 = 0.75;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum LayoutError {
     InvalidWidth,
@@ -168,7 +165,7 @@ impl<'a> LayoutEngine<'a> {
             .images
             .get(usize::from(node.slot))
             .ok_or(LayoutError::UnknownImage)?;
-        let (pixel_width, pixel_height) = (image.width as f32, image.height as f32);
+        let (natural_width, natural_height) = image.size();
         let available = area.width.get();
         let requested = match node.width {
             ImageSize::Auto => None,
@@ -177,11 +174,11 @@ impl<'a> LayoutEngine<'a> {
         };
         let (width, height) = match (requested, node.height) {
             (None, None) => {
-                let width = (pixel_width * PT_PER_PX).min(available);
-                (width, width * pixel_height / pixel_width)
+                let width = natural_width.min(available);
+                (width, width * natural_height / natural_width)
             }
-            (None, Some(height)) => (height.get() * pixel_width / pixel_height, height.get()),
-            (Some(width), None) => (width, width * pixel_height / pixel_width),
+            (None, Some(height)) => (height.get() * natural_width / natural_height, height.get()),
+            (Some(width), None) => (width, width * natural_height / natural_width),
             (Some(width), Some(height)) => (width, height.get()),
         };
         if width > available * (1.0 + f32::EPSILON * 4.0) {

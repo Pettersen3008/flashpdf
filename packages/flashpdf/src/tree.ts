@@ -2,6 +2,7 @@ import { object, props, text } from "./assert.js";
 import type { Style } from "./element.js";
 import { PageToken } from "./page.js";
 import type { NormalizedStyle } from "./style.js";
+import { isMarkup, markup, vector, type Drawing } from "./svg.js";
 
 const REACT_FRAGMENT = Symbol.for("react.fragment");
 const FLASHPDF_FRAGMENT = Symbol.for("flashpdf.fragment");
@@ -17,7 +18,16 @@ type Component = { render: Render; name: string };
 export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
 export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
 export const tableTags = ["table", "thead", "tbody", "tfoot", "tr", "th", "td"] as const;
-export const tags = [...blockTags, ...textTags, ...tableTags, "a", "img", "hr", "br"] as const;
+export const tags = [
+	...blockTags,
+	...textTags,
+	...tableTags,
+	"a",
+	"img",
+	"svg",
+	"hr",
+	"br",
+] as const;
 export type BlockTag = (typeof blockTags)[number];
 export type TextTag = (typeof textTags)[number];
 export type TableTag = (typeof tableTags)[number];
@@ -34,6 +44,8 @@ export type ElementNode = {
 	readonly src?: Uint8Array | undefined;
 	readonly alt?: string | undefined;
 	readonly href?: string | undefined;
+	/** An `<svg>`, or an `<img>` whose `src` is SVG markup. */
+	readonly drawing?: Drawing | undefined;
 };
 export type Node = TextNode | ElementNode;
 
@@ -224,19 +236,28 @@ export function href(value: unknown, where = ""): string {
 	return url.href;
 }
 
-function image(input: Record<string, unknown>, where: string) {
+function image(input: Record<string, unknown>, where: string, chain: string, depth: number) {
 	const { src, alt } = input;
 	if (typeof src === "string")
 		throw new Error(
-			`src must be the image's PNG or JPEG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes${where}`,
+			`src must be the image's PNG, JPEG, or SVG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes${where}`,
 		);
 	if (!(src instanceof Uint8Array) || !src.byteLength)
-		throw new Error(`src must be a non-empty Uint8Array of PNG or JPEG bytes${where}`);
+		throw new Error(`src must be a non-empty Uint8Array of PNG, JPEG, or SVG bytes${where}`);
 	if (alt !== undefined && (typeof alt !== "string" || /\p{Cc}/u.test(alt)))
 		throw new Error(`alt must be a string without control characters${where}`);
 	if (input.children !== undefined && input.children !== null)
 		throw new Error(`<img> has no children${where}`);
-	return { src, alt };
+	if (!isMarkup(src)) return { src, alt };
+	let root;
+	try {
+		root = markup(src);
+	} catch (error) {
+		if (error instanceof Error) error.message += where;
+		throw error;
+	}
+	const svg = vector(root.props, chain ? `<img> > ${chain}` : "<img>", depth + 1);
+	return { drawing: svg.drawing, alt: alt ?? svg.alt };
 }
 
 function isTag(value: unknown): value is Tag {
@@ -278,7 +299,14 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
 		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
-	const own = element.type === "img" ? ["src", "alt"] : element.type === "a" ? ["href"] : [];
+	const own =
+		element.type === "img"
+			? ["src", "alt"]
+			: element.type === "a"
+				? ["href"]
+				: element.type === "svg"
+					? Object.keys(object(element.props))
+					: [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
 		throw new Error(`<${element.type}> has no children${where}`);
@@ -301,13 +329,17 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 			typeof input.className === "string" ? input.className.split(/\s+/).filter(Boolean) : [],
 		style: input.style as Style | string | undefined,
 		children: [],
-		...(element.type === "img" ? image(input, where) : {}),
+		...(element.type === "img" ? image(input, where, chain, depth) : {}),
 		...(element.type === "a" ? { href: href(input.href, where) } : {}),
+		...(element.type === "svg" ? vector(input, chain, depth) : {}),
 	};
 	const self = label(node);
-	return [
-		{ ...node, children: host(input.children, depth + 1, chain ? `${self} > ${chain}` : self) },
-	];
+	// An svg's children became its drawing.
+	const children =
+		element.type === "svg"
+			? []
+			: host(input.children, depth + 1, chain ? `${self} > ${chain}` : self);
+	return [{ ...node, children }];
 }
 
 /** The React-compatible resolver owns all dynamic input. Everything after this

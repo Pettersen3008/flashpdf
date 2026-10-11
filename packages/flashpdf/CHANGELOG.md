@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- Inline `<svg>` for logos, icons, and charts: `g`, `rect` with `rx`/`ry`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, and `path` with the full `d` grammar, arcs included. Elements take `transform`, the fill and stroke presentation attributes or a `style` object, opacity, and `currentColor`. The drawing lays out like `img`, honours `viewBox` and `preserveAspectRatio`, clips to its box, and in tagged mode becomes a figure described by `aria-label` or `<title>`. Text, gradients, patterns, filters, masks, `clipPath`, `use`, `image`, `foreignObject`, CSS inside the drawing, and unknown attributes reject with a reason.
+- `<img src={bytes}>` accepts an SVG file with the same subset.
+- `QRCode` draws a QR code as vector paths: numeric, alphanumeric, or UTF-8 byte mode, error correction L, M, Q, or H (default M), the smallest version from 1 to 40, the standard's mask selection, and a quiet zone in modules. Children draw over the symbol, for a logo or the Swiss cross. The encoder is a port of Project Nayuki's MIT-licensed QR Code generator.
+- `Barcode` draws Code 128 with automatic code set B and C switching and the checksum, a module width and bar height in points, and the value printed below unless `text={false}`.
+
+### Changed
+
+- The binary protocol is version 8: image registration also accepts a vector drawing, which the engine writes as a form XObject. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 8.7 KB raw (3.9 KB gzip).
+
 ### Changed
 
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.

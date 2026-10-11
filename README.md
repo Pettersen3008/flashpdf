@@ -55,7 +55,7 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 
 ## Images and links
 
-`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
+`img` takes the PNG, JPEG, or SVG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
 
 ```tsx
 const logo = new Uint8Array(await readFile('logo.png'));
@@ -66,6 +66,30 @@ const logo = new Uint8Array(await readFile('logo.png'));
 ```
 
 PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](./CSS.md).
+
+## Vector graphics
+
+`svg` draws logos, icons, and simple charts as vector paths and sizes like `img`. Shapes, `path` with the full `d` grammar, transforms, strokes and dashes, opacity, and `currentColor` work; text, gradients, filters, masks, clip paths, and `use` reject with a reason. `<img src={svgBytes}>` takes an SVG file with the same subset.
+
+```tsx
+<svg viewBox="0 0 24 24" width={32} aria-label="Paid" style={{ color: '#0a7' }}>
+  <circle cx={12} cy={12} r={10} fill="none" stroke="currentColor" strokeWidth={2} />
+  <path d="M7 12l3 3 7-7" fill="none" stroke="currentColor" strokeLinecap="round" />
+</svg>
+```
+
+## QR codes and barcodes
+
+`QRCode` and `Barcode` draw vector symbols through `svg`, so they stay sharp at any size and need no image library.
+
+```tsx
+import { Barcode, QRCode } from '@pettersen3008/flashpdf';
+
+<QRCode value="https://example.com/pay/42" alt="Pay invoice 42" style={{ width: 90 }} />
+<Barcode value="INV-2026-0042" moduleWidth={1} height={36} />
+```
+
+`QRCode` takes `value`, `level` (`'L'`, `'M'`, `'Q'`, or `'H'`, default `'M'`), and `quietZone` in modules (default 4). It uses numeric or alphanumeric mode when the whole value fits, otherwise UTF-8 bytes, picks the smallest version from 1 to 40 at that level, and applies the mask with the lowest penalty from the QR standard. A `style` width sizes it; without one, each module is 1.5 pt. Children draw over the symbol in a 100 by 100 box, for a logo or the Swiss cross. `Barcode` draws Code 128 with automatic switching between code sets B and C and the checksum. `moduleWidth` and `height` are points (defaults 1 and 36), `quietZone` is 10 modules, and `text={false}` hides the value printed below. Both take `alt`, `style`, `className`, and `id`. Code set A, FNC1 (GS1-128), and other symbologies are not supported. FlashPDF does not validate payment payloads; the [guide](./docs/guide.md) has EPC (GiroCode) and Swiss QR-bill recipes.
 
 ## Install
 
@@ -117,6 +141,8 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
+| `QRCode` | `(props: QRCodeProps) => Element` | A vector QR code; see [QR codes and barcodes](#qr-codes-and-barcodes). |
+| `Barcode` | `(props: BarcodeProps) => Element` | A vector Code 128 barcode. |
 
 `RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
@@ -185,7 +211,7 @@ Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common reject
 
 ## Assets
 
-FlashPDF embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
+FlashPDF embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG, JPEG, or SVG bytes passed through `img`, and `svg` draws inline vector graphics; FlashPDF never fetches a URL or reads a path.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](./CSS.md).
 

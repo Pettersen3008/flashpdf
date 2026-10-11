@@ -36,6 +36,13 @@ pub(crate) enum Encoding {
     FlatePredicted,
     /// Re-deflated raw samples.
     Flate,
+    /// A deflated vector content stream in the unit square, `width` by `height`
+    /// points by default, with the fill and stroke alpha pairs of its `/G` states.
+    Form {
+        width: f32,
+        height: f32,
+        alphas: Vec<[u8; 2]>,
+    },
 }
 
 pub(crate) struct Image {
@@ -56,8 +63,18 @@ impl Image {
             png(bytes)
         } else if bytes.starts_with(&[0xff, 0xd8]) {
             jpeg(bytes)
+        } else if bytes.starts_with(crate::vector::MAGIC) {
+            crate::vector::parse(&bytes)
         } else {
-            Err("unsupported image format; pass PNG or JPEG bytes".into())
+            Err("unsupported image format; pass PNG, JPEG, or SVG bytes".into())
+        }
+    }
+
+    /// Intrinsic size in points: a form's box, or the pixels at 96 per inch.
+    pub(crate) fn size(&self) -> (f32, f32) {
+        match self.encoding {
+            Encoding::Form { width, height, .. } => (width, height),
+            _ => (self.width as f32 * 0.75, self.height as f32 * 0.75),
         }
     }
 }

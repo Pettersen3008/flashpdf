@@ -145,7 +145,7 @@ test("given a context provider, when normalizing, then renders its children", as
 test("given an img with a string src, when resolving, then rejects with the bytes hint", async () => {
 	await assert.rejects(
 		resolveTree(jsx("main", { children: jsx("img", { src: "/logo.png", alt: "Logo" }) })),
-		/src must be the image's PNG or JPEG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes on <img> in <main>/,
+		/src must be the image's PNG, JPEG, or SVG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes on <img> in <main>/,
 	);
 	const [main] = await resolveTree(
 		jsx("main", { children: jsx("img", { src: new Uint8Array([1]), alt: "Logo" }) }),

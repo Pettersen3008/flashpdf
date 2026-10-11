@@ -18,6 +18,7 @@ import {
 	type LineHeight,
 	type NormalizedStyle,
 } from "./style.js";
+import { encode, frame } from "./svg.js";
 import { locate, rowOnly } from "./tree.js";
 
 type TextState = {
@@ -281,8 +282,8 @@ function element(
 	pageTokens: boolean,
 ) {
 	const style = node.style;
-	if (style.height !== undefined && node.tag !== "img")
-		throw new Error("height applies only to <img> (block height comes from content)");
+	if (style.height !== undefined && node.tag !== "img" && node.tag !== "svg")
+		throw new Error("height applies only to <img> and <svg> (block height comes from content)");
 	switch (node.tag) {
 		case "div":
 		case "main":
@@ -357,7 +358,8 @@ function element(
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 		}
-		case "img": {
+		case "img":
+		case "svg": {
 			if (style.flex !== undefined && !context.inRow)
 				throw new Error("flex applies only to a flex row child");
 			if (typeof style.height === "string" && style.height.endsWith("%"))
@@ -369,7 +371,10 @@ function element(
 				style.height === undefined ? undefined : dimension(style.height, "height").value;
 			box(writer, boxStyle(style, next.size), () => {
 				try {
-					writer.image(node.src!, width, height, node.alt ?? "", context.link);
+					const source = node.drawing
+						? writer.drawing(encode(node.drawing, frame(node.drawing, width, height), next.color))
+						: node.src!;
+					writer.image(source, width, height, node.alt ?? "", context.link);
 				} catch (error) {
 					if (!(error instanceof Error)) throw error;
 					if (error.message === "PageOverflow")

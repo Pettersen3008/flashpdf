@@ -8,6 +8,7 @@ mod model;
 mod paint;
 mod pdf;
 mod renderer;
+mod vector;
 mod win_ansi;
 
 pub mod protocol;

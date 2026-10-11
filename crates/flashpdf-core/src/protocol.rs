@@ -33,7 +33,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 7;
+const VERSION: u16 = 8;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [

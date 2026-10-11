@@ -2,7 +2,8 @@ import { loadWasm } from "#wasm";
 
 import { createRenderer } from "./render.js";
 
-export type { Edges, Element, Length, Style, Width } from "./element.js";
+export type { BarcodeProps, Edges, Element, Length, QRCodeProps, Style, Width } from "./element.js";
+export { Barcode, QRCode } from "./barcode.js";
 export { stylesheet } from "./css.js";
 export { createElement } from "./jsx-runtime.js";
 export { PageNumber, TotalPages } from "./page.js";

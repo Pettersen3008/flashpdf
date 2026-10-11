@@ -8,7 +8,7 @@ import zlib, { inflateSync } from "node:zlib";
 
 import { test } from "vitest";
 
-import { PageNumber, render, stylesheet, TotalPages } from "../dist/index.js";
+import { Barcode, PageNumber, QRCode, render, stylesheet, TotalPages } from "../dist/index.js";
 import { Fragment, jsx, jsxs } from "../dist/jsx-runtime.js";
 
 /** Latin-1 view of the PDF with FlateDecode streams inflated so content operators are greppable. */
@@ -24,10 +24,12 @@ const string = (pdf) =>
 		});
 const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", import.meta.url)));
 
-test("given the package entry point, when importing it, then exposes only the renderer, stylesheet validator, and JSX fallback", async () => {
+test("given the package entry point, when importing it, then exposes only the renderer, stylesheet validator, components, and JSX fallback", async () => {
 	const api = await import("../dist/index.js");
 	assert.deepEqual(Object.keys(api).sort(), [
+		"Barcode",
 		"PageNumber",
+		"QRCode",
 		"TotalPages",
 		"createElement",
 		"render",
@@ -596,7 +598,10 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
-		[{ height: 40 }, /height applies only to <img> \(block height comes from content\) on <main>/],
+		[
+			{ height: 40 },
+			/height applies only to <img> and <svg> \(block height comes from content\) on <main>/,
+		],
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
 		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
@@ -702,8 +707,83 @@ test("given an invoice with a PNG logo on every row and a link, when rendering, 
 	);
 	await assert.rejects(
 		render(jsx("main", { children: jsx("img", { src: new Uint8Array([1, 2, 3]) }) })),
-		/unsupported image format; pass PNG or JPEG bytes on <img> in <main>/,
+		/unsupported image format; pass PNG, JPEG, or SVG bytes on <img> in <main>/,
 	);
+});
+
+test("given an svg with a viewBox, when rendering, then paints a tagged form fitted to its box, as the same file in an img does", async () => {
+	const options = { tagged: true, metadata: { language: "en" } };
+	const box = { width: 60, height: 60 };
+	const page = (child) => jsx("main", { style: { color: "#ff0000" }, children: child });
+	const pdf = await render(
+		page(
+			jsx("svg", {
+				viewBox: "0 0 20 10",
+				preserveAspectRatio: "xMinYMid meet",
+				"aria-label": "Acme",
+				style: box,
+				children: jsx("rect", { width: 20, height: 10, fill: "currentColor", fillOpacity: 0.5 }),
+			}),
+		),
+		options,
+	);
+	const text = string(pdf);
+	assert.match(
+		text,
+		/\/BBox \[0 0 1 1\]\s*\/Resources <<\s*\/ExtGState <<\s*\/G80FF <<\s*\/Type \/ExtGState\s*\/ca 0\.5019608\s*\/CA 1\s/,
+	);
+	// A 2:1 viewBox in a 60 pt square: scale 3, left-aligned, centred vertically, y up.
+	assert.match(
+		text,
+		/q\n0\.05 0 0 -0\.05 0 0\.75 cm\n1 0 0 rg\n\/G80FF gs\n0 0 m\n20 0 l\n20 10 l\n0 10 l\nh\nf\nQ/,
+	);
+	assert.match(text, /\/Figure <<\s*\/MCID 0\s*>> BDC\nq\n60 0 0 60 36 746 cm\n\/Im1 Do/);
+	assert.match(text, /\/Alt \(Acme\)/);
+	const file = new TextEncoder().encode(
+		'<svg viewBox="0 0 20 10" preserveAspectRatio="xMinYMid meet" aria-label="Acme"><rect width="20" height="10" fill="currentColor" fill-opacity="0.5"/></svg>',
+	);
+	assert.deepEqual(await render(page(jsx("img", { src: file, style: box })), options), pdf);
+	const rows = string(
+		await render(page([1, 2, 3].map(() => jsx("img", { src: file, style: box })))),
+	);
+	assert.equal(rows.match(/\/Subtype \/Form/g).length, 1, "one form for the repeated drawing");
+	assert.equal(rows.match(/\/Im1 Do/g).length, 3);
+	await assert.rejects(
+		render(page(jsx("svg", { viewBox: "0 0 1 1", style: { width: "50%", height: 20 } }))),
+		/a percent width with a height leaves the aspect ratio open; use a pt or px width, or preserveAspectRatio="none" on <svg> in <main>/,
+	);
+});
+
+test("given a QRCode and a Barcode, when rendering, then each draws its merged module runs as one tagged form", async () => {
+	const options = { tagged: true, metadata: { language: "en" } };
+	const pdf = await render(
+		jsxs("main", {
+			children: [
+				jsx(QRCode, {
+					value: "HELLO WORLD",
+					level: "Q",
+					alt: "Pay invoice 42",
+					style: { width: 87 },
+				}),
+				jsx(Barcode, { value: "0123456789" }),
+			],
+		}),
+		options,
+	);
+	const text = string(pdf);
+	assert.equal(text.match(/\/Subtype \/Form/g).length, 2);
+	// The first row, 1111111 0 11 0000 1111111, is three runs offset by the 4-module quiet zone.
+	assert.match(text, /4 4 m\n11 4 l\n11 5 l\n4 5 l\nh\n12 4 m\n14 4 l\n14 5 l\n12 5 l\nh\n18 4 m/);
+	assert.match(text, /\/Alt \(Pay invoice 42\)/);
+	assert.match(text, /\(0123456789\) Tj/);
+	for (const [element, message] of [
+		[jsx(QRCode, { value: "" }), /QRCode value must be a non-empty string/],
+		[jsx(QRCode, { value: "x", level: "X" }), /QRCode level must be L, M, Q, or H/],
+		[jsx(QRCode, { value: "x", size: 3 }), /unsupported property: size/],
+		[jsx(Barcode, { value: "Øre" }), /Barcode value must be printable ASCII/],
+		[jsx(Barcode, { value: "1", quietZone: 1.5 }), /quietZone must be a whole number/],
+	])
+		await assert.rejects(render(jsx("main", { children: element })), message);
 });
 
 test("given two stylesheets of equal specificity, when rendering, then the later one wins", async () => {
