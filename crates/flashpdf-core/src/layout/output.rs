@@ -23,6 +23,7 @@ pub(crate) struct Segment {
     pub(crate) color: Rgb,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct PositionedBox {
     pub(crate) origin: Point,
     pub(crate) width: Pt,

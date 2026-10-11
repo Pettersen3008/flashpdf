@@ -195,14 +195,14 @@ function pageBreak(
 	writer.pageBreak();
 }
 
-function box(writer: ProtocolWriter, value: Box | undefined, body: () => void) {
+function box(writer: ProtocolWriter, value: Box | undefined, body: () => void, avoid = false) {
 	if (value) writer.boxStart(value);
 	try {
 		body();
 		if (value) writer.boxEnd();
 	} catch (error) {
-		if (value && error instanceof Error && error.message === "PageOverflow")
-			throw new Error("PageOverflow: use document margins or split this decorated box");
+		if (avoid && error instanceof Error && error.message === "PageOverflow")
+			throw new Error("PageOverflow: the box is taller than a page; drop break-inside: avoid");
 		throw error;
 	}
 }
@@ -300,7 +300,7 @@ function element(
 			const paint = boxStyle(style, next.size);
 			const streamed = streamMargin(paint, context, style);
 			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
-			box(writer, streamed ? undefined : paint, () => {
+			const content = () => {
 				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
 				const inner = { ...next, inRow: false };
 				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
@@ -323,7 +323,8 @@ function element(
 					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
 					writer.stackEnd();
 				} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
-			});
+			};
+			box(writer, streamed ? undefined : paint, content, style.breakInside === "avoid");
 			if (streamed && paint?.margin[2]) writer.spacer(paint.margin[2]);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;

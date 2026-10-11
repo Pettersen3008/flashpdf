@@ -25,9 +25,12 @@ use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle};
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
-/// An open Stack, Box, Row or nested Table buffers its commands until it closes; a
-/// top-level Table buffers its header and footer rows, then one body row at a time.
+/// An open Stack, Row or nested Table buffers its commands until it closes, and so
+/// does a Box until it proves taller than a page; a Table outside them buffers its
+/// header and footer rows, then one body row at a time.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
+/// A held Box is measured each time its buffer doubles past this size.
+const MEASURE_BYTES: usize = 64 * 1024;
 /// Total bytes of registered fonts per render.
 const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 /// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
@@ -53,6 +56,8 @@ pub struct Decoder {
     renderer: Option<crate::Renderer>,
     block: Vec<OwnedCommand>,
     block_bytes: usize,
+    /// `block_bytes` when the held box was last measured.
+    measured: usize,
     frames: Vec<Frame>,
     ended: bool,
     fonts: Vec<crate::EmbeddedFont>,
@@ -68,12 +73,13 @@ pub struct Decoder {
     body_started: bool,
 }
 
-/// A top-level `Table`'s `head` counts its `TableStart` and the header and footer
-/// rows it still buffers; at zero its body rows stream. A nested one has `None`.
+/// A streaming `Table`'s `head` counts its `TableStart` and the header and footer
+/// rows it still buffers; at zero its body rows stream. A held one has `None`.
+/// A `Box` is `true` once the renderer has it open and its children stream.
 #[derive(Clone, Copy)]
 enum Frame {
     Stack,
-    Box,
+    Box(bool),
     Row { columns: usize, cells: usize },
     Table { head: Option<usize> },
 }
@@ -212,50 +218,36 @@ impl Decoder {
             Opcode::Spacer => {
                 let space = pt(cursor.nonnegative_f32("spacer")?)?;
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Spacer(space))
+                self.feed(OwnedCommand::Spacer(space))
             }
             Opcode::StackStart => {
                 let gap = pt(cursor.nonnegative_f32("stack gap")?)?;
                 cursor.done()?;
-                self.open(Frame::Stack, OwnedCommand::StackStart(gap))
+                self.feed(OwnedCommand::StackStart(gap))
             }
             Opcode::StackEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::StackEnd)
+                self.feed(OwnedCommand::StackEnd)
             }
             Opcode::RowStart => {
                 let columns = cursor.columns()?;
                 cursor.done()?;
-                self.open(
-                    Frame::Row {
-                        columns: columns.len(),
-                        cells: 0,
-                    },
-                    OwnedCommand::RowStart(columns),
-                )
+                self.feed(OwnedCommand::RowStart(columns))
             }
             Opcode::RowEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::RowEnd)
+                self.feed(OwnedCommand::RowEnd)
             }
             Opcode::TableStart => {
                 let header_rows = cursor.u16()?;
                 let footer_rows = cursor.u16()?;
                 let width = cursor.column()?;
                 cursor.done()?;
-                let head = self
-                    .frames
-                    .is_empty()
-                    .then(|| 1 + usize::from(header_rows) + usize::from(footer_rows));
-                self.open(
-                    Frame::Table { head },
-                    OwnedCommand::TableStart(header_rows, footer_rows, width),
-                )?;
-                self.stream_table()
+                self.feed(OwnedCommand::TableStart(header_rows, footer_rows, width))
             }
             Opcode::TableEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::TableEnd)
+                self.feed(OwnedCommand::TableEnd)
             }
             Opcode::PageBreak => {
                 cursor.done()?;
@@ -435,7 +427,7 @@ impl Decoder {
                     });
                 }
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Paragraph(align, text, runs, links))
+                self.feed(OwnedCommand::Paragraph(align, text, runs, links))
             }
             Opcode::Image => {
                 let slot = cursor.u16()?;
@@ -455,7 +447,7 @@ impl Decoder {
                 };
                 let alt = cursor.alt()?.to_owned();
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt))
+                self.feed(OwnedCommand::Image(slot, width, height, link, alt))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -488,20 +480,17 @@ impl Decoder {
                     left: cursor.rgb()?,
                 };
                 cursor.done()?;
-                self.open(
-                    Frame::Box,
-                    OwnedCommand::BoxStart(crate::BoxStyle {
-                        margin,
-                        padding,
-                        border,
-                        background,
-                        border_color,
-                    }),
-                )
+                self.feed(OwnedCommand::BoxStart(crate::BoxStyle {
+                    margin,
+                    padding,
+                    border,
+                    background,
+                    border_color,
+                }))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::BoxEnd)
+                self.feed(OwnedCommand::BoxEnd)
             }
             Opcode::End => {
                 cursor.done()?;
@@ -603,20 +592,100 @@ impl Decoder {
         Ok(())
     }
 
+    /// Routes a decoded layout command. A held box that starts streaming replays
+    /// its buffered commands through here.
+    fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
+        let frame = match &command {
+            OwnedCommand::StackStart(_) => Frame::Stack,
+            OwnedCommand::BoxStart(_) => Frame::Box(false),
+            OwnedCommand::RowStart(columns) => Frame::Row {
+                columns: columns.len(),
+                cells: 0,
+            },
+            OwnedCommand::TableStart(header_rows, footer_rows, _) => Frame::Table {
+                head: self
+                    .placing()
+                    .then(|| 1 + usize::from(*header_rows) + usize::from(*footer_rows)),
+            },
+            OwnedCommand::StackEnd
+            | OwnedCommand::BoxEnd
+            | OwnedCommand::RowEnd
+            | OwnedCommand::TableEnd => return self.close(command),
+            OwnedCommand::Paragraph(..) | OwnedCommand::Spacer(_) | OwnedCommand::Image(..) => {
+                return self.layout_command(command)
+            }
+        };
+        self.open(frame, command)?;
+        self.stream_table()
+    }
+
+    /// Whether a completed block places now: outside every frame, or directly in streaming boxes.
+    fn placing(&self) -> bool {
+        matches!(self.frames.last(), None | Some(Frame::Box(true)))
+    }
+
     fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         self.body_started = true;
         self.push_command(command)?;
         self.complete_child()?;
-        if self.frames.is_empty() {
-            self.flush_block(crate::Renderer::push_owned)?;
+        if self.placing() {
+            return self.flush_block(crate::Renderer::push_owned);
         }
-        self.stream_table()
+        if matches!(self.frames.last(), Some(Frame::Table { head: Some(_) })) {
+            return self.stream_table();
+        }
+        self.measure()
     }
 
-    /// Runs after a top-level table's `TableStart` and after each of its children:
+    /// Starts streaming a held box once it is atomic and taller than a page, so a
+    /// long box buffers about a page instead of its whole content.
+    fn measure(&mut self) -> Result<(), ProtocolError> {
+        if self.block_bytes < MEASURE_BYTES.max(self.measured * 2) {
+            return Ok(());
+        }
+        let start = self
+            .frames
+            .iter()
+            .take_while(|frame| matches!(frame, Frame::Box(true)))
+            .count();
+        let held = &self.frames[start..];
+        // A partial Row or Stack cannot be closed early, so the box waits for it to end.
+        if !matches!(held.first(), Some(Frame::Box(false)))
+            || held
+                .iter()
+                .any(|frame| matches!(frame, Frame::Stack | Frame::Row { .. }))
+        {
+            return Ok(());
+        }
+        self.measured = self.block_bytes;
+        let mut block = std::mem::take(&mut self.block);
+        let length = block.len();
+        block.extend(held.iter().rev().map(|frame| match frame {
+            Frame::Box(_) => OwnedCommand::BoxEnd,
+            _ => OwnedCommand::TableEnd,
+        }));
+        let renderer = self.ensure_renderer()?;
+        let overflows = renderer.overflows(&block);
+        block.truncate(length);
+        if !overflows {
+            self.block = block;
+            return Ok(());
+        }
+        let mut commands = block.into_iter();
+        if let Some(OwnedCommand::BoxStart(style)) = commands.next() {
+            renderer.open_box(style)?;
+        }
+        self.frames.truncate(start);
+        self.frames.push(Frame::Box(true));
+        self.block_bytes = 0;
+        self.measured = 0;
+        commands.try_for_each(|command| self.feed(command))
+    }
+
+    /// Runs after a streaming table's `TableStart` and after each of its children:
     /// hands the renderer the header and footer rows once, then each body row.
     fn stream_table(&mut self) -> Result<(), ProtocolError> {
-        let [Frame::Table { head: Some(head) }] = self.frames.as_mut_slice() else {
+        let Some(Frame::Table { head: Some(head) }) = self.frames.last_mut() else {
             return Ok(());
         };
         if *head == 0 {
@@ -646,8 +715,11 @@ impl Decoder {
             (OwnedCommand::TableEnd, Frame::Table { head: Some(0) }) => {
                 return Ok(self.ensure_renderer()?.end_table()?);
             }
+            (OwnedCommand::BoxEnd, Frame::Box(true)) => {
+                return Ok(self.ensure_renderer()?.close_box()?);
+            }
             (OwnedCommand::StackEnd, Frame::Stack)
-            | (OwnedCommand::BoxEnd, Frame::Box)
+            | (OwnedCommand::BoxEnd, Frame::Box(false))
             | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
             (OwnedCommand::RowEnd, Frame::Row { columns, cells }) if columns == cells => {}
             (OwnedCommand::RowEnd, Frame::Row { .. }) => {
@@ -677,6 +749,7 @@ impl Decoder {
         self.block = block;
         self.block.clear();
         self.block_bytes = 0;
+        self.measured = 0;
         result
     }
 

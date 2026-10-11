@@ -71,7 +71,7 @@ export function locate(error: unknown, where: string): unknown {
 	return error;
 }
 
-/** Explains a PageOverflow that no decorated box, image, or table claimed. */
+/** Explains a PageOverflow that no `break-inside: avoid` box, image, or table claimed. */
 export function pageOverflow(error: unknown): unknown {
 	if (!(error instanceof Error) || error.message !== "PageOverflow") return error;
 	const where = overflows.get(error);

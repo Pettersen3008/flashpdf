@@ -3,7 +3,7 @@ use pdf_writer::types::{
     StructRole,
 };
 use pdf_writer::writers::StructTreeRoot;
-use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
+use pdf_writer::{Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
@@ -39,7 +39,7 @@ const SRGB: &[u8] = include_bytes!("sRGB-v2-micro.icc");
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn finish_pdf(
     page: Page,
-    contents: Vec<Content>,
+    contents: Vec<Vec<u8>>,
     fonts: Vec<Font>,
     used_fonts: Vec<bool>,
     images: Vec<Image>,
@@ -54,7 +54,7 @@ pub(crate) fn finish_pdf(
         .collect();
     let capacity = contents
         .iter()
-        .map(Content::len)
+        .map(Vec::len)
         .chain(used.iter().filter_map(|slot| match &fonts[slot.index()] {
             Font::Embedded(font) => Some(font.bytes.len()),
             Font::Helvetica { .. } => None,
@@ -316,7 +316,7 @@ pub(crate) fn finish_pdf(
             output_page.annotations(annotations.iter().copied());
         }
         output_page.finish();
-        pdf.stream(stream_ref, &deflate(&content.finish()))
+        pdf.stream(stream_ref, &deflate(&content))
             .filter(Filter::FlateDecode);
         for (link, reference) in page_links.iter().zip(annotations) {
             let [x1, y1, x2, y2] = link.rect;
