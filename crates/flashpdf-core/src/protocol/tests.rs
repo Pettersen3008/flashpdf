@@ -1,4 +1,5 @@
-use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, VERSION};
+use super::{Decoder, HEADER_LEN, MAGIC, MAX_BLOCK_BYTES, MAX_FONT_BYTES, VERSION};
+use crate::OwnedCommand;
 
 fn header(version: u16, width: f32, height: f32, margin: f32) -> Vec<u8> {
     let mut bytes = MAGIC.to_vec();
@@ -667,6 +668,27 @@ fn given_fonts_over_64_mib_when_registering_then_rejects_before_parsing() {
             .to_string(),
         "fonts exceed 64 MiB per render"
     );
+}
+
+#[test]
+fn given_a_top_level_table_over_the_block_cap_when_decoding_then_streams_its_rows() {
+    let row = [
+        record(5, &columns(&[(1, 1.0)])),
+        plain(b"a"),
+        record(6, &[]),
+    ]
+    .concat();
+    // Each row buffers at least three commands, so these rows together exceed the cap.
+    let rows = MAX_BLOCK_BYTES / (3 * size_of::<OwnedCommand>()) + 1;
+    let mut decoder = Decoder::default();
+    decoder.push(&header(VERSION, 595.0, 842.0, 36.0)).unwrap();
+    decoder.push(&record(10, &table_start(1))).unwrap();
+    for _ in 0..=rows {
+        decoder.push(&row).unwrap();
+    }
+    decoder.push(&record(11, &[])).unwrap();
+    decoder.push(&record(255, &[])).unwrap();
+    decoder.finish().unwrap();
 }
 
 #[test]

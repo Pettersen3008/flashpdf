@@ -334,8 +334,21 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
     assert_eq!(objects.len(), 3, "{content}");
     assert_eq!(
         objects[1].trim(),
-        "BT\n0 0 0 rg\n/F1 10 Tf\n10 33.57 Td\n(WWWW) Tj\n/F2 10 Tf\n37.76 0 Td\n(WW) Tj"
+        "BT\n10 33.57 Td\n(WWWW) Tj\n/F2 10 Tf\n37.76 0 Td\n(WW) Tj"
     );
+}
+
+#[test]
+fn given_lines_in_one_style_across_two_pages_when_painted_then_each_page_sets_colour_and_font_once()
+{
+    let pdf = parsed(&[text("line"); 8]);
+    let pages = pdf.get_pages();
+    assert_eq!(pages.len(), 2);
+    for page in pages.values() {
+        let content = String::from_utf8(pdf.get_page_content(*page)).unwrap();
+        assert_eq!(content.matches(" rg").count(), 1, "{content}");
+        assert_eq!(content.matches(" Tf").count(), 1, "{content}");
+    }
 }
 
 #[test]
@@ -865,9 +878,9 @@ fn given_a_table_with_a_footer_row_when_it_spans_pages_then_the_footer_follows_t
         footer_rows: 1,
         width: columns[0],
     }];
-    for cell in std::iter::once("H")
+    for cell in ["H", "F"]
+        .into_iter()
         .chain(cells.iter().map(String::as_str))
-        .chain(["F"])
     {
         commands.extend([
             Command::RowStart { columns: &columns },

@@ -534,9 +534,10 @@ function table(
 		const count = (groups: RowGroup[]) =>
 			groups.reduce((total, { rows }) => total + rows.length, 0);
 		writer.tableStart(count(header), count(footer), width);
+		// Footer rows precede the body so the engine can reserve them and place each body row on arrival.
 		for (const item of header) group(item, true);
-		for (const item of body) group(item, false);
 		for (const item of footer) group(item, true);
+		for (const item of body) group(item, false);
 		writer.tableEnd();
 		if (style.breakInside === "avoid") writer.stackEnd();
 	} catch (error) {

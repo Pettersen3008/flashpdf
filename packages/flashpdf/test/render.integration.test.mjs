@@ -467,7 +467,8 @@ test("given per-edge borders and hr, when rendering, then emits native rules", a
 		}),
 	);
 	assert.match(string(pdf), /1 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
-	assert.match(string(pdf), /0 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
+	// The text already set black, so the hr rule paints without another rg.
+	assert.match(string(pdf), /0 0 0 rg\n[^]*?ET\n36 [\d.]+ 523 1 re\nf/);
 });
 
 test("given an invalid option, when rendering, then rejects before running any component", async () => {
@@ -492,7 +493,7 @@ test("given non-native JSX, when rendering, then rejects it", async () => {
 	);
 });
 
-test("given a table that spans two pages, when rendering, then the header row repeats on the second page", async () => {
+test("given a table that spans two pages, when rendering, then the header row repeats on top and the footer row under the last body row of each page", async () => {
 	const items = Array.from({ length: 70 }, (_, index) => `Item ${index + 1}`);
 	const pdf = await render(
 		jsx("main", {
@@ -515,6 +516,11 @@ test("given a table that spans two pages, when rendering, then the header row re
 								],
 							}),
 						),
+					}),
+					jsx("tfoot", {
+						children: jsxs("tr", {
+							children: [jsx("td", { children: "Total" }), jsx("td", { children: "70" })],
+						}),
 					}),
 				],
 			}),
@@ -543,6 +549,7 @@ test("given a table that spans two pages, when rendering, then the header row re
 	assert.equal(pages.length, 2);
 	const body = pages.flatMap((page) => {
 		assert.match(page, /^Name\nQty\n/);
+		assert.match(page, /\nTotal\n70\s*$/);
 		return page
 			.split("\n")
 			.slice(2)
@@ -676,7 +683,7 @@ test("given an invoice with a PNG logo on every row and a link, when rendering, 
 	assert.match(text, /\/Subtype \/Link[\s\S]*?\/URI \(https:\/\/example\.com\/\)/);
 	assert.match(text, /\/URI \(https:\/\/example\.com\/pay\?id=42\)/);
 	assert.equal(text.match(/\/Subtype \/Link/g).length, 2);
-	assert.match(text, /0 0 0\.93333334 rg/, "link colour #0000EE");
+	assert.match(text, /0 0 0\.933 rg/, "link colour #0000EE");
 	if (spawnSync("qpdf", ["--version"]).status === 0) {
 		const path = new URL("../../../target/render-images.pdf", import.meta.url);
 		writeFileSync(path, pdf);

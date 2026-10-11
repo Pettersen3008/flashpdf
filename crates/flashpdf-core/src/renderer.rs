@@ -1,12 +1,12 @@
 use pdf_writer::Content;
 
-use crate::command::{CommandParser, OwnedCommand};
+use crate::command::{uniform_rows, CommandParser, OwnedCommand};
 use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout};
 use crate::image::Image;
 use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
-use crate::paint::{PageLink, PageTag, PdfPainter};
+use crate::paint::{PageLink, PageTag, PaintState, PdfPainter};
 use crate::pdf::{finish_pdf, Metadata};
 use crate::{Command, Page, Pt, RenderError, TextStyle};
 
@@ -35,6 +35,23 @@ pub struct Renderer {
     header: Option<Furniture>,
     footer: Option<Furniture>,
     metadata: Metadata,
+    table: Option<OpenTable>,
+    /// The open page's fill colour and font.
+    state: PaintState,
+}
+
+/// A top-level table between its start and end: the header and footer rows lay
+/// out once, and each body row lays out and places as it arrives.
+struct OpenTable {
+    area: LayoutArea,
+    header: LayoutBuffer,
+    header_height: Pt,
+    footer: LayoutBuffer,
+    footer_height: Pt,
+    columns: Option<usize>,
+    /// The next row's index among the table's children, which `TableRowOverflow` reports.
+    index: usize,
+    header_on_page: bool,
 }
 
 /// A header or footer line, painted on every page in `finish`.
@@ -66,6 +83,8 @@ impl Renderer {
             header: None,
             footer: None,
             metadata: Metadata::default(),
+            table: None,
+            state: PaintState::default(),
         }
     }
 
@@ -108,6 +127,21 @@ impl Renderer {
             .parse_single_block()
             .map_err(|_| RenderError::InvalidLayout)?;
         self.push_block(&block)
+    }
+
+    /// Starts a streamed table from `TableStart` and its header and footer rows, closed by `TableEnd`.
+    pub(crate) fn push_table_head(&mut self, commands: &[OwnedCommand]) -> Result<(), RenderError> {
+        match CommandParser::new(commands).parse_single_block() {
+            Ok(Block::Element(Element::Table(table))) => self.start_table(&table),
+            _ => Err(RenderError::InvalidLayout),
+        }
+    }
+
+    pub(crate) fn push_table_row(&mut self, commands: &[OwnedCommand]) -> Result<(), RenderError> {
+        match CommandParser::new(commands).parse_single_block() {
+            Ok(Block::Element(row)) => self.table_row(&row),
+            _ => Err(RenderError::InvalidLayout),
+        }
     }
 
     pub(crate) fn set_footer(
@@ -282,52 +316,97 @@ impl Renderer {
     /// their own buffers. The header repaints at the top of every page a body
     /// row opens, the footer after the last body row of every page.
     fn render_table(&mut self, table: &Table<'_>) -> Result<(), RenderError> {
+        self.start_table(table)?;
+        for row in &table.rows[table.header_rows + table.footer_rows..] {
+            self.table_row(row)?;
+        }
+        self.end_table()
+    }
+
+    /// Lays out the header and footer, the first `header_rows + footer_rows` rows.
+    fn start_table(&mut self, table: &Table<'_>) -> Result<(), RenderError> {
         let area = LayoutArea::root(table_width(table.width, self.page.content_width())?);
-        let split = table.rows.len() - table.footer_rows;
+        let head = table.header_rows + table.footer_rows;
         let (header, header_height) = self.layout_rows(&table.rows[..table.header_rows], area)?;
-        let (footer, footer_height) = self.layout_rows(&table.rows[split..], area)?;
-        let reserved = header_height + footer_height;
-        self.page.validate_block(reserved)?;
-        let body = &table.rows[table.header_rows..split];
-        if body.is_empty() {
-            if !self.cursor.fits(reserved, self.page) {
+        let (footer, footer_height) =
+            self.layout_rows(&table.rows[table.header_rows..head], area)?;
+        self.page.validate_block(header_height + footer_height)?;
+        let mut columns = None;
+        for row in &table.rows[..head] {
+            uniform_rows(row, &mut columns);
+        }
+        self.table = Some(OpenTable {
+            area,
+            header,
+            header_height,
+            footer,
+            footer_height,
+            columns,
+            index: head,
+            header_on_page: false,
+        });
+        Ok(())
+    }
+
+    fn table_row(&mut self, row: &Element<'_>) -> Result<(), RenderError> {
+        let mut table = self.table.take().ok_or(RenderError::InvalidLayout)?;
+        let result = self.place_row(&mut table, row);
+        self.table = Some(table);
+        result
+    }
+
+    fn place_row(&mut self, table: &mut OpenTable, row: &Element<'_>) -> Result<(), RenderError> {
+        if !uniform_rows(row, &mut table.columns) {
+            return Err(RenderError::InvalidLayout);
+        }
+        self.layout.clear();
+        let height = LayoutEngine::new(&self.fonts, &self.images).layout(
+            row,
+            table.area,
+            &mut self.layout,
+        )?;
+        let layout = std::mem::take(&mut self.layout);
+        self.mark_used(&layout);
+        let reserved = table.header_height + table.footer_height;
+        if self.page.validate_block(height + reserved).is_err() {
+            return Err(RenderError::TableRowOverflow(table.index));
+        }
+        table.index += 1;
+        let needed = height
+            + if table.header_on_page {
+                table.footer_height
+            } else {
+                reserved
+            };
+        if !self.cursor.fits(needed, self.page) {
+            if table.header_on_page {
+                self.paint_block(&table.footer, table.footer_height)?;
+            }
+            self.start_page();
+            table.header_on_page = false;
+        }
+        if !table.header_on_page {
+            self.paint_block(&table.header, table.header_height)?;
+            table.header_on_page = true;
+        }
+        let painted = self.paint_block(&layout, height);
+        self.layout = layout;
+        painted
+    }
+
+    /// Paints the last footer; a table without body rows paints its header above it.
+    pub(crate) fn end_table(&mut self) -> Result<(), RenderError> {
+        let table = self.table.take().ok_or(RenderError::InvalidLayout)?;
+        if !table.header_on_page {
+            if !self
+                .cursor
+                .fits(table.header_height + table.footer_height, self.page)
+            {
                 self.start_page();
             }
-            self.paint_block(&header, header_height)?;
-            return self.paint_block(&footer, footer_height);
+            self.paint_block(&table.header, table.header_height)?;
         }
-        let mut header_on_page = false;
-        for (index, row) in body.iter().enumerate() {
-            self.layout.clear();
-            let height =
-                LayoutEngine::new(&self.fonts, &self.images).layout(row, area, &mut self.layout)?;
-            let layout = std::mem::take(&mut self.layout);
-            self.mark_used(&layout);
-            if self.page.validate_block(height + reserved).is_err() {
-                return Err(RenderError::TableRowOverflow(table.header_rows + index));
-            }
-            let needed = height
-                + if header_on_page {
-                    footer_height
-                } else {
-                    reserved
-                };
-            if !self.cursor.fits(needed, self.page) {
-                if header_on_page {
-                    self.paint_block(&footer, footer_height)?;
-                }
-                self.start_page();
-                header_on_page = false;
-            }
-            if !header_on_page {
-                self.paint_block(&header, header_height)?;
-                header_on_page = true;
-            }
-            let painted = self.paint_block(&layout, height);
-            self.layout = layout;
-            painted?;
-        }
-        self.paint_block(&footer, footer_height)
+        self.paint_block(&table.footer, table.footer_height)
     }
 
     fn layout_rows(
@@ -361,6 +440,7 @@ impl Renderer {
             self.contents.last_mut().unwrap(),
             self.links.last_mut().unwrap(),
             self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
+            &mut self.state,
         )
     }
 
@@ -369,6 +449,7 @@ impl Renderer {
         self.contents.push(Content::new());
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
+        self.state = PaintState::default();
         self.cursor.reset(self.page);
     }
 
@@ -378,6 +459,7 @@ impl Renderer {
         let total = self.contents.len() as i32;
         for (index, (content, links)) in self.contents.iter_mut().zip(&mut self.links).enumerate() {
             let before = content.len();
+            let mut state = PaintState::default();
             for furniture in self.header.iter().chain(&self.footer) {
                 let mut page_buffer = itoa::Buffer::new();
                 let mut total_buffer = itoa::Buffer::new();
@@ -394,7 +476,7 @@ impl Renderer {
                 if self.metadata.tagged {
                     content.begin_marked_content(pdf_writer::Name(b"Artifact"));
                 }
-                PdfPainter::new(content, links, None).paint_line(
+                PdfPainter::new(content, links, None, &mut state).paint_line(
                     &text,
                     furniture.style,
                     crate::geometry::Point {

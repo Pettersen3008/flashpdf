@@ -83,7 +83,7 @@ Every runtime error names the element and its ancestors, for example `on <span.t
 - `break-before`, `break-after`, and `break-inside: avoid`.
 - Tables: `width` and `flex` on the first row's `th`/`td` size the columns; `padding`, `border`, `background`, and text properties on cells; `background` on `tr`; `width`, `margin-top`, `margin-bottom`, and `break-inside: avoid` on `table`; `break-inside: avoid` on `tbody` keeps its rows together.
 
-Normal block children stream independently, so long `<main>` documents paginate without retaining the whole layout. Flex rows and `break-inside: avoid` groups remain atomic. A single open container may buffer at most 16 MiB of layout commands, and a document may paint at most 16 MiB of content.
+Normal block children stream independently, so long `<main>` documents paginate without retaining the whole layout. So do a table's body rows, unless the table sits in an element with padding, a border, a background, or horizontal margins, in a flex row, or in a `break-inside: avoid` group. Flex rows and `break-inside: avoid` groups remain atomic. A single open container, a table's header and footer rows, or one table row may buffer at most 16 MiB of layout commands, and a document may paint at most 16 MiB of content.
 
 ## Intentional v1 limits
 
