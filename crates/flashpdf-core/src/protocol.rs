@@ -85,13 +85,14 @@ impl Decoder {
         if self.fonts.len() >= 254 {
             return Err(ProtocolError::TooManyFonts);
         }
-        self.font_bytes = self
+        let total = self
             .font_bytes
             .checked_add(bytes.len())
             .filter(|total| *total <= MAX_FONT_BYTES)
             .ok_or(ProtocolError::FontsTooLarge)?;
         self.fonts
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
+        self.font_bytes = total;
         Ok((self.fonts.len() + 1) as u8)
     }
 
@@ -101,7 +102,7 @@ impl Decoder {
         if self.ended {
             return Err(ProtocolError::DataAfterEnd);
         }
-        self.image_bytes = self
+        let total = self
             .image_bytes
             .checked_add(bytes.len())
             .filter(|total| *total <= MAX_IMAGE_BYTES)
@@ -113,6 +114,7 @@ impl Decoder {
         if self.pdfa && matches!(image.color_space, ColorSpace::Cmyk) {
             return Err(ProtocolError::PdfACmyk);
         }
+        self.image_bytes = total;
         Ok(match &mut self.renderer {
             Some(renderer) => renderer.add_image(image),
             None => {
@@ -255,8 +257,7 @@ impl Decoder {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 self.body_started = true;
-                self.ensure_renderer()?.page_break();
-                Ok(())
+                Ok(self.ensure_renderer()?.page_break()?)
             }
             Opcode::Footer | Opcode::Header => {
                 let size = pt(cursor.positive_f32("font size")?)?;

@@ -12,6 +12,8 @@ use crate::{Command, Page, Pt, RenderError, TextStyle};
 
 /// Total content-stream bytes a document may paint before `finish`.
 pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
+/// Pages per document; a five-byte page break must not buy an unbounded page list.
+pub const MAX_PAGES: usize = 10_000;
 
 pub fn render(page: Page, commands: &[Command<'_>]) -> Result<Vec<u8>, RenderError> {
     let mut renderer = Renderer::new(page);
@@ -54,7 +56,7 @@ impl Renderer {
         let page = PageLayout::new(page);
         Self {
             page,
-            contents: vec![Content::new()],
+            contents: vec![Content::with_capacity(0)],
             content_bytes: 0,
             cursor: PageCursor::new(page),
             fonts: FontBook::new(embedded),
@@ -195,7 +197,7 @@ impl Renderer {
 
     fn push_block(&mut self, block: &Block<'_>) -> Result<(), RenderError> {
         match block {
-            Block::PageBreak => self.start_page(),
+            Block::PageBreak => self.start_page()?,
             Block::Element(element) => self.render_element(element)?,
         }
         self.check_size()
@@ -208,8 +210,8 @@ impl Renderer {
         Ok(())
     }
 
-    pub(crate) fn page_break(&mut self) {
-        self.start_page();
+    pub(crate) fn page_break(&mut self) -> Result<(), RenderError> {
+        self.start_page()
     }
 
     fn render_element(&mut self, element: &Element<'_>) -> Result<(), RenderError> {
@@ -241,7 +243,7 @@ impl Renderer {
         if !splittable(element) {
             self.page.validate_block(height)?;
             if !self.cursor.fits(height, self.page) {
-                self.start_page();
+                self.start_page()?;
             }
             return self.paint_block(layout, height);
         }
@@ -263,7 +265,7 @@ impl Renderer {
                 if self.cursor.at_top(self.page) {
                     return Err(RenderError::PageOverflow);
                 }
-                self.start_page();
+                self.start_page()?;
                 continue;
             }
             let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
@@ -274,7 +276,7 @@ impl Renderer {
                 return Ok(());
             }
             offset = layout.lines[index].top;
-            self.start_page();
+            self.start_page()?;
         }
     }
 
@@ -291,7 +293,7 @@ impl Renderer {
         let body = &table.rows[table.header_rows..split];
         if body.is_empty() {
             if !self.cursor.fits(reserved, self.page) {
-                self.start_page();
+                self.start_page()?;
             }
             self.paint_block(&header, header_height)?;
             return self.paint_block(&footer, footer_height);
@@ -316,7 +318,7 @@ impl Renderer {
                 if header_on_page {
                     self.paint_block(&footer, footer_height)?;
                 }
-                self.start_page();
+                self.start_page()?;
                 header_on_page = false;
             }
             if !header_on_page {
@@ -364,12 +366,16 @@ impl Renderer {
         )
     }
 
-    fn start_page(&mut self) {
+    fn start_page(&mut self) -> Result<(), RenderError> {
+        if self.contents.len() >= MAX_PAGES {
+            return Err(RenderError::TooManyPages);
+        }
         self.content_bytes += self.contents.last().unwrap().len();
-        self.contents.push(Content::new());
+        self.contents.push(Content::with_capacity(0));
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
         self.cursor.reset(self.page);
+        Ok(())
     }
 
     pub fn finish(mut self) -> Result<Vec<u8>, RenderError> {

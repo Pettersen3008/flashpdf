@@ -17,6 +17,9 @@
 - Embedded fonts use one `cmap` subtable: format 12 before format 4, then Windows before Unicode platform. A font with many records or overlapping format 4 segments no longer takes minutes to load, and a format 12 group that starts inside the previous one keeps its remaining characters.
 - Registered fonts are capped at 64 MiB per render, checked in JavaScript before the bytes are copied into WASM memory.
 - Page sides over 14,400 pt reject, the largest size PDF readers accept.
+- A document stops at 10,000 pages with `document exceeds 10000 pages`. JavaScript counts explicit page breaks and the engine counts every page. Pages no longer reserve 1 KB of content buffer each, so 9,999 page breaks take 2.8 MB of WASM memory instead of 14.4 MB.
+- Images are capped at 64 MiB per render in JavaScript before the bytes are copied into WASM memory, as fonts are.
+- A font or image that fails to register no longer counts toward its 64 MiB per-render cap.
 ### Added
 
 - `oklch()` and `oklab()` colours, converted to sRGB and clipped per channel. Tailwind v4 emits them for every colour utility.

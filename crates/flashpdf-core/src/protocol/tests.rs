@@ -1,4 +1,5 @@
-use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, VERSION};
+use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, MAX_IMAGE_BYTES, VERSION};
+use crate::renderer::MAX_PAGES;
 
 fn header(version: u16, width: f32, height: f32, margin: f32) -> Vec<u8> {
     let mut bytes = MAGIC.to_vec();
@@ -666,6 +667,31 @@ fn given_fonts_over_64_mib_when_registering_then_rejects_before_parsing() {
             .unwrap_err()
             .to_string(),
         "fonts exceed 64 MiB per render"
+    );
+}
+
+#[test]
+fn given_rejected_fonts_and_images_at_the_cap_when_registering_more_then_their_bytes_do_not_count()
+{
+    let mut decoder = Decoder::default();
+    assert!(decoder.add_font(vec![0; MAX_FONT_BYTES]).is_err());
+    assert!(decoder.add_image(vec![0; MAX_IMAGE_BYTES]).is_err());
+    let font = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
+    decoder.add_font(font.to_vec()).unwrap();
+    decoder.add_image(png(1, 1, 0, 8, &[0, 128])).unwrap();
+}
+
+#[test]
+fn given_page_breaks_past_the_page_cap_when_decoding_then_rejects_naming_the_cap() {
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    for _ in 1..MAX_PAGES {
+        bytes.extend(record(7, &[]));
+    }
+    let mut decoder = Decoder::default();
+    decoder.push(&bytes).unwrap();
+    assert_eq!(
+        decoder.push(&record(7, &[])).unwrap_err().to_string(),
+        "document exceeds 10000 pages; split it across several renders"
     );
 }
 

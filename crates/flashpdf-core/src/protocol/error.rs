@@ -71,6 +71,13 @@ impl std::fmt::Display for ProtocolError {
             Self::InvalidColumnKind => "invalid column kind",
             Self::InvalidRecordLength => "invalid record length",
             Self::InvalidValue(name) => return write!(formatter, "invalid {name}"),
+            Self::Render(crate::RenderError::TooManyPages) => {
+                return write!(
+                    formatter,
+                    "document exceeds {} pages; split it across several renders",
+                    crate::renderer::MAX_PAGES
+                )
+            }
             Self::Render(error) => return write!(formatter, "{error:?}"),
             Self::InvalidImage(message) => return formatter.write_str(message),
             Self::ImagesTooLarge => "images exceed 64 MiB per render",

@@ -106,9 +106,10 @@ fn given_a_content_stream_when_inflated_then_yields_the_painted_operators() {
 #[test]
 fn given_content_beyond_the_cap_when_pushing_then_rejects() {
     let mut renderer = super::Renderer::new(Page::A4);
+    // 10pt text fills pages densely enough to reach the byte cap before the page cap.
     let long = Command::Text {
         text: &"W ".repeat(30_000),
-        style: TextStyle::plain(Pt(100.0)),
+        style: TextStyle::plain(Pt(10.0)),
     };
     let error = (0..1000)
         .find_map(|_| renderer.push(&[long]).err())

@@ -38,12 +38,17 @@ const opcode = {
 	attachment: 21,
 	end: 255,
 } as const;
+/** The core's caps; images are checked here because `add_image` copies the bytes into WASM memory. */
+const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+const MAX_PAGES = 10_000;
 
 export class ProtocolWriter {
 	private repeating: "header" | "footer" | undefined;
 	private repeatWritten = false;
 	/** Slot per registered byte array, so a logo reused on every row embeds once. */
 	private readonly images = new Map<Uint8Array, number>();
+	private imageBytes = 0;
+	private pages = 1;
 
 	constructor(
 		private readonly binary: Binary,
@@ -143,11 +148,14 @@ export class ProtocolWriter {
 		this.body();
 		let slot = this.images.get(src);
 		if (slot === undefined) {
+			if (this.imageBytes + src.byteLength > MAX_IMAGE_BYTES)
+				throw new Error("images exceed 64 MiB per render");
 			try {
 				slot = this.assets.add_image(src);
 			} catch (error) {
 				throw asError(error);
 			}
+			this.imageBytes += src.byteLength;
 			this.images.set(src, slot);
 		}
 		this.binary.record(opcode.image, () => {
@@ -221,6 +229,8 @@ export class ProtocolWriter {
 
 	pageBreak() {
 		this.body();
+		if (++this.pages > MAX_PAGES)
+			throw new Error(`document exceeds ${MAX_PAGES} pages; split it across several renders`);
 		this.binary.record(opcode.pageBreak);
 	}
 

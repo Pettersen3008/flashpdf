@@ -200,6 +200,7 @@ fn png(bytes: Vec<u8>) -> Result<Image, String> {
         return Err("PNG has no IDAT chunk".into());
     }
     let (width, height) = dimensions(width, height)?;
+    // Inflating to check opaque data would cost time per pixel: 12 GB for a 65,535-square RGB.
     let passthrough = |color_space: ColorSpace, color_key| Image {
         width,
         height,

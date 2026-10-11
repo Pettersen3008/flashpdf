@@ -272,4 +272,5 @@ pub enum RenderError {
     MissingGlyph(char),
     DocumentTooLarge,
     ImageTooWide,
+    TooManyPages,
 }

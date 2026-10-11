@@ -73,6 +73,41 @@ test("given the same Uint8Array used for two images, when writing them, then reg
 	assert.equal(registered[0], logo);
 });
 
+test("given images totalling over 64 MiB, when writing them, then rejects the last one before copying it into WASM", () => {
+	const memory = { buffer: new ArrayBuffer(4096) };
+	const copied = [];
+	const renderer = {
+		input_ptr: () => 0,
+		input_capacity: () => 4096,
+		push: () => {},
+		finish: () => new Uint8Array(),
+		add_image: (bytes) => copied.push(bytes.byteLength) - 1,
+	};
+	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
+	const half = new Uint8Array(32 * 1024 * 1024 + 1);
+	writer.image(half, undefined, undefined, "", undefined);
+	assert.throws(
+		() => writer.image(half.slice(), undefined, undefined, "", undefined),
+		/^Error: images exceed 64 MiB per render$/,
+	);
+	assert.deepEqual(copied, [half.byteLength]);
+});
+
+test("given page breaks past 10000 pages, when writing them, then rejects before the core sees the extra page", () => {
+	const memory = { buffer: new ArrayBuffer(4096) };
+	let pushes = 0;
+	const renderer = {
+		input_ptr: () => 0,
+		input_capacity: () => 4096,
+		push: () => pushes++,
+		finish: () => new Uint8Array(),
+	};
+	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
+	for (let page = 1; page < 10_000; page++) writer.pageBreak();
+	assert.throws(() => writer.pageBreak(), /^Error: document exceeds 10000 pages; split it/);
+	assert.equal(pushes, 9_999);
+});
+
 test("given a WASM fetch that fails once, when loading again, then retries instead of keeping the failure", async () => {
 	const bytes = readFileSync(new URL("../wasm/flashpdf_wasm_bg.wasm", import.meta.url));
 	const original = globalThis.fetch;
