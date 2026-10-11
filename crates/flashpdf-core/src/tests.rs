@@ -213,7 +213,10 @@ fn given_exact_bottom_row_when_placed_then_stays_on_page() {
     let columns = [super::ColumnWidth::Fixed(Pt(100.0))];
     let pdf = parsed(&[
         Command::Spacer(Pt(20.0)),
-        Command::RowStart { columns: &columns },
+        Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        },
         Command::StackStart { gap: Pt(0.0) },
         text("a"),
         text("b"),
@@ -471,7 +474,10 @@ fn given_columns_when_wrapped_then_pdf_has_measured_positions_and_deterministic_
         Fraction(FractionValue::new(3.0).unwrap()),
     ];
     let commands = [
-        Command::RowStart { columns: &columns },
+        Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        },
         Command::StackStart { gap: Pt(0.0) },
         text("aa \t aa"),
         Command::StackEnd,
@@ -509,7 +515,10 @@ fn given_percent_and_fraction_columns_when_measured_then_percent_uses_row_width(
         Fraction(FractionValue::new(1.0).unwrap()),
     ];
     let pdf = parsed(&[
-        Command::RowStart { columns: &columns },
+        Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        },
         text("left"),
         text("right"),
         Command::RowEnd,
@@ -528,7 +537,10 @@ fn given_percent_columns_totalling_one_hundred_when_rounded_then_accepts_them() 
     ];
     assert_eq!(
         parsed(&[
-            Command::RowStart { columns: &columns },
+            Command::RowStart {
+                columns: &columns,
+                slots: &[]
+            },
             text(""),
             text(""),
             Command::RowEnd,
@@ -556,12 +568,18 @@ fn given_a_table_with_two_header_rows_and_sixty_body_rows_when_rendered_then_rep
         .collect();
     let mut commands = vec![table_start(2)];
     for header in [["H1a", "H1b", "H1c"], ["H2a", "H2b", "H2c"]] {
-        commands.push(Command::RowStart { columns: &columns });
+        commands.push(Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        });
         commands.extend(header.iter().map(|cell| text(cell)));
         commands.push(Command::RowEnd);
     }
     for row in cells.chunks(3) {
-        commands.push(Command::RowStart { columns: &columns });
+        commands.push(Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        });
         commands.extend(row.iter().map(|cell| text(cell)));
         commands.push(Command::RowEnd);
     }
@@ -594,7 +612,10 @@ fn given_a_painted_cell_beside_a_taller_cell_when_laid_out_then_its_background_c
     };
     let columns = [Fixed(Pt(50.0)), Fraction(FractionValue::new(1.0).unwrap())];
     let pdf = parsed(&[
-        Command::RowStart { columns: &columns },
+        Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        },
         Command::BoxStart { style },
         text("a"),
         Command::BoxEnd,
@@ -611,6 +632,121 @@ fn given_a_painted_cell_beside_a_taller_cell_when_laid_out_then_its_background_c
     );
 }
 
+const TOP: super::Slot = super::Slot::Cell {
+    rows: 1,
+    align: super::VerticalAlign::Top,
+};
+
+fn red_box() -> Command<'static> {
+    Command::BoxStart {
+        style: super::BoxStyle {
+            margin: Edges::all(Pt(0.0)),
+            padding: Edges::all(Pt(0.0)),
+            border: Edges::all(Pt(0.0)),
+            background: Some(Rgb { r: 255, g: 0, b: 0 }),
+            border_color: Edges::all(Rgb::BLACK),
+        },
+    }
+}
+
+#[test]
+fn given_a_cell_joined_to_the_next_column_when_laid_out_then_it_takes_both_widths() {
+    use super::ColumnWidth::{Fixed, Fraction};
+    let columns = [
+        Fixed(Pt(20.0)),
+        Fixed(Pt(30.0)),
+        Fraction(FractionValue::new(1.0).unwrap()),
+    ];
+    let pdf = parsed(&[
+        Command::RowStart {
+            columns: &columns,
+            slots: &[TOP, super::Slot::Join, TOP],
+        },
+        red_box(),
+        text("a"),
+        Command::BoxEnd,
+        text("b"),
+        Command::RowEnd,
+    ]);
+    let content = content(&pdf);
+    assert!(content.contains("10 40.75 50 9.25 re"), "{content}");
+    assert!(content.contains("60 42.82 Td"), "{content}");
+}
+
+#[test]
+fn given_a_cell_spanning_two_rows_taller_than_both_when_laid_out_then_the_last_row_grows_to_fit_it()
+{
+    let columns = [super::ColumnWidth::Fraction(FractionValue::new(1.0).unwrap()); 2];
+    let span = super::Slot::Cell {
+        rows: 2,
+        align: super::VerticalAlign::Top,
+    };
+    let pdf = parsed(&[
+        Command::StackStart { gap: Pt(0.0) },
+        Command::RowStart {
+            columns: &columns,
+            slots: &[span, TOP],
+        },
+        red_box(),
+        Command::StackStart { gap: Pt(0.0) },
+        text("a"),
+        text("b"),
+        text("c"),
+        Command::StackEnd,
+        Command::BoxEnd,
+        text("r1"),
+        Command::RowEnd,
+        Command::RowStart {
+            columns: &columns,
+            slots: &[super::Slot::Covered, TOP],
+        },
+        text("r2"),
+        Command::RowEnd,
+        Command::StackEnd,
+        text("after"),
+    ]);
+    let content = content(&pdf);
+    // Three 9.25pt lines: the span's box covers both rows, and "after" follows them.
+    assert!(content.contains("10 22.25 50 27.75 re"), "{content}");
+    assert!(content.contains("60 33.57 Td"), "{content}");
+    assert!(content.contains("10 15.07 Td"), "{content}");
+}
+
+#[test]
+fn given_middle_and_bottom_cells_beside_a_taller_cell_when_laid_out_then_their_content_moves_down_by_half_and_all_of_the_free_space(
+) {
+    let columns = [super::ColumnWidth::Fraction(FractionValue::new(1.0).unwrap()); 3];
+    let align = |align| super::Slot::Cell { rows: 1, align };
+    let pdf = parsed(&[
+        Command::RowStart {
+            columns: &columns,
+            slots: &[
+                TOP,
+                align(super::VerticalAlign::Middle),
+                align(super::VerticalAlign::Bottom),
+            ],
+        },
+        Command::StackStart { gap: Pt(0.0) },
+        text("a"),
+        text("b"),
+        text("c"),
+        Command::StackEnd,
+        red_box(),
+        text("m"),
+        Command::BoxEnd,
+        text("z"),
+        Command::RowEnd,
+    ]);
+    let content = content(&pdf);
+    // The middle cell's background still covers the row; only its text moves.
+    assert!(
+        content.contains("43.333332 22.25 33.333332 27.75 re"),
+        "{content}"
+    );
+    assert!(content.contains("43.333332 33.57 Td"), "{content}");
+    assert!(content.contains("76.666664 24.32 Td"), "{content}");
+}
+
 #[test]
 fn given_a_table_row_taller_than_the_page_with_its_header_when_rendered_then_rejects_naming_the_row(
 ) {
@@ -619,10 +755,16 @@ fn given_a_table_row_taller_than_the_page_with_its_header_when_rendered_then_rej
     )];
     let mut commands = vec![
         table_start(1),
-        Command::RowStart { columns: &columns },
+        Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        },
         text("header"),
         Command::RowEnd,
-        Command::RowStart { columns: &columns },
+        Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        },
         Command::StackStart { gap: Pt(0.0) },
     ];
     commands.extend(std::iter::repeat_n(text("line"), 4));
@@ -698,10 +840,17 @@ fn given_invalid_containers_when_measured_then_rejects() {
             Command::PageBreak,
             Command::StackEnd,
         ],
-        vec![Command::RowStart { columns: &[] }, Command::RowEnd],
+        vec![
+            Command::RowStart {
+                columns: &[],
+                slots: &[],
+            },
+            Command::RowEnd,
+        ],
         vec![
             Command::RowStart {
                 columns: &[Fixed(Pt(101.0))],
+                slots: &[],
             },
             text("x"),
             Command::RowEnd,
@@ -709,12 +858,14 @@ fn given_invalid_containers_when_measured_then_rejects() {
         vec![
             Command::RowStart {
                 columns: &[Fixed(Pt(20.0))],
+                slots: &[],
             },
             Command::RowEnd,
         ],
         vec![
             Command::RowStart {
                 columns: &[Fixed(Pt(20.0))],
+                slots: &[],
             },
             text("x"),
             text("y"),
@@ -727,11 +878,13 @@ fn given_invalid_containers_when_measured_then_rejects() {
             table_start(0),
             Command::RowStart {
                 columns: &[Fixed(Pt(20.0))],
+                slots: &[],
             },
             text("x"),
             Command::RowEnd,
             Command::RowStart {
                 columns: &[Fixed(Pt(20.0)), Fixed(Pt(20.0))],
+                slots: &[],
             },
             text("x"),
             text("y"),
@@ -747,7 +900,13 @@ fn given_invalid_containers_when_measured_then_rejects() {
     assert_eq!(FractionValue::new(0.0), Err(RenderError::InvalidLayout));
     let too_many = [Fraction(FractionValue::new(1.0).unwrap()); 257];
     assert_eq!(
-        super::render(page(), &[Command::RowStart { columns: &too_many }]),
+        super::render(
+            page(),
+            &[Command::RowStart {
+                columns: &too_many,
+                slots: &[]
+            }]
+        ),
         Err(RenderError::InvalidLayout)
     );
     let mut allowed = vec![Command::StackStart { gap: Pt(0.0) }; 64];
@@ -883,7 +1042,10 @@ fn given_a_table_with_a_footer_row_when_it_spans_pages_then_the_footer_follows_t
         .chain(cells.iter().map(String::as_str))
     {
         commands.extend([
-            Command::RowStart { columns: &columns },
+            Command::RowStart {
+                columns: &columns,
+                slots: &[],
+            },
             text(cell),
             Command::RowEnd,
         ]);
@@ -942,7 +1104,13 @@ fn given_a_header_and_footer_when_a_stack_or_table_row_is_taller_than_the_body_b
     let columns = [super::ColumnWidth::Fraction(
         FractionValue::new(1.0).unwrap(),
     )];
-    let mut table = vec![table_start(0), Command::RowStart { columns: &columns }];
+    let mut table = vec![
+        table_start(0),
+        Command::RowStart {
+            columns: &columns,
+            slots: &[],
+        },
+    ];
     table.extend(stack.iter().copied());
     table.extend([Command::RowEnd, Command::TableEnd]);
     assert_eq!(render(&stack).err(), Some(RenderError::PageOverflow));

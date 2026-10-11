@@ -160,6 +160,14 @@ pub enum TextAlign {
     Right,
 }
 
+/// Where a table cell's content sits when its row is taller than the content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Top,
+    Middle,
+    Bottom,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TextStyle {
     pub size: Pt,

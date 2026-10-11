@@ -1,4 +1,4 @@
-use crate::{BoxStyle, ColumnWidth, ImageSize, Pt, TextAlign, TextRun};
+use crate::{BoxStyle, ColumnWidth, ImageSize, Pt, TextAlign, TextRun, VerticalAlign};
 
 pub(crate) struct Document<'a> {
     pub(crate) blocks: Vec<Block<'a>>,
@@ -49,16 +49,21 @@ pub(crate) struct Stack<'a> {
 }
 
 pub(crate) struct Row<'a> {
+    pub(crate) columns: &'a [ColumnWidth],
     pub(crate) cells: Vec<Cell<'a>>,
 }
 
+/// Covers `span` columns from `column` and `rows` rows down.
 pub(crate) struct Cell<'a> {
-    pub(crate) width: ColumnWidth,
+    pub(crate) column: usize,
+    pub(crate) span: usize,
+    pub(crate) rows: u16,
+    pub(crate) align: VerticalAlign,
     pub(crate) content: Element<'a>,
 }
 
 /// Rows are Row elements, each optionally wrapped in a Box (`tr` paint) or a
-/// Stack (`break-inside: avoid` group). The first `header_rows`, then the next
+/// Stack (`break-inside: avoid` group, or rows a rowspan joins). The first `header_rows`, then the next
 /// `footer_rows`, repeat per page; body rows follow them.
 pub(crate) struct Table<'a> {
     pub(crate) header_rows: usize,

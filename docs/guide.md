@@ -45,7 +45,7 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `unsupported element <ul>` | There are no lists. | One `<p>` per item that starts with `•`. |
 | `unsupported style property: borderRadius`, `position`, `opacity`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
 | `height applies only to <img>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
-| `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
+| `rowSpan 2 runs past the last row of its <tbody>` | Rows that a `rowSpan` joins must sit in one row group. | Move the rows into one `tbody`, or lower `rowSpan`. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
 
@@ -53,35 +53,51 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 
 ### Totals table
 
-Give the totals table the same amount column width as the items table, so the numbers line up. The first column has no width and takes the rest. Keep the grand total out of `tfoot`, because `tfoot` rows repeat on every page.
+Put the totals in the items table, with each label spanning the columns left of the amounts, so the numbers line up with the amount column. Keep the grand total out of `tfoot`, because `tfoot` rows repeat on every page.
 
 ```tsx
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const format = (cents: number) => money.format(cents / 100);
-const amount = { width: '90pt', textAlign: 'right' } as const;
+const right = { textAlign: 'right' } as const;
 
 const subtotal = items.reduce((sum, item) => sum + item.cents, 0);
 const tax = Math.round(subtotal * 0.25);
 
-<table style={{ marginTop: 8, breakInside: 'avoid' }}>
+<table>
+  <thead>
+    <tr>
+      <th>Description</th>
+      <th style={{ width: '40pt', textAlign: 'right' }}>Qty</th>
+      <th style={{ width: '90pt', textAlign: 'right' }}>Amount</th>
+    </tr>
+  </thead>
   <tbody>
+    {items.map((item) => (
+      <tr key={item.id}>
+        <td>{item.description}</td>
+        <td style={right}>{item.quantity}</td>
+        <td style={right}>{format(item.cents)}</td>
+      </tr>
+    ))}
+  </tbody>
+  <tbody style={{ breakInside: 'avoid' }}>
     <tr>
-      <td style={{ textAlign: 'right' }}>Subtotal</td>
-      <td style={amount}>{format(subtotal)}</td>
+      <td colSpan={2} style={right}>Subtotal</td>
+      <td style={right}>{format(subtotal)}</td>
     </tr>
     <tr>
-      <td style={{ textAlign: 'right' }}>VAT 25%</td>
-      <td style={amount}>{format(tax)}</td>
+      <td colSpan={2} style={right}>VAT 25%</td>
+      <td style={right}>{format(tax)}</td>
     </tr>
     <tr>
-      <th style={{ textAlign: 'right' }}>Total</th>
-      <th style={amount}>{format(subtotal + tax)}</th>
+      <th colSpan={2} style={right}>Total</th>
+      <th style={right}>{format(subtotal + tax)}</th>
     </tr>
   </tbody>
 </table>
 ```
 
-Add amounts as integer cents and round once. `breakInside: 'avoid'` keeps the three rows on one page.
+Add amounts as integer cents and round once. `breakInside: 'avoid'` on the second `tbody` keeps the three totals rows on one page.
 
 ### Page X of Y footer
 

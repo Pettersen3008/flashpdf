@@ -25,6 +25,13 @@ export function decoration(value: unknown): { underline: boolean; lineThrough: b
 	return result;
 }
 
+/** `border-spacing` as one or two lengths; the result is true when either is nonzero. */
+export function spacing(value: unknown): boolean {
+	const lengths = typeof value === "number" ? [value] : String(value).trim().split(/\s+/);
+	if (lengths.length > 2) throw new Error(`invalid borderSpacing: ${String(value)}`);
+	return lengths.map((length) => point(length)).some(Boolean);
+}
+
 /** `parent` is the parent element's normalized style, which `inherit` reads. */
 export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedStyle {
 	if (value === undefined) return {};
@@ -61,6 +68,24 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 		result.breakInside !== "avoid"
 	)
 		throw new Error("invalid breakInside");
+	if (result.verticalAlign === "baseline")
+		throw new Error(
+			"vertical-align: baseline is not implemented, since cells with different font sizes or padding would misalign; use top, middle, or bottom",
+		);
+	if (
+		result.verticalAlign !== undefined &&
+		result.verticalAlign !== "top" &&
+		result.verticalAlign !== "middle" &&
+		result.verticalAlign !== "bottom"
+	)
+		throw new Error("invalid verticalAlign (use top, middle, or bottom)");
+	if (
+		result.borderCollapse !== undefined &&
+		result.borderCollapse !== "collapse" &&
+		result.borderCollapse !== "separate"
+	)
+		throw new Error("invalid borderCollapse");
+	if (result.borderSpacing !== undefined) spacing(result.borderSpacing);
 	if (result.flex !== undefined) {
 		const { grow, basis } = flexGrow(result.flex);
 		// A column keeps only the grow factor, so a length basis, or `auto` beside a width, would be dropped.
