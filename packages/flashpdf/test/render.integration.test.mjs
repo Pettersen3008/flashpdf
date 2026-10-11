@@ -353,6 +353,19 @@ test("given opacity on a header or footer, when rendering, then rejects instead 
 		);
 });
 
+test("given Tailwind v4 border and md: utilities, when rendering with two margins, then draws the border and applies md: only to the wider content", async () => {
+	const css = readFileSync(new URL("./fixtures/tailwind-invoice.css", import.meta.url), "utf8");
+	const document = jsx("main", {
+		children: jsx("div", { className: "border border-gray-200 p-4 md:p-8", children: "Total" }),
+	});
+	// 48rem is 576 pt: the default margin leaves 523 pt, and no margin leaves 595 pt.
+	const narrow = string(await render(document, { stylesheets: [css] }));
+	assert.match(narrow, /0\.898\d* 0\.905\d* 0\.921\d* rg\n36 805\.25 523 0\.75 re\nf/);
+	assert.match(narrow, /\n48\.75 [\d.]+ Td\n\(Total\)/);
+	const wide = string(await render(document, { stylesheets: [css], margin: 0 }));
+	assert.match(wide, /\n24\.75 [\d.]+ Td\n\(Total\)/);
+});
+
 test("given a long native main with a page break rule, when rendering, then it paginates", async () => {
 	const document = jsx("main", {
 		children: Array.from({ length: 100 }, (_, index) =>

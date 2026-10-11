@@ -2,9 +2,10 @@ import type { NormalizedStyle } from "../style.js";
 import { point, style } from "../style.js";
 import type { ElementNode, Node, Tag, TextNode } from "../tree.js";
 import { label, locate } from "../tree.js";
+import { evaluateMath } from "./math.js";
 import { compareSpecificity, inline, matches, parse } from "./parser.js";
 import { inherited } from "./properties.js";
-import type { CascadedStyle, Identity, Rule } from "./types.js";
+import type { CascadedStyle, Elem, Registration, Rule } from "./types.js";
 
 export type StyledElement = Omit<ElementNode, "style" | "children"> & {
 	readonly style: NormalizedStyle;
@@ -86,7 +87,7 @@ function resolveVariable(
 			const candidate = variables[name as `--${string}`] ?? fallback;
 			if (candidate === undefined)
 				throw new Error(
-					`undefined CSS variable: ${name} (rules with unsupported selectors such as :root are skipped)`,
+					`undefined CSS variable: ${name} (rules inside an @layer block, such as Tailwind's :root theme, are skipped)`,
 				);
 			return typeof candidate === "string"
 				? resolveVariable(candidate, variables, resolving, budget)
@@ -104,100 +105,144 @@ function resolveFontSize(result: CascadedStyle, parent: NormalizedStyle) {
 	if (typeof result.fontSize !== "string" || /^\s*(?:inherit|initial)\s*$/i.test(result.fontSize))
 		return;
 	const parentSize = typeof parent.fontSize === "number" ? parent.fontSize : 12;
-	result.fontSize = point(result.fontSize, parentSize, true);
+	result.fontSize = point(evaluateMath("fontSize", result.fontSize, parentSize), parentSize, true);
 }
 
-/** One element's cascade. `children` caches the children's results by inline style, then by
- *  `tag\nid\nclasses`. One parent result implies one ancestor chain, so equal keys match the
- *  same rules. */
+/** The element siblings of `nodes` under `parent`, which is how selectors see a tree: text nodes do not count. */
+function elements(nodes: readonly Node[], parent?: Elem): Elem[] {
+	const found = nodes.filter((node): node is ElementNode => node.kind === "element");
+	const totals = new Map<string, number>();
+	for (const { tag } of found) totals.set(tag, (totals.get(tag) ?? 0) + 1);
+	const seen = new Map<string, number>();
+	let previous: Elem | undefined;
+	return found.map((node, index) => {
+		const typeIndex = (seen.get(node.tag) ?? 0) + 1;
+		seen.set(node.tag, typeIndex);
+		const elem: Elem = {
+			tag: node.tag,
+			id: node.id,
+			classes: node.classes,
+			parent,
+			previous,
+			index: index + 1,
+			count: found.length,
+			typeIndex,
+			typeCount: totals.get(node.tag)!,
+			empty: node.children.every((child) => child.kind === "text" && child.value === ""),
+		};
+		previous = elem;
+		return elem;
+	});
+}
+
 type Computed = {
 	cascaded: CascadedStyle;
 	style: NormalizedStyle;
 	children?: Map<unknown, Map<string, Computed>>;
 };
 
-function compute(
-	value: ElementNode,
-	identity: Identity,
-	rules: Rule[],
-	ancestors: Identity[],
-	parent: Computed,
-): Computed {
-	// No prototype, so an own `__proto__` key (from JSON.parse) stays a key that style() rejects.
-	const result: CascadedStyle = Object.create(null);
-	for (const [key, item] of Object.entries(parent.cascaded))
-		if (key.startsWith("--") || inherited.has(key)) (result as Record<string, unknown>)[key] = item;
-	cascade(result, uaStyles[value.tag]);
-	const matched = rules.filter((rule) => matches(rule.selector, identity, ancestors));
-	const own = inline(value.style);
-	for (const rule of matched) cascade(result, rule.declarations().normal);
-	cascade(result, own.normal);
-	for (const rule of matched) cascade(result, rule.declarations().important);
-	cascade(result, own.important);
-	let budget: { expansions: number } | undefined;
-	for (const [key, item] of Object.entries(result))
-		if (typeof item === "string" && item.includes("var("))
-			(result as Record<string, unknown>)[key] = resolveVariable(
-				item,
-				result,
-				new Set(key.startsWith("--") ? [key] : []),
-				(budget ??= { expansions: 0 }),
-			);
-	resolveFontSize(result, parent.style);
-	return { cascaded: result, style: style(result, parent.style) };
-}
-
 function visit(
-	value: Node,
+	value: ElementNode,
+	elem: Elem,
 	rules: Rule[],
-	ancestors: Identity[],
+	properties: ReadonlyMap<string, Registration>,
 	parent: Computed,
 	chain: string,
-): StyledNode {
-	if (value.kind === "text") return value;
-	const identity: Identity = { tag: value.tag, id: value.id, classes: value.classes };
+): StyledElement {
 	const self = label(value);
 	const where = chain ? `${self} in ${chain}` : self;
+	const matched = rules.filter((rule) => matches(rule.selector, elem));
 	const byStyle = (parent.children ??= new Map());
 	let cache = byStyle.get(value.style);
 	if (!cache) byStyle.set(value.style, (cache = new Map()));
-	const key = `${value.tag}\n${value.id ?? ""}\n${value.classes.join(" ")}`;
+	const key = `${value.tag}\n${matched.map((rule) => rule.order).join(",")}`;
 	let computed = cache.get(key);
 	if (!computed) {
+		// No prototype, so an own `__proto__` key stays a key that style() rejects.
+		const result: CascadedStyle = Object.create(null);
+		let resolved: NormalizedStyle;
 		try {
-			computed = compute(value, identity, rules, ancestors, parent);
+			for (const [key, item] of Object.entries(parent.cascaded))
+				if (key.startsWith("--") ? properties.get(key)?.inherits !== false : inherited.has(key))
+					(result as Record<string, unknown>)[key] = item;
+			// A registered `initial-value` is the value of a property nothing sets, ahead of any var() fallback.
+			for (const [name, { initial }] of properties)
+				if (initial !== undefined && !(name in result))
+					(result as Record<string, unknown>)[name] = initial;
+			cascade(result, uaStyles[value.tag]);
+			const own = inline(value.style);
+			for (const rule of matched) cascade(result, rule.declarations().normal);
+			cascade(result, own.normal);
+			for (const rule of matched) cascade(result, rule.declarations().important);
+			cascade(result, own.important);
+			let budget: { expansions: number } | undefined;
+			for (const [key, item] of Object.entries(result))
+				if (typeof item === "string" && item.includes("var("))
+					(result as Record<string, unknown>)[key] = resolveVariable(
+						item,
+						result,
+						new Set(key.startsWith("--") ? [key] : []),
+						(budget ??= { expansions: 0 }),
+					);
+			resolveFontSize(result, parent.style);
+			const em =
+				typeof result.fontSize === "number"
+					? result.fontSize
+					: typeof parent.style.fontSize === "number"
+						? parent.style.fontSize
+						: 12;
+			for (const [key, item] of Object.entries(result))
+				if (typeof item === "string" && !key.startsWith("--"))
+					(result as Record<string, unknown>)[key] = evaluateMath(key, item, em);
+			resolved = style(result, parent.style);
 		} catch (error) {
 			throw locate(error, where);
 		}
+		computed = { cascaded: result, style: resolved };
 		cache.set(key, computed);
 	}
-	ancestors.push(identity);
+	const siblings = elements(value.children, elem);
+	let next = 0;
 	const children = value.children.map((child) =>
-		visit(child, rules, ancestors, computed, chain ? `${self} > ${chain}` : self),
+		child.kind === "text"
+			? child
+			: visit(
+					child,
+					siblings[next++]!,
+					rules,
+					properties,
+					computed,
+					chain ? `${self} > ${chain}` : self,
+				),
 	);
-	ancestors.pop();
 	return { ...value, style: computed.style, where, children };
 }
 
-/** Parses `sheets` on first use; every call shares the parsed rules and the style cache. */
 export function styleResolver(
 	sheets: readonly string[] = [],
+	width = 523,
 ): (value: readonly Node[]) => readonly StyledNode[] {
+	const properties = new Map<string, Registration>();
 	let rules: Rule[] | undefined;
 	const root: Computed = { cascaded: {}, style: {} };
 	return (value) => {
 		if (!rules) {
-			rules = sheets.flatMap(parse);
+			rules = sheets.flatMap((sheet) => parse(sheet, { width, properties }));
 			for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
 			rules.sort((a, b) => compareSpecificity(a.specificity, b.specificity) || a.order - b.order);
 		}
-		return value.map((node) => visit(node, rules!, [], root, ""));
+		const roots = elements(value);
+		let next = 0;
+		return value.map((node) =>
+			node.kind === "text" ? node : visit(node, roots[next++]!, rules!, properties, root, ""),
+		);
 	};
 }
 
 export function resolveStyles(
 	value: readonly Node[],
 	sheets: readonly string[] = [],
+	width = 523,
 ): readonly StyledNode[] {
-	return styleResolver(sheets)(value);
+	return styleResolver(sheets, width)(value);
 }

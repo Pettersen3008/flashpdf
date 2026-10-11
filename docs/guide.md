@@ -1,6 +1,6 @@
 # FlashPDF guide
 
-Setup for bundlers and browsers, fixes for common rejections, four recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
+Setup for bundlers and browsers, fixes for common rejections, Tailwind v4, four recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
 
 ## Bundlers and runtimes
 
@@ -54,6 +54,43 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
+| `undefined CSS variable: --spacing` | A Tailwind build without `theme(inline)` keeps its values in a `:root` rule inside `@layer theme`, which FlashPDF skips with every `@layer` block. | Import the theme as `theme(inline)`. See Tailwind v4 below. |
+| `unsupported media query "(prefers-color-scheme: dark)"` | Only `print`, `screen`, and width conditions evaluate. | Drop the `dark:` or `motion-safe:` utility from the element. |
+| `unsupported CSS selector: attribute selectors`, `:has()`, `:lang()` | The selector could match an element, and FlashPDF cannot evaluate it. `stylesheet()` rejects it even if no element matches. | Select a class or id instead. Selectors that can never match in a PDF, such as `:hover` and `::before`, are skipped without an error. |
+
+## Tailwind v4
+
+Compile with the Tailwind CLI, then pass the CSS to `render`. Import the theme inline and only the utilities, so colour and spacing utilities carry their values and the preflight, whose `*` rule sets `box-sizing` and other properties FlashPDF rejects, stays out. `examples/css-integrations/tailwind.mjs` builds and renders an invoice this way.
+
+```css
+@import 'tailwindcss/theme.css' theme(inline);
+@import 'tailwindcss/utilities.css' source(none);
+@source '../src/invoice.tsx';
+```
+
+```sh
+tailwindcss -i invoice.css -o invoice.out.css --minify
+```
+
+Tailwind compiles spacing to `calc(0.25rem * 4)`, `px-4` to `padding-inline`, `w-1/2` to `calc(1 / 2 * 100%)`, and `border` to `border-style: var(--tw-border-style)` with an `@property` default of `solid`. FlashPDF evaluates the `calc()`, maps the logical properties to left, right, top, and bottom for left-to-right text, matches the escaped `.w-1\/2` to the class `w-1/2`, and reads the `@property` default. `@media` blocks apply when they match: `print` does, `screen` does not, and a width condition compares the page content width, which is the page width minus both margins. With A4 and the default 36 pt margin that is 523 pt, so `sm:` (480 pt) applies and `md:` (576 pt) does not unless `margin` is 9.5 pt or less.
+
+| Utilities | Result |
+| --- | --- |
+| `p-*`, `px-*`, `py-*`, `m-*`, `mt-*`, and the other sides | Render. |
+| `border`, `border-b`, `border-t`, `border-0`, `border-solid`, `border-none`, `border-gray-200` | Render. |
+| `text-sm`, `text-lg`, and the other sizes, `leading-*`, `font-semibold`, `font-bold`, `text-right`, `text-gray-600`, `bg-gray-100`, `underline` | Render. |
+| `w-1/2`, `w-32`, `w-[120px]` | Render on flex row children and first-row table cells, where the engine measures columns. Elsewhere `width applies only to a flex row child`. |
+| `flex`, `flex-col`, `flex-row`, `flex-1`, `gap-4` | Render. `flex-1` only on a flex row child. Nothing shrinks, so two `w-1/2` columns with a `gap-4` reject with `InvalidLayout`. |
+| `md:p-8`, `sm:p-4`, `print:p-0` | Render, when the media condition matches. |
+| `-mt-4`, `mx-auto`, `w-auto` | Reject: `invalid length: -12pt` and `auto`, because margins cannot be negative or `auto`, and `invalid width: auto`. |
+| `border-dashed`, `border-x`, `border-y` | Reject: dashed and dotted borders are not drawn, and `border-inline-*` and `border-block-*` are not mapped yet. |
+| `rounded-*`, `shadow-*`, `opacity-*`, `bg-black/50`, `justify-*`, `items-*` | Reject: square corners, no shadows, no opacity (also in `/50` colours), no flex alignment. `stylesheet()` rejects `bg-black/50` as soon as it is in the sheet. |
+| `hidden`, `grid`, `inline`, `h-8`, `min-w-0`, `max-w-md`, `size-4` | Reject: `display` is `block` or `flex`, block height comes from content, and `min-width` and `max-width` are not implemented. |
+| `uppercase`, `italic`, `tracking-wide`, `truncate` | Reject: no `text-transform`, italic face, letter spacing, or `overflow`. |
+| `dark:`, `motion-safe:`, `portrait:` | Reject with `unsupported media query`, only where the utility is used. |
+| `first:`, `last:`, `only:`, `odd:`, `even:`, `empty:`, `nth-*:`, `*:`, `group-first:`, `space-y-*`, `divide-y`, `divide-gray-200` | Render. They compile to `:first-child`, `:nth-child(odd)`, `:is(.x > *)`, and `:where(.space-y-4 > :not(:last-child))`. Position counts the element siblings: text, `null`, and fragments do not count, so `first:` on a `<tr>` is the first row of its `<tbody>`. `space-y-*` and `divide-y` style the children, not the container. |
+| `hover:`, `focus:`, `active:`, `disabled:`, `checked:`, `group-hover:`, `before:`, `placeholder:`, `selection:` | Do nothing, quietly. A PDF has no pointer, focus, or form state and no generated content, so these selectors never match. |
+| `data-*:`, `aria-*:`, `has-*:`, `open:`, `rtl:`, `ltr:` | Reject with the selector and reason: attribute selectors, `:has()`, and `:dir()` are not implemented. |
 
 ## Tailwind
 

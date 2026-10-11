@@ -24,6 +24,7 @@
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
 - A styled 10,000-row invoice renders about 68% faster (630 ms to 200 ms). Elements with the same parent style, tag, id, classes, and inline style share one computed style; box styles and colours are parsed once; stylesheets are parsed once per render instead of once each for the body, header, and footer. Protocol records go to WASM up to 64 KiB per batch instead of one call per record, and `PdfRenderer.records()` reports which record the engine rejected, so errors still name the element that caused them. The protocol framing and output bytes are unchanged.
 - `render` resolves `header` and `footer` components before it registers fonts and attachments, so an error in one of them now comes before a font or attachment error.
+- A rule with an escaped selector, such as Tailwind's `.bg-black\/50`, now matches and validates instead of being skipped, so `stylesheet()` rejects one whose declarations the subset lacks.
 ### Fixed
 
 - With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.
@@ -45,6 +46,15 @@
 - `inherit` and `initial` on every supported property, and `currentcolor` as the element's own `color`.
 - `text-decoration-line`, with the values `text-decoration` takes, so Tailwind's `underline` and `line-through` work.
 - `rem` for `width` and image `height`, as minified Tailwind emits for `w-32`.
+- `calc()`, `min()`, `max()`, and `clamp()` over lengths and plain numbers, evaluated after `var()` substitution, so Tailwind's `calc(0.25rem * 4)` spacing renders. A percentage result works for `width`, `height`, and `line-height`; a percentage mixed with a length rejects with a reason.
+- Logical `margin-inline`, `margin-block`, `padding-inline`, `padding-block`, and their `-start` and `-end` longhands, mapped for horizontal left-to-right text. Tailwind's `px-*`, `py-*`, `mx-*`, and `my-*` use them.
+- `border-style` with `solid`, `none`, and `hidden`, and per-side `border-*-style`, `border-*-width`, and `border-*-color`. Other styles reject.
+- `@property`: `initial-value` is the default for an unset custom property, and `inherits: false` stops inheritance. Tailwind's `border` utility needs it for `--tw-border-style`.
+- Escaped selectors such as `.w-1\/2` and `.w-\[120px\]` match the unescaped class name.
+- `@media`: `print` and `all` apply, `screen` is skipped, and width conditions compare the page content width. Any other query rejects with a reason where a rule inside it matches an element.
+- Structural selectors: `:first-child`, `:last-child`, `:only-child`, `:nth-child()`, `:nth-last-child()`, the five `-of-type` forms, `:empty`, `:root`, and `*`. Siblings are the element children of a parent on the resolved tree, so text, fragments, and arrays do not count.
+- `:is()`, `:where()`, and `:not()` with selector lists, complex selectors included, and the next-sibling `+` and subsequent-sibling `~` combinators. `:is()` and `:not()` take their most specific argument and `:where()` adds nothing.
+- Tailwind v4's `first:`, `last:`, `only:`, `odd:`, `even:`, `empty:`, `nth-*:`, `*:`, `space-y-*`, and `divide-y` utilities render. They compile to these selectors, and FlashPDF skipped them before.
 
 ### Fixed
 
@@ -87,6 +97,8 @@
 ### Changed
 
 - Link annotations carry the print flag, which PDF/A requires.
+- A selector that could match an element but is outside the subset rejects at `stylesheet()` and `render`, naming the selector and reason, instead of being skipped. This covers attribute selectors such as `[href]`, `:has()`, `:lang()`, namespaces, unknown pseudo-classes, and malformed selectors. Pseudo-elements, state pseudo-classes such as `:hover` and `:disabled`, `:host`, and tags FlashPDF never renders can never match in a PDF, so they stay skipped. Move a rule that uses `[href]` or `:has()` out of the sheet, or select a class.
+- Rules with `*` or `:root` apply instead of being skipped, so an unlayered Tailwind preflight now rejects at its `box-sizing` declaration. Tailwind puts the preflight and theme in `@layer`, which FlashPDF still skips.
 
 ## 0.4.0 - 2026-10-02
 

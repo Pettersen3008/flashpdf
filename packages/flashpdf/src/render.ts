@@ -101,7 +101,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			repeating.push([position, nodes]);
 		}
 		const wasm = await loadWasm();
-		const styles = styleResolver(p.stylesheets as readonly string[] | undefined);
+		const styles = styleResolver(p.stylesheets as readonly string[] | undefined, width - margin * 2);
 		// The second pass pushes the record the engine rejected alone, so the element that wrote it reports.
 		const emit = (replayAt?: number): Uint8Array => {
 			const renderer = new PdfRenderer();

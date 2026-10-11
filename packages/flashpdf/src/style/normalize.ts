@@ -29,8 +29,15 @@ const INITIAL: Record<string, unknown> = {
 /** Absent, these follow the parent through the compiler's text state, so `inherit` leaves them absent. */
 const FROM_PARENT = new Set([...inherited, "lineHeight"]);
 
+const LOGICAL = /^(margin|padding)(Inline|Block)$/;
+// Horizontal left-to-right text: inline runs from left to right, block from top to bottom.
+const LOGICAL_SIDES = { Inline: ["Left", "Right"], Block: ["Top", "Bottom"] } as const;
+
 function longhands(key: string): string[] {
 	if (key === "margin" || key === "padding") return SIDES.map((side) => `${key}${side}`);
+	const logical = LOGICAL.exec(key);
+	if (logical)
+		return LOGICAL_SIDES[logical[2] as "Inline" | "Block"].map((side) => logical[1]! + side);
 	if (key === "border")
 		return SIDES.flatMap((side) => [
 			`border${side}Width`,
@@ -82,6 +89,13 @@ export function normalize(
 		} else if (key === "margin" || key === "padding") {
 			const values = edgeValues(item, key);
 			for (const [index, side] of SIDES.entries()) result[`${key}${side}`] = values[index];
+		} else if (LOGICAL.test(key)) {
+			const values = typeof item === "string" ? item.trim().split(/\s+/) : [item];
+			if (values.length > 2) throw new Error(`invalid ${key}: ${String(item)}`);
+			const [first, second = first] = values;
+			const [start, end] = longhands(key);
+			result[start!] = first;
+			result[end!] = second;
 		} else if (key === "border" || /^border(?:Top|Right|Bottom|Left)$/.test(key)) {
 			const border = parseBorder(item);
 			for (const side of key === "border" ? SIDES : [key.slice(6)]) {
@@ -105,6 +119,8 @@ export function normalize(
 					parts[1] === undefined
 						? across[index]
 						: `${String(across[index])} ${String(down[index])}`;
+		} else if (/^border(?:Top|Right|Bottom|Left)Style$/.test(key)) {
+			result[key] = item;
 		} else if (key === "background") result.backgroundColor = item;
 		else result[key] = item;
 	}
