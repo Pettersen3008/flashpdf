@@ -128,7 +128,7 @@ const pdf = await render(<Invoice />, {
 
 ## Embedded fonts
 
-The host provides TTF bytes for each family. `fontFamily` selects the first registered family in a list; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
+The host provides TTF bytes for each family. `fontFamily` selects the first entry in a list that is a registered family or a built-in name; `fontWeight: 'bold'` selects its optional bold file. Helvetica, Times (`serif`), and Courier (`monospace`) are built in, and Helvetica is the default.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());

@@ -20,7 +20,7 @@ use pdf_writer::types::AssociationKind;
 use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
-use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle};
+use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle, BUILT_IN};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -33,7 +33,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 8;
+const VERSION: u16 = 15;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -82,7 +82,7 @@ impl Decoder {
         if self.page.is_some() {
             return Err(ProtocolError::FontsAfterDocument);
         }
-        if self.fonts.len() >= 252 {
+        if self.fonts.len() + BUILT_IN >= 256 {
             return Err(ProtocolError::TooManyFonts);
         }
         self.font_bytes = self
@@ -92,7 +92,7 @@ impl Decoder {
             .ok_or(ProtocolError::FontsTooLarge)?;
         self.fonts
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
-        Ok((self.fonts.len() + 3) as u8)
+        Ok((self.fonts.len() + BUILT_IN - 1) as u8)
     }
 
     /// Images register at any point before the record that paints them, and are
@@ -524,16 +524,16 @@ impl Decoder {
         }
     }
 
-    /// Slots 0 and 1 are Helvetica; the rest are registered fonts.
+    /// The built-in fonts take the first slots; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
-        if self.pdfa && font.index() < 4 {
+        if self.pdfa && font.index() < BUILT_IN {
             return Err(ProtocolError::PdfAFont);
         }
         let count = self
             .renderer
             .as_ref()
-            .map_or(self.fonts.len() + 4, crate::Renderer::font_count);
+            .map_or(self.fonts.len() + BUILT_IN, crate::Renderer::font_count);
         if font.index() < count {
             Ok(font)
         } else {

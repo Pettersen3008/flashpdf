@@ -5,7 +5,7 @@ use pdf_writer::types::{
 use pdf_writer::writers::StructTreeRoot;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
-use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
+use crate::font::{base_font, font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
 use crate::paint::{image_name, PageLink, PageTag};
 use crate::{FontId, Page};
@@ -57,7 +57,7 @@ pub(crate) fn finish_pdf(
         .map(Content::len)
         .chain(used.iter().filter_map(|slot| match &fonts[slot.index()] {
             Font::Embedded(font) => Some(font.bytes.len()),
-            Font::Helvetica { .. } => None,
+            Font::Standard(_) => None,
         }))
         .chain(images.iter().map(|image| image.data.len()))
         .try_fold(8 * 1024_usize, |total, length| total.checked_add(length));
@@ -225,15 +225,9 @@ pub(crate) fn finish_pdf(
 
     for refs in &font_refs {
         match &fonts[refs.slot.index()] {
-            Font::Helvetica { bold, oblique } => {
-                let name: &[u8] = match (bold, oblique) {
-                    (false, false) => b"Helvetica",
-                    (true, false) => b"Helvetica-Bold",
-                    (false, true) => b"Helvetica-Oblique",
-                    (true, true) => b"Helvetica-BoldOblique",
-                };
+            Font::Standard(face) => {
                 pdf.type1_font(refs.font)
-                    .base_font(Name(name))
+                    .base_font(Name(base_font(*face)))
                     .encoding_predefined(Name(b"WinAnsiEncoding"));
             }
             Font::Embedded(font) => write_embedded(

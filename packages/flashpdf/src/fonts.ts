@@ -43,7 +43,7 @@ export function registerFonts(renderer: PdfRenderer, value: unknown): Map<string
 	return result;
 }
 
-/** The core reports a glyph it cannot show as `UnsupportedCharacter('x')` (Helvetica, WinAnsi
+/** The core reports a glyph it cannot show as `UnsupportedCharacter('x')` (a built-in font, WinAnsi
  *  only) or `MissingGlyph('x')` (the embedded font lacks it), with the character in Rust's
  *  debug escaping; this names the character and code point and says which font to blame. */
 export function glyphError(error: unknown): unknown {
@@ -60,6 +60,6 @@ export function glyphError(error: unknown): unknown {
 	return new Error(
 		match[1] === "MissingGlyph"
 			? `the font has no glyph for "${character}" (${codePoint})`
-			: `Helvetica has no glyph for "${character}" (${codePoint}); register a font that has it`,
+			: `the built-in font has no glyph for "${character}" (${codePoint}); register a font that has it`,
 	);
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { test } from "vitest";
 
-import { color, edges, font, helvetica, point, style } from "../dist/style.js";
+import { color, courier, edges, font, helvetica, point, style, times } from "../dist/style.js";
 
 test("given pt, px, em, and rem lengths, when resolving a point value, then converts to points", () => {
 	assert.equal(point("12pt"), 12);
@@ -71,17 +71,29 @@ test("given the flex shorthand, when normalizing, then keeps only the grow facto
 	assert.throws(() => style({ flex: "10px" }), /invalid flex: 10px/);
 });
 
-test("given a font-family list, when selecting a font, then uses the first registered family or a generic fallback", () => {
+test("given a font-family list, when selecting a font, then takes the first registered family or built-in match in order", () => {
 	const inter = { regular: 2, bold: 3 };
 	const fonts = new Map([
 		["Helvetica", helvetica],
 		["Inter", inter],
 	]);
-	const pick = (fontFamily) => font({ fontFamily }, helvetica, false, false, fonts).family;
+	const pick = (fontFamily, inherited = helvetica) =>
+		font({ fontFamily }, inherited, false, false, fonts).family;
 	assert.equal(pick("'Missing', \"Inter\", sans-serif"), inter);
 	assert.equal(pick("Missing, system-ui, sans-serif"), helvetica);
 	assert.equal(pick("Arial"), helvetica);
-	assert.throws(() => pick("Missing, monospace"), /unregistered font family: Missing, monospace/);
+	assert.equal(pick("Georgia, 'Times New Roman', serif"), times);
+	assert.equal(pick("Missing, monospace"), courier);
+	assert.equal(pick("Courier New, serif"), courier);
+	assert.equal(pick("Inter, serif"), inter);
+	// CSS reads a quoted generic keyword as a family name, so it matches nothing here.
+	assert.equal(pick("'serif', monospace"), courier);
+});
+
+test("given a font-family list with no match, when selecting a font, then keeps the inherited family", () => {
+	const fonts = new Map([["Helvetica", helvetica]]);
+	assert.equal(font({ fontFamily: "Missing, cursive" }, times, false, false, fonts).family, times);
+	assert.equal(font({}, courier, false, false, fonts).family, courier);
 });
 
 test("given a font weight outside normal, bold, and 1 to 1000, when normalizing, then rejects it", () => {

@@ -159,7 +159,7 @@ fn given_mutated_fonts_when_parsing_and_rendering_then_never_panics() {
         }
         let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
         let style = TextStyle {
-            font: super::FontId::new(4),
+            font: super::FontId::new(12),
             ..TextStyle::plain(Pt(12.0))
         };
         let _ = renderer.push(&[Command::Text {
@@ -649,17 +649,10 @@ fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint
 
 #[test]
 fn given_bold_helvetica_when_measuring_then_uses_bold_widths() {
+    use super::font::Font;
     assert_ne!(
-        super::font::Font::Helvetica {
-            bold: false,
-            oblique: false
-        }
-        .advance(b"A"),
-        super::font::Font::Helvetica {
-            bold: true,
-            oblique: false
-        }
-        .advance(b"A"),
+        Font::Standard(super::HELVETICA.slot()).advance(b"A"),
+        Font::Standard(super::HELVETICA_BOLD.slot()).advance(b"A"),
     );
 }
 
@@ -761,7 +754,7 @@ fn abel_text(text: &str) -> Result<Vec<u8>, RenderError> {
     renderer.push(&[Command::Text {
         text,
         style: TextStyle {
-            font: super::FontId::new(4),
+            font: super::FontId::new(12),
             ..TextStyle::plain(Pt(12.0))
         },
     }])?;
@@ -1039,7 +1032,7 @@ fn given_word_spacing_in_an_embedded_font_when_rendered_then_widens_each_space_w
     let font = super::EmbeddedFont::parse(ABEL.to_vec()).unwrap();
     let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
     let style = TextStyle {
-        font: super::FontId::new(4),
+        font: super::FontId::new(12),
         typography: super::Typography {
             word_spacing: 3.0,
             ..super::Typography::NORMAL
@@ -1144,6 +1137,51 @@ fn given_ava_in_helvetica_when_laid_out_then_kerns_each_pair_by_its_afm_value_un
     assert!(operands(&plain, "TJ").is_empty());
     let x = |pdf: &lopdf::Document| operands(pdf, "Td")[0][0];
     assert!((x(&kerned) - x(&plain) - 1.5).abs() < 0.001);
+}
+
+#[test]
+fn given_the_times_and_courier_slots_when_rendered_then_names_the_standard_faces() {
+    for (font, name, resource) in [
+        (super::TIMES, "Times-Roman", "T1"),
+        (super::TIMES_BOLD, "Times-Bold", "T2"),
+        (super::TIMES_ITALIC, "Times-Italic", "T3"),
+        (super::TIMES_BOLD_ITALIC, "Times-BoldItalic", "T4"),
+        (super::COURIER, "Courier", "C1"),
+        (super::COURIER_BOLD, "Courier-Bold", "C2"),
+        (super::COURIER_OBLIQUE, "Courier-Oblique", "C3"),
+        (super::COURIER_BOLD_OBLIQUE, "Courier-BoldOblique", "C4"),
+    ] {
+        let pdf = parsed(&[Command::Text {
+            text: "x",
+            style: TextStyle {
+                font,
+                ..TextStyle::plain(Pt(10.0))
+            },
+        }]);
+        let page = *pdf.get_pages().values().next().unwrap();
+        let fonts = pdf.get_page_fonts(page).unwrap();
+        let base_font = fonts[resource.as_bytes()].get(b"BaseFont").unwrap();
+        assert_eq!(base_font.as_name().unwrap(), name.as_bytes());
+    }
+}
+
+#[test]
+fn given_times_and_courier_when_measuring_then_times_kerns_by_afm_pairs_and_courier_is_fixed_width()
+{
+    let kerns = |font, text| {
+        let style = TextStyle {
+            font,
+            ..TextStyle::plain(Pt(10.0))
+        };
+        operands(&parsed(&[Command::Text { text, style }]), "TJ")
+    };
+    // Times-Roman KPX A V -135, T a -80, and T agrave -40, which differs from the base letter's.
+    assert_eq!(kerns(super::TIMES, "AV"), [[135.0]]);
+    assert_eq!(kerns(super::TIMES, "Ta"), [[80.0]]);
+    assert_eq!(kerns(super::TIMES, "T\u{e0}"), [[40.0]]);
+    assert!(kerns(super::COURIER, "AV").is_empty());
+    let courier = super::font::Font::Standard(super::COURIER.slot());
+    assert_eq!((courier.advance(b"i"), courier.advance(b"W")), (600, 600));
 }
 
 #[test]

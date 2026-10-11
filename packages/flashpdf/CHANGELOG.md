@@ -54,12 +54,16 @@
 - `text-transform: uppercase | lowercase | capitalize | none`, with locale-independent case mapping.
 - `text-decoration-color`, and a colour in the `text-decoration` shorthand.
 - Kerning, on by default, with `font-kerning: auto | normal | none`. Helvetica uses Adobe's AFM pairs; embedded fonts use GPOS pair adjustment under the `kern` feature, or the `kern` table. Line breaking measures kerned widths.
+- Times and Courier built-in fonts, each in regular, bold, italic or oblique, and bold italic, with Adobe's AFM widths and, for Times, its kerning pairs. `font-family` takes `serif`, `Times`, and `Times New Roman` for Times, and `monospace`, `Courier`, and `Courier New` for Courier. Output of a document that uses neither is unchanged.
 
 ### Changed
 
 - Link annotations carry the print flag, which PDF/A requires.
 - Underlines and line-throughs use the font's metrics: Helvetica's AFM underline position and thickness, or an embedded font's `post` and `OS/2` values. They were 1/14 em thick at fixed offsets before.
 - The binary protocol is version 8: run flags are a u16 with slant, letter spacing, word spacing, decoration colour, and kerning off, headers and footers carry the same typography flags, alignment 3 is justify, and embedded font slots start at 4 after the four Helvetica faces. The JavaScript and WASM halves ship together, so this affects no public API.
+- `font-family` reads its list in order and takes the first registered family or built-in name. A name that is neither, such as `Georgia`, falls through to the next entry, and a list with no match keeps the inherited family instead of rejecting with `unregistered font family`. `serif` and `ui-serif` select Times, where they selected Helvetica.
+- The glyph error for a character outside WinAnsi reads `the built-in font has no glyph for ...`, because Times and Courier share the limit. PDF/A rejects text in any built-in font.
+- The binary protocol is version 15: embedded font slots start at 12 after the twelve built-in faces. The JavaScript and WASM halves ship together, so this affects no public API.
 
 ## 0.4.0 - 2026-10-02
 

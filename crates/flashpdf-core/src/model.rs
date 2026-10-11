@@ -140,6 +140,14 @@ impl FontId {
     pub const HELVETICA_BOLD: Self = Self(1);
     pub const HELVETICA_OBLIQUE: Self = Self(2);
     pub const HELVETICA_BOLD_OBLIQUE: Self = Self(3);
+    pub const TIMES: Self = Self(4);
+    pub const TIMES_BOLD: Self = Self(5);
+    pub const TIMES_ITALIC: Self = Self(6);
+    pub const TIMES_BOLD_ITALIC: Self = Self(7);
+    pub const COURIER: Self = Self(8);
+    pub const COURIER_BOLD: Self = Self(9);
+    pub const COURIER_OBLIQUE: Self = Self(10);
+    pub const COURIER_BOLD_OBLIQUE: Self = Self(11);
 
     pub(crate) const fn new(value: u8) -> Self {
         Self(value)
@@ -154,11 +162,20 @@ impl FontId {
     }
 }
 
-/// Font slots 0 to 3 are the built-in Helvetica faces; embedded fonts follow.
+/// Font slots 0 to 11 are the built-in Helvetica, Times, and Courier faces; embedded fonts follow.
 pub const HELVETICA: FontId = FontId::HELVETICA;
 pub const HELVETICA_BOLD: FontId = FontId::HELVETICA_BOLD;
 pub const HELVETICA_OBLIQUE: FontId = FontId::HELVETICA_OBLIQUE;
 pub const HELVETICA_BOLD_OBLIQUE: FontId = FontId::HELVETICA_BOLD_OBLIQUE;
+pub const TIMES: FontId = FontId::TIMES;
+pub const TIMES_BOLD: FontId = FontId::TIMES_BOLD;
+pub const TIMES_ITALIC: FontId = FontId::TIMES_ITALIC;
+pub const TIMES_BOLD_ITALIC: FontId = FontId::TIMES_BOLD_ITALIC;
+pub const COURIER: FontId = FontId::COURIER;
+pub const COURIER_BOLD: FontId = FontId::COURIER_BOLD;
+pub const COURIER_OBLIQUE: FontId = FontId::COURIER_OBLIQUE;
+pub const COURIER_BOLD_OBLIQUE: FontId = FontId::COURIER_BOLD_OBLIQUE;
+pub(crate) const BUILT_IN: usize = 12;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TextAlign {
     Left,

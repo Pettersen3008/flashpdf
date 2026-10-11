@@ -187,10 +187,10 @@ fn push_error(bytes: &[u8]) -> String {
 fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
     let font_bytes = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
     let mut decoder = Decoder::default();
-    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 4);
-    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 5);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 12);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 13);
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
-    for slot in [4, 5] {
+    for slot in [12, 13] {
         bytes.extend(paragraph(0, &[(slot, 10.0, [0, 0, 0], 0, b"Font")]));
     }
     bytes.extend(record(255, &[]));
@@ -319,7 +319,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&bad_align), "invalid text alignment");
 
     let mut unknown_font = header(VERSION, 120.0, 60.0, 10.0);
-    unknown_font.extend(paragraph(0, &[(4, 10.0, [0, 0, 0], 0, b"x")]));
+    unknown_font.extend(paragraph(0, &[(12, 10.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&unknown_font), "unknown font");
 
     let mut invalid_metadata = header(VERSION, 120.0, 60.0, 10.0);
@@ -757,7 +757,10 @@ fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_
     let pdfa = record(20, &[0]);
     let facturx = record(20, &[4, 0, 0]);
 
-    assert!(error(&[], &[pdfa.clone(), plain(b"Total")]).starts_with("PDF/A embeds every font"));
+    for slot in [0, 4, 11] {
+        let total = paragraph(0, &[(slot, 10.0, [0, 0, 0], 0, b"Total")]);
+        assert!(error(&[], &[pdfa.clone(), total]).starts_with("PDF/A embeds every font"));
+    }
     assert_eq!(
         error(&[b"Total: 42"], std::slice::from_ref(&facturx)),
         "invalid Factur-X XML"

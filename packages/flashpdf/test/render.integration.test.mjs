@@ -145,9 +145,23 @@ test("given registered regular and bold fonts, when fontFamily selects them, the
 		}),
 		/font family has no bold face/,
 	);
+});
+
+test("given serif and monospace font families, when rendering, then the PDF uses Times-Roman and Courier, which PDF/A rejects", async () => {
+	const document = jsxs("main", {
+		children: [
+			jsx("p", { style: { fontFamily: "Georgia, serif" }, children: "Serif" }),
+			jsx("p", { style: { fontFamily: "monospace", fontWeight: "bold" }, children: "Mono" }),
+			jsx("p", { style: { fontFamily: "Missing" }, children: "Inherited" }),
+		],
+	});
+	const pdf = string(await render(document));
+	assert.match(pdf, /\/BaseFont \/Times-Roman/);
+	assert.match(pdf, /\/BaseFont \/Courier-Bold/);
+	assert.match(pdf, /\/BaseFont \/Helvetica\b/);
 	await assert.rejects(
-		render(jsx("main", { style: { fontFamily: "Missing" }, children: "x" })),
-		/unregistered font family/,
+		render(document, { pdfa: "3b" }),
+		/PDF\/A embeds every font and the built-in Helvetica, Times, and Courier have none/,
 	);
 });
 
@@ -187,7 +201,7 @@ test("given text outside WinAnsi in an embedded font, when rendering, then emits
 	);
 	await assert.rejects(
 		render(jsx("p", { children: "中" })),
-		/Helvetica has no glyph for "中" \(U\+4E2D\); register a font that has it on <p>/,
+		/the built-in font has no glyph for "中" \(U\+4E2D\); register a font that has it on <p>/,
 	);
 });
 
@@ -264,7 +278,7 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 	}
 	await assert.rejects(
 		render(jsx("p", { children: "Total" }), options),
-		/PDF\/A embeds every font and Helvetica has none; register one with `fonts` and set fontFamily on <p>/,
+		/PDF\/A embeds every font and the built-in Helvetica, Times, and Courier have none; register one with `fonts` and set fontFamily on <p>/,
 	);
 	await assert.rejects(
 		render(document, { ...options, attachments: [{ ...note, relationship: "Related" }] }),

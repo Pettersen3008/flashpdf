@@ -135,7 +135,9 @@ const pdf = await render(<Invoice />, {
 
 ## Embedded fonts
 
-The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first registered family; `fontWeight: 'bold'` selects its optional bold file and `fontStyle: 'italic'` its optional italic or bold italic file. A family without the italic file for a weight slants the upright face instead, as browsers do. Helvetica, in regular, bold, oblique, and bold oblique, remains the fallback when `fontFamily` is absent.
+The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first entry that is a registered family or a built-in name; `fontWeight: 'bold'` selects its optional bold file and `fontStyle: 'italic'` its optional italic or bold italic file. A family without the italic file for a weight slants the upright face instead, as browsers do.
+
+Three built-in families need no files, each in regular, bold, italic or oblique, and bold italic: Helvetica for `Helvetica`, `Arial`, and `sans-serif`; Times for `Times`, `Times New Roman`, and `serif`; and Courier for `Courier`, `Courier New`, and `monospace`. Helvetica is the default. A name that is neither registered nor built in, such as `Georgia`, falls through to the next entry, and a list with no match keeps the inherited family. CSS.md lists every name.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());
@@ -147,11 +149,11 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 
 Each embedded font is subset to the glyphs the document shows (plus the components of composite glyphs) and written as a Type0/CIDFontType2 font with `Identity-H` encoding and a `ToUnicode` map, so copy-paste and text extraction return the original characters. Any character the TTF has a glyph for renders: Latin extended, Greek, Cyrillic, CJK, symbols, currency, and supplementary-plane characters through cmap formats 4 and 12. A character without a glyph rejects naming the character, its code point, and the element.
 
-Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. Text is kerned through the font's GPOS `kern` feature or `kern` table, but there is no shaping, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. The Helvetica faces have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Variable-face selection, absent families, and a bold request without a bold file reject clearly.
+Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. Text is kerned through the font's GPOS `kern` feature or `kern` table, but there is no shaping, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. The built-in faces have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Variable-face selection, absent families, and a bold request without a bold file reject clearly.
 
 ## PDF/A and e-invoices
 
-`pdfa: '3b'` writes PDF/A-3b: an XMP packet that repeats `metadata`, an sRGB output intent, and a document ID hashed from the file's content, so the same input still gives the same bytes. FlashPDF writes no creation or modification date. PDF/A needs every font embedded, so register one with `fonts` and set `fontFamily` on the root element; text that would fall back to Helvetica rejects. CMYK JPEGs also reject, because the output intent is RGB.
+`pdfa: '3b'` writes PDF/A-3b: an XMP packet that repeats `metadata`, an sRGB output intent, and a document ID hashed from the file's content, so the same input still gives the same bytes. FlashPDF writes no creation or modification date. PDF/A needs every font embedded, so register one with `fonts` and set `fontFamily` on the root element; text in a built-in font, Helvetica, Times, or Courier, rejects. CMYK JPEGs also reject, because the output intent is RGB.
 
 `attachments` embeds files as associated files, listed in the catalog's `/AF` array and in the viewer's attachments panel. Each entry is `{ name: string; data: Uint8Array; mimeType: string; description?: string; relationship: 'Source' | 'Data' | 'Alternative' | 'Supplement' | 'Unspecified' }`. Names must be unique and free of slashes and control characters, and all attachments together are capped at 64 MiB per render. Attachments also work without `pdfa`.
 
@@ -185,7 +187,7 @@ Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common reject
 
 ## Assets
 
-FlashPDF embeds host-provided regular, bold, italic, and bold italic TTFs, and keeps Helvetica as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
+FlashPDF embeds host-provided regular, bold, italic, and bold italic TTFs, and keeps Helvetica, Times, and Courier built in, with Helvetica as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](./CSS.md).
 

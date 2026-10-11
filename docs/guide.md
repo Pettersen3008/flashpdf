@@ -40,7 +40,8 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `text-decoration: wavy is not supported; lines are solid` | Decoration lines are solid. | Drop the style keyword. |
 | `PageOverflow: use document margins or split this decorated box` | A box with padding, a border, or a background cannot split across pages. A decorated root holding more than one page of content overflows. | Move the root's padding to the `margin` option. Drop its border and background, and decorate the cards inside it instead. |
 | `PageOverflow: the table is taller than a page` or `the image is taller than the page` | An atomic block has to fit one page. | Remove `break-inside: avoid` from the table, or reduce the image height. |
-| `Helvetica has no glyph for "−" (U+2212)` | The default font covers WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
+| `the built-in font has no glyph for "−" (U+2212)` | The built-in fonts, Helvetica, Times, and Courier, cover WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
+| A `fontFamily` has no effect and the text stays Helvetica | A family that is neither registered in `fonts` nor a built-in name falls through to the next entry, and a list with no match keeps the inherited font, as in a browser. | Register the font with `fonts` and spell `fontFamily` exactly as its `family`. Registered names are case-sensitive. |
 | `src must be the image's PNG or JPEG bytes as a Uint8Array` | `img` does not take a URL, path, or `data:` URL. | Read or fetch the file and pass its bytes. |
 | `unsupported element <ul>` | There are no lists. | One `<p>` per item that starts with `•`. |
 | `unsupported style property: borderRadius`, `position`, `opacity`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
@@ -127,6 +128,7 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
 | `Font.register` | `fonts: [{ family, regular, bold, italic, boldItalic }]` with TTF bytes. Only `regular` is required. |
+| `fontFamily: 'Times-Roman'`, `'Courier'`, `'Helvetica-Bold'` | The built-in families are `Helvetica`, `Times`, and `Courier`, or `sans-serif`, `serif`, and `monospace`. Choose the face with `fontWeight` and `fontStyle`. Other react-pdf standard names, such as `Times-Roman`, are not family names here. |
 | `fixed` header or footer | The `header` and `footer` options, one text line each. |
 | `render={({ pageNumber, totalPages }) => …}` | `<PageNumber />` and `<TotalPages />` inside `header` or `footer`. |
 | `wrap={false}` | `breakInside: 'avoid'`. |

@@ -10,7 +10,7 @@ export type { Box, FontSlots, NormalizedStyle } from "./style/types.js";
 export { boxStyle, edges } from "./style/box.js";
 export { color } from "./style/color.js";
 export { decoration, decorationColor } from "./style/decoration.js";
-export { bold, face, font, helvetica } from "./style/font.js";
+export { bold, courier, face, font, helvetica, times } from "./style/font.js";
 export { dimension, lineHeight, point, spacing, type LineHeight } from "./style/length.js";
 
 export function kerning(value: unknown): boolean {
