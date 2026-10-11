@@ -53,7 +53,7 @@ test("given rgb, hsl, named, and 4- or 8-digit hex colors, when resolving a colo
 
 test("given a translucent color, when resolving it, then rejects with the opacity reason", () => {
 	for (const value of ["rgba(0, 0, 0, 0.5)", "#0008", "#00000080", "hsl(0 0% 0% / 50%)"])
-		assert.throws(() => color(value), /opacity is not supported/, value);
+		assert.throws(() => color(value), /a colour with alpha is not supported/, value);
 	assert.throws(() => color("rgb(from red r g b)"), /unsupported color: rgb\(from red r g b\)/);
 });
 

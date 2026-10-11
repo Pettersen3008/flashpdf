@@ -1,6 +1,6 @@
 use super::{
-    Command, Edges, Fraction as FractionValue, Page, Percent as PercentValue, Pt, RenderError, Rgb,
-    TextAlign, TextRun, TextStyle,
+    Command, Edges, Fraction as FractionValue, LineStyle, Page, Percent as PercentValue, Pt, Radii,
+    RenderError, Rgb, TextAlign, TextRun, TextStyle, OPAQUE,
 };
 
 #[test]
@@ -407,6 +407,9 @@ fn given_a_bordered_box_taller_than_the_page_when_placed_then_rejects() {
         border: Edges::all(Pt(1.0)),
         background: None,
         border_color: Edges::all(Rgb::BLACK),
+        border_style: Edges::all(LineStyle::Solid),
+        radius: None,
+        alpha: OPAQUE,
     };
     let long = "word ".repeat(40);
     assert_eq!(
@@ -578,6 +581,9 @@ fn given_a_painted_cell_beside_a_taller_cell_when_laid_out_then_its_background_c
         border: Edges::all(Pt(0.0)),
         background: Some(Rgb { r: 255, g: 0, b: 0 }),
         border_color: Edges::all(Rgb::BLACK),
+        border_style: Edges::all(LineStyle::Solid),
+        radius: None,
+        alpha: OPAQUE,
     };
     let columns = [Fixed(Pt(50.0)), Fraction(FractionValue::new(1.0).unwrap())];
     let pdf = parsed(&[
@@ -636,6 +642,9 @@ fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint
         border: Edges::all(Pt(0.0)),
         background: Some(Rgb { r: 255, g: 0, b: 0 }),
         border_color: Edges::all(Rgb::BLACK),
+        border_style: Edges::all(LineStyle::Solid),
+        radius: None,
+        alpha: OPAQUE,
     };
     let blue = super::BoxStyle {
         background: Some(Rgb { r: 0, g: 0, b: 255 }),
@@ -970,4 +979,183 @@ fn given_a_long_footer_and_many_page_breaks_when_finishing_then_rejects_past_the
         .unwrap();
     renderer.push(&vec![Command::PageBreak; 300]).unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::DocumentTooLarge));
+}
+
+fn decorated(border: f32) -> super::BoxStyle {
+    super::BoxStyle {
+        margin: Edges::all(Pt(0.0)),
+        padding: Edges::all(Pt(1.0)),
+        border: Edges::all(Pt(border)),
+        background: Some(Rgb { r: 255, g: 0, b: 0 }),
+        border_color: Edges::all(Rgb::BLACK),
+        border_style: Edges::all(LineStyle::Solid),
+        radius: None,
+        alpha: OPAQUE,
+    }
+}
+
+fn round(value: f32, percent: u8) -> Option<Radii> {
+    Some(Radii {
+        values: [value; 8],
+        percent,
+    })
+}
+
+fn boxed(style: super::BoxStyle) -> lopdf::Document {
+    parsed(&[Command::BoxStart { style }, text("x"), Command::BoxEnd])
+}
+
+#[test]
+fn given_a_rounded_box_with_a_solid_border_when_rendered_then_strokes_the_centre_line_over_the_filled_outline(
+) {
+    let style = super::BoxStyle {
+        radius: round(4.0, 0),
+        ..decorated(1.0)
+    };
+    let stream = content(&boxed(style));
+    // The background and the border each have four corners, and a solid border has no dashes.
+    assert_eq!(stream.matches(" c\n").count(), 8, "{stream}");
+    assert!(
+        stream.contains("\nS\n") && !stream.contains(" d\n"),
+        "{stream}"
+    );
+    assert!(!stream.contains(" re\n"), "{stream}");
+}
+
+#[test]
+fn given_a_dotted_border_with_a_radius_when_rendered_then_strokes_round_capped_zero_length_dashes()
+{
+    let style = super::BoxStyle {
+        radius: round(4.0, 0),
+        border_style: Edges::all(LineStyle::Dotted),
+        ..decorated(2.0)
+    };
+    let stream = content(&boxed(style));
+    assert!(
+        stream.contains("1 J\n") && stream.contains("[0 "),
+        "{stream}"
+    );
+    assert!(
+        stream.contains("] 0 d\n") && stream.contains("S\n"),
+        "{stream}"
+    );
+}
+
+#[test]
+fn given_a_dashed_side_when_rendered_then_strokes_a_line_whose_gap_fits_whole_dashes() {
+    let style = super::BoxStyle {
+        border_style: Edges {
+            top: LineStyle::Dashed,
+            ..Edges::all(LineStyle::Solid)
+        },
+        ..decorated(1.0)
+    };
+    let stream = content(&boxed(style));
+    // A 100pt side takes 20 dashes of 3pt, so the 19 gaps stretch from 2pt to 2.105pt.
+    assert!(stream.contains("[3 2.105"), "{stream}");
+    assert!(!stream.contains(" J\n"), "{stream}");
+    // The three solid sides and the background stay rectangles.
+    assert_eq!(stream.matches(" re\nf\n").count(), 4, "{stream}");
+}
+
+#[test]
+fn given_percent_radii_when_rendered_then_they_resolve_against_the_box() {
+    let style = super::BoxStyle {
+        radius: round(50.0, 0xff),
+        ..decorated(0.0)
+    };
+    // 50% of the 100pt by 11.25pt box is 50pt by 5.625pt, so the top edge ends 50pt in from the 10pt margin.
+    let stream = content(&boxed(style));
+    assert!(
+        stream.contains("10 44.375 m\n10 47.4816 32.38576 50 60 50 c\n60 50 l\n"),
+        "{stream}"
+    );
+}
+
+#[test]
+fn given_radii_far_beyond_the_box_when_rendered_then_they_shrink_to_a_pill_without_overflow() {
+    let style = super::BoxStyle {
+        radius: round(3.402_82e38, 0),
+        ..decorated(1.0)
+    };
+    let stream = content(&boxed(style));
+    assert!(
+        !stream.contains("NaN") && !stream.contains("inf"),
+        "{stream}"
+    );
+    assert_eq!(stream.matches(" c\n").count(), 8, "{stream}");
+}
+
+#[test]
+fn given_a_translucent_box_and_text_when_rendered_then_each_sets_its_alpha_and_the_page_defines_it()
+{
+    let style = super::BoxStyle {
+        alpha: 128,
+        ..decorated(1.0)
+    };
+    let run = TextRun {
+        decoration: super::RunDecoration {
+            alpha: 128,
+            ..Default::default()
+        },
+        ..run(1, false, 10.0, false)
+    };
+    let commands = [
+        Command::BoxStart { style },
+        Command::Paragraph {
+            links: &[],
+            align: TextAlign::Left,
+            text: "x",
+            runs: &[run],
+        },
+        Command::BoxEnd,
+    ];
+    let bytes = super::render(page(), &commands).unwrap();
+    let stream = content(&lopdf::Document::load_mem(&bytes).unwrap());
+    // The box sets the alpha once and the text, in the same alpha, reuses it.
+    assert_eq!(stream.matches("/G8080 gs\n").count(), 1, "{stream}");
+    assert!(stream.trim_end().ends_with("/GFFFF gs"), "{stream}");
+    // One stroked outline replaces four rectangles whose overlapping corners would composite twice.
+    assert!(stream.contains("\nS\n"), "{stream}");
+    assert_eq!(stream.matches(" re\n").count(), 2, "{stream}");
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("/G8080") && raw.contains("/GFFFF") && raw.contains("/ca 0.5019608"));
+}
+
+#[test]
+fn given_an_opaque_document_when_rendered_then_declares_no_graphics_states() {
+    let commands = [
+        Command::BoxStart {
+            style: decorated(1.0),
+        },
+        text("x"),
+        Command::BoxEnd,
+    ];
+    let bytes = super::render(page(), &commands).unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(!raw.contains("ExtGState") && !raw.contains(" gs\n"));
+}
+
+#[test]
+fn given_a_rounded_box_that_does_not_fit_the_page_when_placed_then_moves_whole_to_the_next_page() {
+    let style = super::BoxStyle {
+        radius: round(4.0, 0),
+        ..decorated(1.0)
+    };
+    let pdf = parsed(&[
+        text("a"),
+        text("b"),
+        text("c"),
+        Command::BoxStart { style },
+        text("x"),
+        Command::BoxEnd,
+    ]);
+    let pages: Vec<String> = pdf
+        .get_pages()
+        .values()
+        .map(|page| String::from_utf8(pdf.get_page_content(*page)).unwrap())
+        .collect();
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].matches(" c\n").count(), 0, "{}", pages[0]);
+    assert_eq!(pages[1].matches(" c\n").count(), 8, "{}", pages[1]);
 }

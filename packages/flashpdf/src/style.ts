@@ -1,15 +1,25 @@
 import { object } from "./assert.js";
 import { supported, unsupported } from "./css/properties.js";
+import { line } from "./style/border.js";
 import { bold } from "./style/font.js";
-import { dimension, flexGrow, lineHeight, point } from "./style/length.js";
+import {
+	corner,
+	CORNERS,
+	dimension,
+	flexGrow,
+	lineHeight,
+	opacity,
+	point,
+	SIDES,
+} from "./style/length.js";
 import { normalize } from "./style/normalize.js";
 import type { NormalizedStyle } from "./style/types.js";
 
 export type { Box, FontSlots, NormalizedStyle } from "./style/types.js";
-export { boxStyle, edges } from "./style/box.js";
+export { boxStyle, edges, radiusOf } from "./style/box.js";
 export { color } from "./style/color.js";
 export { bold, font, helvetica } from "./style/font.js";
-export { dimension, lineHeight, point, type LineHeight } from "./style/length.js";
+export { dimension, lineHeight, opacity, point, type LineHeight } from "./style/length.js";
 
 export function decoration(value: unknown): { underline: boolean; lineThrough: boolean } {
 	if (typeof value !== "string") throw new Error(`invalid textDecoration: ${String(value)}`);
@@ -80,5 +90,18 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 	if (result.width !== undefined) dimension(result.width, "width");
 	if (result.height !== undefined) dimension(result.height, "height");
 	if (result.textDecoration !== undefined) decoration(result.textDecoration);
+	if (result.opacity !== undefined) opacity(result.opacity);
+	for (const side of SIDES)
+		if (result[`border${side}Style`] !== undefined)
+			result[`border${side}Style`] = line(result[`border${side}Style`]);
+	for (const name of CORNERS)
+		if (result[`border${name}Radius`] !== undefined) corner(result[`border${name}Radius`], 12);
+	if (
+		typeof result.backgroundColor === "string" &&
+		/(?:gradient|url)\(/i.test(result.backgroundColor)
+	)
+		throw new Error(
+			`unsupported background: ${result.backgroundColor} (gradients and background images are not drawn; use a solid colour)`,
+		);
 	return result as NormalizedStyle;
 }

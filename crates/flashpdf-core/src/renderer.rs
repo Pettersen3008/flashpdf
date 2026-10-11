@@ -31,6 +31,8 @@ pub struct Renderer {
     /// Link annotations per page, parallel to `contents`.
     links: Vec<Vec<PageLink>>,
     tags: Vec<Vec<PageTag>>,
+    /// Alphas each page draws with, parallel to `contents`.
+    alphas: Vec<Vec<[u8; 2]>>,
     layout: LayoutBuffer,
     header: Option<Furniture>,
     footer: Option<Furniture>,
@@ -62,6 +64,7 @@ impl Renderer {
             used_images: Vec::new(),
             links: vec![Vec::new()],
             tags: vec![Vec::new()],
+            alphas: vec![Vec::new()],
             layout: LayoutBuffer::default(),
             header: None,
             footer: None,
@@ -361,6 +364,7 @@ impl Renderer {
             self.contents.last_mut().unwrap(),
             self.links.last_mut().unwrap(),
             self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
+            self.alphas.last_mut().unwrap(),
         )
     }
 
@@ -369,6 +373,7 @@ impl Renderer {
         self.contents.push(Content::new());
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
+        self.alphas.push(Vec::new());
         self.cursor.reset(self.page);
     }
 
@@ -394,7 +399,7 @@ impl Renderer {
                 if self.metadata.tagged {
                     content.begin_marked_content(pdf_writer::Name(b"Artifact"));
                 }
-                PdfPainter::new(content, links, None).paint_line(
+                PdfPainter::new(content, links, None, &mut Vec::new()).paint_line(
                     &text,
                     furniture.style,
                     crate::geometry::Point {
@@ -423,6 +428,7 @@ impl Renderer {
             self.used_images,
             self.links,
             self.tags,
+            self.alphas,
             self.metadata,
         ))
     }

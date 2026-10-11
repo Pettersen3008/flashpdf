@@ -2,7 +2,7 @@ use pdf_writer::types::{
     ActionType, AnnotationFlags, AnnotationType, AssociationKind, OutputIntentSubtype, Predictor,
     StructRole,
 };
-use pdf_writer::writers::{ExtGraphicsState, StructTreeRoot};
+use pdf_writer::writers::{ExtGraphicsState, Resources, StructTreeRoot};
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
@@ -47,6 +47,7 @@ pub(crate) fn finish_pdf(
     used_images: Vec<bool>,
     links: Vec<Vec<PageLink>>,
     tags: Vec<Vec<PageTag>>,
+    alphas: Vec<Vec<[u8; 2]>>,
     metadata: Metadata,
 ) -> Vec<u8> {
     let used: Vec<FontId> = (0..fonts.len())
@@ -276,7 +277,9 @@ pub(crate) fn finish_pdf(
         }
     }
 
-    for (index, (content, page_links)) in contents.into_iter().zip(links).enumerate() {
+    for (index, ((content, page_links), page_alphas)) in
+        contents.into_iter().zip(links).zip(alphas).enumerate()
+    {
         let page_ref = Ref::new(first_page + index as i32 * 2);
         let stream_ref = Ref::new(first_page + 1 + index as i32 * 2);
         let mut output_page = pdf.page(page_ref);
@@ -304,6 +307,7 @@ pub(crate) fn finish_pdf(
             }
             x_objects.finish();
         }
+        write_alphas(&mut resources, &page_alphas);
         resources.finish();
         let annotations: Vec<Ref> = page_links
             .iter()
@@ -461,23 +465,29 @@ pub(crate) fn deflate(bytes: &[u8]) -> Vec<u8> {
     miniz_oxide::deflate::compress_to_vec_zlib(bytes, 6)
 }
 
+/// One `/ExtGState` per fill and stroke alpha pair, named by `alpha_name`.
+#[inline(never)]
+fn write_alphas(resources: &mut Resources, alphas: &[[u8; 2]]) {
+    if alphas.is_empty() {
+        return;
+    }
+    let mut states = resources.ext_g_states();
+    for alpha in alphas {
+        states
+            .insert(Name(&alpha_name(*alpha)))
+            .start::<ExtGraphicsState>()
+            .non_stroking_alpha(f32::from(alpha[0]) / 255.0)
+            .stroking_alpha(f32::from(alpha[1]) / 255.0);
+    }
+}
+
 fn write_image(pdf: &mut Pdf, reference: Ref, mask: Option<Ref>, image: &Image) {
     if let Encoding::Form { alphas, .. } = &image.encoding {
         // A form drawn in the unit square paints exactly like an image.
         let mut form = pdf.form_xobject(reference, &image.data);
         form.filter(Filter::FlateDecode);
         form.bbox(Rect::new(0.0, 0.0, 1.0, 1.0));
-        let mut resources = form.resources();
-        if !alphas.is_empty() {
-            let mut states = resources.ext_g_states();
-            for alpha in alphas {
-                states
-                    .insert(Name(&alpha_name(*alpha)))
-                    .start::<ExtGraphicsState>()
-                    .non_stroking_alpha(f32::from(alpha[0]) / 255.0)
-                    .stroking_alpha(f32::from(alpha[1]) / 255.0);
-            }
-        }
+        write_alphas(&mut form.resources(), alphas);
         return;
     }
     let (width, height) = (image.width as i32, image.height as i32);

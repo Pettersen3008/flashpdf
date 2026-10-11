@@ -32,6 +32,7 @@ pub(crate) struct ImageNode<'a> {
     pub(crate) height: Option<Pt>,
     pub(crate) link: Option<&'a str>,
     pub(crate) alt: &'a str,
+    pub(crate) alpha: u8,
 }
 
 pub(crate) struct Spacer {

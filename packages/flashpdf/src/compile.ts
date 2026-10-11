@@ -12,7 +12,9 @@ import {
 	font,
 	helvetica,
 	lineHeight,
+	opacity,
 	point,
+	radiusOf,
 	type Box,
 	type FontSlots,
 	type LineHeight,
@@ -32,6 +34,8 @@ type TextState = {
 	lineHeight: LineHeight;
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
+	/** Not inherited by CSS, but each element paints its own, so the product down the tree is the effective value. */
+	opacity: number;
 };
 /** `cell` is set only for the direct children of a table row. */
 type Context = TextState & { inRow: boolean; cell?: boolean };
@@ -47,6 +51,7 @@ const ROOT: Context = {
 	lineThrough: false,
 	lineHeight: undefined,
 	link: undefined,
+	opacity: 1,
 	inRow: false,
 };
 
@@ -98,6 +103,8 @@ function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): Text
 		lineHeight:
 			style.lineHeight === undefined ? current.lineHeight : lineHeight(style.lineHeight, size),
 		link: current.link,
+		opacity:
+			style.opacity === undefined ? current.opacity : current.opacity * opacity(style.opacity),
 	};
 }
 
@@ -113,6 +120,7 @@ function run(state: TextState, text: string, hardBreak = false): Run {
 		underline: state.underline,
 		lineThrough: state.lineThrough,
 		link: state.link,
+		opacity: state.opacity,
 	};
 }
 
@@ -128,6 +136,7 @@ function push(runs: Run[], next: Run) {
 		last.underline === next.underline &&
 		last.lineThrough === next.lineThrough &&
 		last.link === next.link &&
+		last.opacity === next.opacity &&
 		last.color.every((channel, index) => channel === next.color[index])
 	) {
 		last.text += next.text;
@@ -298,7 +307,7 @@ function element(
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
-			const paint = boxStyle(style, next.size);
+			const paint = boxStyle(style, next.size, next.opacity);
 			const streamed = streamMargin(paint, context, style);
 			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
 			box(writer, streamed ? undefined : paint, () => {
@@ -350,7 +359,7 @@ function element(
 				throw new Error(
 					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles`,
 				);
-			box(writer, boxStyle(style, next.size), () =>
+			box(writer, boxStyle(style, next.size, next.opacity), () =>
 				runs === undefined
 					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
 					: writeParagraph(writer, runs, next, pageTokens),
@@ -369,12 +378,26 @@ function element(
 			const width = style.width === undefined ? undefined : dimension(style.width, "width");
 			const height =
 				style.height === undefined ? undefined : dimension(style.height, "height").value;
-			box(writer, boxStyle(style, next.size), () => {
+			if (radiusOf(style, next.size))
+				throw new Error(
+					`border-radius does not clip <${node.tag}>: the picture stays rectangular, so remove the radius`,
+				);
+			box(writer, boxStyle(style, next.size, next.opacity), () => {
 				try {
 					const source = node.drawing
-						? writer.drawing(encode(node.drawing, frame(node.drawing, width, height), next.color))
+						? writer.drawing(
+								encode(node.drawing, frame(node.drawing, width, height), next.color, next.opacity),
+							)
 						: node.src!;
-					writer.image(source, width, height, node.alt ?? "", context.link);
+					// A drawing carries its opacity in its shapes, where an image takes it from the page.
+					writer.image(
+						source,
+						width,
+						height,
+						node.alt ?? "",
+						context.link,
+						node.drawing ? 1 : next.opacity,
+					);
 				} catch (error) {
 					if (!(error instanceof Error)) throw error;
 					if (error.message === "PageOverflow")
@@ -401,7 +424,8 @@ function element(
 		case "hr":
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
-			box(writer, boxStyle(style, inherit(style, context, fonts).size), () => {});
+			const own = inherit(style, context, fonts);
+			box(writer, boxStyle(style, own.size, own.opacity), () => {});
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 	}
@@ -493,7 +517,7 @@ function table(
 			rowOnly(tr.style, false);
 			for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
 			const own = inherit(tr.style, state, fonts);
-			box(writer, boxStyle(tr.style, own.size), () => {
+			box(writer, boxStyle(tr.style, own.size, own.opacity), () => {
 				writer.rowStart(columns);
 				compile(
 					tr.children,

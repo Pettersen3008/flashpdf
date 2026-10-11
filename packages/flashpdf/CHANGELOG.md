@@ -6,10 +6,16 @@
 
 - Inline `<svg>` for logos, icons, and charts: `g`, `rect` with `rx`/`ry`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, and `path` with the full `d` grammar, arcs included. Elements take `transform`, the fill and stroke presentation attributes or a `style` object, opacity, and `currentColor`. The drawing lays out like `img`, honours `viewBox` and `preserveAspectRatio`, clips to its box, and in tagged mode becomes a figure described by `aria-label` or `<title>`. Text, gradients, patterns, filters, masks, `clipPath`, `use`, `image`, `foreignObject`, CSS inside the drawing, and unknown attributes reject with a reason.
 - `<img src={bytes}>` accepts an SVG file with the same subset.
+- `border-radius` and its four corner longhands, with one or two lengths or percents per corner. The background fills the rounded shape and a border with one width, colour, and style on all four sides follows it. Radii that overrun a side shrink together, so `9999px` and Tailwind's `rounded-full` make a pill. A radius with differing sides, and a radius on `img` or `svg`, reject with a reason. A box with a background or border still moves whole to the next page, so its corners are never cut at a break.
+- `border-style` and the four side longhands, plus the style word in `border` and its side shorthands: `none`, `hidden`, `solid`, `dashed`, `dotted`. Dashes follow Chrome's proportions, dots are round-capped, and each side stretches its gaps so whole dashes fill it. `double`, `groove`, `ridge`, `inset`, and `outset` reject. Tailwind's `border-dashed` and `border-dotted` work.
+- `opacity` on boxes, text, underlines, images, and drawings, as a number or percent, multiplied down the tree. Each element draws with its own graphics-state alpha instead of a transparency group, so a translucent card's background shows through its text. PDF/A-3b output stays valid; veraPDF accepts it.
 
 ### Changed
 
 - The binary protocol is version 8: image registration also accepts a vector drawing, which the engine writes as a form XObject. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 8.7 KB raw (3.9 KB gzip).
+- The binary protocol is version 13: `BoxStart` carries opacity, border styles, and corner radii, a paragraph run can carry an alpha, and an image record ends with one. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 5.2 KB raw (1.7 KB gzip).
+- `box-shadow`, `outline`, `border-image`, and `background-image` reject with a reason, as does a gradient in `background`. They rejected without one before. A colour with alpha now says to use `opacity`.
+- `border: 1pt dashed red` and `border-style: dashed` no longer reject. `<br>` rejects `opacity` like its other box properties, and a `header` or `footer` rejects it too.
 
 ### Changed
 

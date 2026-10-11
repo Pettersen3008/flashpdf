@@ -5,7 +5,7 @@ import { test } from "vitest";
 
 import { resolveStyles } from "../dist/css.js";
 import { stylesheet } from "../dist/index.js";
-import { boxStyle, color, style } from "../dist/style.js";
+import { boxStyle, color, opacity, style } from "../dist/style.js";
 import { resolveTree } from "../dist/tree.js";
 
 const resolve = async (value, sheets) => resolveStyles(await resolveTree(value), sheets);
@@ -162,9 +162,9 @@ test("given cascading shorthands, selector whitespace, and transparent paint, wh
 	assert.throws(
 		() =>
 			resolveStyles(invalid, [
-				"main\n\tp.x { color: red; background: transparent; border: 1pt dashed red }",
+				"main\n\tp.x { color: red; background: transparent; border: 1pt double red }",
 			]),
-		/unsupported border style: dashed/,
+		/unsupported border style: double/,
 	);
 	const [resolved] = await resolve(
 		jsx("main", { children: jsx("p", { className: "x", children: "x" }) }),
@@ -276,7 +276,7 @@ test("given oklch() and oklab() colours, when resolving them, then converts to c
 	assert.deepEqual(color("oklch(63.7% 0.237 25.331)"), [0xfb, 0x2c, 0x36]);
 	assert.deepEqual(color("oklab(0.62796 0.22486 0.12585)"), [255, 0, 0]);
 	assert.deepEqual(color("oklch(70% 0.4 150 / 1)"), [0, 0xd6, 0]);
-	assert.throws(() => color("oklch(50% 0.1 20 / 50%)"), /opacity is not supported/);
+	assert.throws(() => color("oklch(50% 0.1 20 / 50%)"), /a colour with alpha is not supported/);
 });
 
 test("given inherit, initial, and currentcolor, when resolving styles, then they take the parent's value, the initial value, and the element's colour", async () => {
@@ -313,4 +313,27 @@ test("given a camelCase property name in a stylesheet, when parsing, then reject
 		() => stylesheet("p { fontSize: 20pt }"),
 		/unsupported CSS property: fontSize \(use kebab-case: font-size\) in selector "p" at 1:1/,
 	);
+});
+
+test("given Tailwind's border and border-dashed rules, when resolving a box, then draws a dashed one-pixel border", async () => {
+	const [box] = await resolve(jsx("div", { className: "border border-dashed", children: "x" }), [
+		".border{border-style:var(--tw-border-style);border-width:1px}.border-dashed{--tw-border-style:dashed;border-style:dashed}",
+	]);
+	const { border, borderStyle } = boxStyle(box.style, 12);
+	assert.deepEqual(border, [0.75, 0.75, 0.75, 0.75]);
+	assert.deepEqual(borderStyle, [1, 1, 1, 1]);
+});
+
+test("given Tailwind's rounded-full and opacity-50, when resolving a box, then accepts the exponent length and the percent", async () => {
+	const [box] = await resolve(
+		jsx("div", {
+			className: "rounded-full opacity-50",
+			style: { background: "#eee" },
+			children: "x",
+		}),
+		[".rounded-full{border-radius:3.40282e38px}.opacity-50{opacity:50%}"],
+	);
+	const { radius } = boxStyle(box.style, 12);
+	assert.ok(radius.values.every((value) => Number.isFinite(value) && value > 1e38));
+	assert.equal(opacity(box.style.opacity), 0.5);
 });

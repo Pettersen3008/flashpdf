@@ -37,6 +37,13 @@ const _unknownProperty = <main potato={1}>Invoice</main>;
 const _grid = <main style={{ display: "grid" }}>Invoice</main>;
 // @ts-expect-error Margin and padding take one to four lengths, never "auto".
 const _auto = <main style={{ margin: "auto" }}>Invoice</main>;
+const _decorated = (
+	<main style={{ borderRadius: "4pt 8pt / 50%", borderTopStyle: "dashed", opacity: "50%" }}>x</main>
+);
+// @ts-expect-error Shadows are not drawn.
+const _shadow = <main style={{ boxShadow: "0 1px 2px #000" }}>Invoice</main>;
+// @ts-expect-error Only none, solid, dashed, and dotted borders are drawn.
+const _double = <main style={{ borderTopStyle: "double" }}>Invoice</main>;
 const _rich = (
 	<p>
 		Hello <b>World</b>

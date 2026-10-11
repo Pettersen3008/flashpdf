@@ -195,14 +195,29 @@ pub struct TextRun {
     pub decoration: RunDecoration,
 }
 
-/// Underline, strike-through, and link of a run; painted per line segment.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Underline, strike-through, link, and opacity of a run; painted per line segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunDecoration {
     pub underline: bool,
     pub line_through: bool,
     /// Index into the paragraph's URI table.
     pub link: Option<u16>,
+    pub alpha: u8,
 }
+
+impl Default for RunDecoration {
+    fn default() -> Self {
+        Self {
+            underline: false,
+            line_through: false,
+            link: None,
+            alpha: OPAQUE,
+        }
+    }
+}
+
+/// An alpha of 255 paints without a graphics state.
+pub const OPAQUE: u8 = 255;
 
 /// An image's requested width; `Auto` is the intrinsic size at 96 px per inch, capped to the container.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -212,6 +227,21 @@ pub enum ImageSize {
     Percent(Percent),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineStyle {
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+/// Elliptical corner radii, clockwise from the top left, each a horizontal then a vertical value.
+/// Bit `i` of `percent` makes `values[i]` a percent of the box width (even `i`) or height (odd `i`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Radii {
+    pub values: [f32; 8],
+    pub percent: u8,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxStyle {
     pub margin: Edges<Pt>,
@@ -219,6 +249,27 @@ pub struct BoxStyle {
     pub border: Edges<Pt>,
     pub background: Option<Rgb>,
     pub border_color: Edges<Rgb>,
+    pub border_style: Edges<LineStyle>,
+    /// Rounds the background, and the border when all four sides match.
+    pub radius: Option<Radii>,
+    pub alpha: u8,
+}
+
+impl BoxStyle {
+    /// Whether the four borders share one width, colour, and style, which one stroked outline can draw.
+    /// Borders with no width need no more.
+    pub(crate) fn uniform_border(&self) -> bool {
+        self.border.iter().all(|edge| *edge == self.border.top)
+            && (self.border.top == Pt::ZERO
+                || (self
+                    .border_color
+                    .iter()
+                    .all(|color| *color == self.border_color.top)
+                    && self
+                        .border_style
+                        .iter()
+                        .all(|line| *line == self.border_style.top)))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

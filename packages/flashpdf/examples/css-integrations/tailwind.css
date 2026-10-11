@@ -1,3 +1,3 @@
 @import "tailwindcss/theme.css" theme(inline);
 @import "tailwindcss/utilities.css" source(none);
-@source inline("text-right text-center text-sm text-lg text-red-500 text-gray-500 text-current bg-blue-100 bg-inherit bg-black/50 border-gray-200 font-bold font-semibold leading-6 underline line-through flex flex-row flex-col flex-1 flex-none w-1/2 w-32 p-4 m-2 gap-4");
+@source inline("text-right text-center text-sm text-lg text-red-500 text-gray-500 text-current bg-blue-100 bg-inherit bg-black/50 border-gray-200 font-bold font-semibold leading-6 underline line-through rounded-lg border border-dashed opacity-50 flex flex-row flex-col flex-1 flex-none w-1/2 w-32 p-4 m-2 gap-4");

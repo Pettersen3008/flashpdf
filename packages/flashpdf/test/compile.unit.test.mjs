@@ -34,6 +34,7 @@ const run = (font, text, extra = {}) => ({
 	underline: false,
 	lineThrough: false,
 	link: undefined,
+	opacity: 1,
 	...extra,
 });
 
@@ -116,7 +117,7 @@ test("given a link around an image, when compiling, then emits the image record 
 		}),
 	);
 	assert.deepEqual(calls, [
-		["image", src, { kind: 2, value: 50 }, 12, "Logo", "mailto:billing@example.com"],
+		["image", src, { kind: 2, value: 50 }, 12, "Logo", "mailto:billing@example.com", 1],
 	]);
 });
 
@@ -267,4 +268,55 @@ test("given a unitless line-height on a block, when a child changes font size, t
 			"left",
 		],
 	]);
+});
+
+test("given nested opacity, when compiling, then each box, run, and image carries the product down the tree", async () => {
+	const src = new Uint8Array([1]);
+	const calls = await compiled(
+		jsxs("div", {
+			style: { opacity: 0.5, backgroundColor: "#eee", padding: 4 },
+			children: [
+				jsx("p", { children: "a" }),
+				jsx("p", { style: { opacity: "50%" }, children: "b" }),
+				jsx("img", { src, style: { opacity: 0.5 } }),
+			],
+		}),
+	);
+	assert.equal(calls[0][1].opacity, 0.5);
+	assert.deepEqual(
+		calls.filter(([method]) => method === "paragraph").map(([, runs]) => runs[0].opacity),
+		[0.5, 0.25],
+	);
+	assert.equal(calls.find(([method]) => method === "image").at(-1), 0.25);
+});
+
+test("given an svg with opacity, when compiling, then the drawing holds the opacity and the image record stays opaque", async () => {
+	const calls = await compiled(
+		jsx("svg", {
+			width: 10,
+			height: 10,
+			style: { opacity: 0.5 },
+			children: jsx("rect", { width: 10, height: 10, fill: "red" }),
+		}),
+	);
+	// 12 header bytes, then the shape's flags, a 24-byte matrix, and the fill's RGB before its alpha.
+	assert.equal(calls[0][1][12 + 1 + 24 + 3], 128);
+	assert.equal(calls[1].at(-1), 1);
+});
+
+test("given a border radius with elliptical and percent corners, when compiling, then emits eight radii and a percent mask", async () => {
+	const calls = await compiled(
+		jsx("div", {
+			style: { backgroundColor: "#eee", borderRadius: "4pt 8pt / 50% 2pt" },
+			children: "x",
+		}),
+	);
+	assert.deepEqual(calls[0][1].radius, { values: [4, 50, 8, 2, 4, 50, 8, 2], percent: 0b100010 });
+});
+
+test("given a radius on an img, when compiling, then rejects because the picture would not be clipped", async () => {
+	await assert.rejects(
+		compiled(jsx("img", { src: new Uint8Array([1]), style: { borderRadius: 4 } })),
+		/border-radius does not clip <img>.* on <img>/,
+	);
 });

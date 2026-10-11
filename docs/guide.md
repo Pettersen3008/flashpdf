@@ -45,11 +45,27 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `SVG text is not supported` | A drawing has no text layout. | Convert the text to outlines in the editor, or put a `<p>` beside the drawing. |
 | `gradients and patterns are not supported`, `clipPath is not supported`, `CSS inside <svg> is not supported` | A drawing has solid paint and no references or stylesheet. | Flatten the file with SVGO or the editor's export settings, or export a PNG. |
 | `unsupported element <ul>` | There are no lists. | One `<p>` per item that starts with `•`. |
-| `unsupported style property: borderRadius`, `position`, `opacity`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
+| `border-radius needs one width, colour, and style on all four borders, or none` | A rounded border is one stroke around the curve, so differing sides have no mitre to meet at. | Give all four sides the same border, or round a box that has only a background and draw the rule on a child. |
+| `border-radius does not clip <img>` or `<svg>` | The picture stays rectangular. | Remove the radius, or crop the picture in an editor. |
+| `unsupported style property: boxShadow`, `outline`, `borderImage`, `backgroundImage`, or `unsupported background: linear-gradient(…)` | Shadows, outlines, border images, and gradients are not drawn. | Use a border or a solid `background-color`. |
+| `header text cannot take opacity` | The repeated header and footer line has no alpha. | Give the text a lighter colour instead. |
+| `unsupported style property: position`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
 | `height applies only to <img> and <svg>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
+
+## Tailwind
+
+Build the CSS in your own step and pass it as a `stylesheets` entry, as [CSS.md](../CSS.md) describes. Three groups of utilities draw box decoration:
+
+| Utilities | Result |
+| --- | --- |
+| `rounded`, `rounded-lg`, `rounded-full`, `rounded-t-lg` | Corner radii. `rounded-full` is `3.40282e38px`, which shrinks to a pill. `rounded-s-*` and `rounded-e-*` use logical properties and reject. |
+| `border border-solid`, `border border-dashed`, `border border-dotted`, `border-t-2` | Border width and style. `border` alone rejects with `undefined CSS variable: --tw-border-style`, because Tailwind defines the variable in a rule FlashPDF skips; add `border-solid`. |
+| `opacity-50`, `opacity-100` | Element opacity, as a number or a percent. |
+
+A rounded box needs the same border on all four sides, so `rounded-lg border border-solid border-gray-200` works and `rounded-lg border-b border-solid` rejects. `shadow-*`, `outline-*`, `ring-*`, and `bg-gradient-*` reject because shadows, outlines, and gradients are not drawn.
 
 ## Recipes
 
@@ -128,6 +144,7 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG, JPEG, or SVG bytes. |
 | `Svg`, `Path`, `Rect`, `G`, … | `svg`, `path`, `rect`, `g`, … in lowercase with the same attributes. Text, gradients, and clip paths reject. |
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
+| `borderRadius`, `borderStyle`, `opacity` | The same names with CSS meanings. A radius needs the same border on all four sides, and opacity applies per element rather than to the group. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
 | `Font.register` | `fonts: [{ family, regular, bold }]` with TTF bytes. Regular and bold only. |
 | `fixed` header or footer | The `header` and `footer` options, one text line each. |

@@ -292,6 +292,65 @@ test("given CSS cascade variables and a box, when rendering, then emits painted 
 	assert.match(string(pdf), /\(\$100\)/);
 });
 
+test("given rounded, dashed, and translucent boxes with an image, when rendering tagged PDF/A, then the page declares its graphic states and the bytes repeat", async () => {
+	const logo = png(2, 1, 2, [0, 255, 0, 0, 0, 0, 255]);
+	const document = jsxs("main", {
+		style: { fontFamily: "Abel" },
+		children: [
+			jsxs("div", {
+				style: {
+					opacity: 0.5,
+					backgroundColor: "#eef",
+					border: "2pt dashed #336",
+					borderRadius: "8pt",
+					padding: 6,
+				},
+				children: [
+					jsx("p", { children: "Draft" }),
+					jsx("img", { src: logo, alt: "Logo", style: { width: 40 } }),
+				],
+			}),
+			jsx("p", {
+				style: { border: "2pt dotted #333", borderRadius: "50%", padding: 4, marginTop: 8 },
+				children: "Paid",
+			}),
+		],
+	});
+	const options = {
+		fonts: [{ family: "Abel", regular: font }],
+		tagged: true,
+		pdfa: "3b",
+		metadata: { title: "Cards", language: "en" },
+	};
+	const pdf = await render(document, options);
+	assert.deepEqual(pdf, await render(document, options));
+	const text = string(pdf);
+	assert.match(
+		text,
+		/\/ExtGState <<\s+\/G8080 <<\s+\/Type \/ExtGState\s+\/ca 0\.5019608\s+\/CA 0\.5019608/,
+	);
+	assert.match(text, /\/G8080 gs[\s\S]*\/GFFFF gs/);
+	// The dotted outline strokes with round caps and zero-length dashes; the dashed one with butt caps.
+	assert.match(text, /1 J\n\[0 [\d.]+\] 0 d/);
+	assert.match(text, /\[6 [\d.]+\] 0 d/);
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-decoration.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+});
+
+test("given opacity on a header or footer, when rendering, then rejects instead of dropping it", async () => {
+	for (const position of ["header", "footer"])
+		await assert.rejects(
+			render(jsx("p", { children: "x" }), {
+				[position]: jsx("p", { style: { opacity: 0.5 }, children: "Page" }),
+			}),
+			new RegExp(`${position} text cannot take opacity`),
+		);
+});
+
 test("given a long native main with a page break rule, when rendering, then it paginates", async () => {
 	const document = jsx("main", {
 		children: Array.from({ length: 100 }, (_, index) =>
@@ -592,7 +651,32 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 			/height applies only to <img> and <svg> \(block height comes from content\) on <main>/,
 		],
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
-		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
+		[
+			{ boxShadow: "0 1px 2px red" },
+			/boxShadow \(shadows are not drawn; use a border or a background\) on <main>/,
+		],
+		[{ outline: "1px solid red" }, /outline \(outlines are not drawn; use a border\) on <main>/],
+		[
+			{ borderImage: "url(a.png) 30" },
+			/borderImage \(border images are not drawn; use a solid, dashed, or dotted border\) on <main>/,
+		],
+		[
+			{ backgroundImage: "linear-gradient(red, blue)" },
+			/backgroundImage \(gradients and background images are not drawn; use background-color\) on <main>/,
+		],
+		[
+			{ background: "linear-gradient(red, blue)" },
+			/unsupported background: linear-gradient\(red, blue\) \(gradients and background images are not drawn; use a solid colour\) on <main>/,
+		],
+		[
+			{ borderBottom: "1pt solid red", borderRadius: 4 },
+			/border-radius needs one width, colour, and style on all four borders, or none, because a curved border is drawn as one stroke on <main>/,
+		],
+		[
+			{ borderStyle: "double" },
+			/unsupported border style: double \(only none, solid, dashed, and dotted are drawn\) on <main>/,
+		],
+		[{ opacity: "half" }, /invalid opacity: half on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
 		[{ width: "40pt" }, /width applies only to a flex row child on <main>/],

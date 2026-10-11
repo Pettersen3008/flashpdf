@@ -97,6 +97,7 @@ impl<'a> LayoutEngine<'a> {
                 underline,
                 line_through,
                 link,
+                alpha,
             } = run.decoration;
             if link.is_some_and(|link| usize::from(link) >= paragraph.links.len()) {
                 return Err(LayoutError::InvalidRuns);
@@ -106,6 +107,7 @@ impl<'a> LayoutEngine<'a> {
                 underline,
                 line_through,
                 link,
+                alpha,
             );
             let index = *indices.entry(key).or_insert_with(|| {
                 keys.push((run.color, run.decoration));
@@ -146,6 +148,7 @@ impl<'a> LayoutEngine<'a> {
                 underline: decoration.underline,
                 line_through: decoration.line_through,
                 link: decoration.link.map(|link| link_base + usize::from(link)),
+                alpha: decoration.alpha,
                 ascent: Pt(ascent * scale),
                 descent: Pt((-descent * scale).max(0.0)),
             });
@@ -208,6 +211,7 @@ impl<'a> LayoutEngine<'a> {
             slot: node.slot,
             link,
             alt: node.alt.to_owned(),
+            alpha: node.alpha,
             line,
         });
         Ok(Pt(height))
