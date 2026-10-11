@@ -6,7 +6,7 @@ import { test } from "vitest";
 import { Binary } from "../dist/binary.js";
 import { ProtocolWriter } from "../dist/protocol.js";
 
-test("given a small backend window, when writing a record, then streams every byte in order", () => {
+test("given a small backend window, when flushing a queued record, then streams every byte in order", () => {
 	const memory = { buffer: new ArrayBuffer(3) };
 	const chunks = [];
 	let pointerReads = 0;
@@ -23,6 +23,8 @@ test("given a small backend window, when writing a record, then streams every by
 
 	const binary = new Binary(renderer, memory);
 	binary.record(7, () => binary.u8(9));
+	assert.deepEqual(chunks, []);
+	binary.flush();
 
 	assert.deepEqual(chunks, [7, 1, 0, 0, 0, 9]);
 	assert.equal(pointerReads, 1);

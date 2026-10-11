@@ -107,60 +107,97 @@ function resolveFontSize(result: CascadedStyle, parent: NormalizedStyle) {
 	result.fontSize = point(result.fontSize, parentSize, true);
 }
 
+/** One element's cascade. `children` caches the children's results by inline style, then by
+ *  `tag\nid\nclasses`. One parent result implies one ancestor chain, so equal keys match the
+ *  same rules. */
+type Computed = {
+	cascaded: CascadedStyle;
+	style: NormalizedStyle;
+	children?: Map<unknown, Map<string, Computed>>;
+};
+
+function compute(
+	value: ElementNode,
+	identity: Identity,
+	rules: Rule[],
+	ancestors: Identity[],
+	parent: Computed,
+): Computed {
+	// No prototype, so an own `__proto__` key (from JSON.parse) stays a key that style() rejects.
+	const result: CascadedStyle = Object.create(null);
+	for (const [key, item] of Object.entries(parent.cascaded))
+		if (key.startsWith("--") || inherited.has(key)) (result as Record<string, unknown>)[key] = item;
+	cascade(result, uaStyles[value.tag]);
+	const matched = rules.filter((rule) => matches(rule.selector, identity, ancestors));
+	const own = inline(value.style);
+	for (const rule of matched) cascade(result, rule.declarations().normal);
+	cascade(result, own.normal);
+	for (const rule of matched) cascade(result, rule.declarations().important);
+	cascade(result, own.important);
+	let budget: { expansions: number } | undefined;
+	for (const [key, item] of Object.entries(result))
+		if (typeof item === "string" && item.includes("var("))
+			(result as Record<string, unknown>)[key] = resolveVariable(
+				item,
+				result,
+				new Set(key.startsWith("--") ? [key] : []),
+				(budget ??= { expansions: 0 }),
+			);
+	resolveFontSize(result, parent.style);
+	return { cascaded: result, style: style(result, parent.style) };
+}
+
 function visit(
 	value: Node,
 	rules: Rule[],
 	ancestors: Identity[],
-	parent: CascadedStyle,
-	parentStyle: NormalizedStyle,
+	parent: Computed,
 	chain: string,
 ): StyledNode {
 	if (value.kind === "text") return value;
 	const identity: Identity = { tag: value.tag, id: value.id, classes: value.classes };
 	const self = label(value);
 	const where = chain ? `${self} in ${chain}` : self;
-	// No prototype, so an own `__proto__` key (from JSON.parse) stays a key that style() rejects.
-	const result: CascadedStyle = Object.create(null);
-	let resolved: NormalizedStyle;
-	try {
-		for (const [key, item] of Object.entries(parent))
-			if (key.startsWith("--") || inherited.has(key))
-				(result as Record<string, unknown>)[key] = item;
-		cascade(result, uaStyles[value.tag]);
-		const matched = rules.filter((rule) => matches(rule.selector, identity, ancestors));
-		const own = inline(value.style);
-		for (const rule of matched) cascade(result, rule.declarations().normal);
-		cascade(result, own.normal);
-		for (const rule of matched) cascade(result, rule.declarations().important);
-		cascade(result, own.important);
-		let budget: { expansions: number } | undefined;
-		for (const [key, item] of Object.entries(result))
-			if (typeof item === "string" && item.includes("var("))
-				(result as Record<string, unknown>)[key] = resolveVariable(
-					item,
-					result,
-					new Set(key.startsWith("--") ? [key] : []),
-					(budget ??= { expansions: 0 }),
-				);
-		resolveFontSize(result, parentStyle);
-		resolved = style(result, parentStyle);
-	} catch (error) {
-		throw locate(error, where);
+	const byStyle = (parent.children ??= new Map());
+	let cache = byStyle.get(value.style);
+	if (!cache) byStyle.set(value.style, (cache = new Map()));
+	const key = `${value.tag}\n${value.id ?? ""}\n${value.classes.join(" ")}`;
+	let computed = cache.get(key);
+	if (!computed) {
+		try {
+			computed = compute(value, identity, rules, ancestors, parent);
+		} catch (error) {
+			throw locate(error, where);
+		}
+		cache.set(key, computed);
 	}
 	ancestors.push(identity);
 	const children = value.children.map((child) =>
-		visit(child, rules, ancestors, result, resolved, chain ? `${self} > ${chain}` : self),
+		visit(child, rules, ancestors, computed, chain ? `${self} > ${chain}` : self),
 	);
 	ancestors.pop();
-	return { ...value, style: resolved, where, children };
+	return { ...value, style: computed.style, where, children };
+}
+
+/** Parses `sheets` on first use; every call shares the parsed rules and the style cache. */
+export function styleResolver(
+	sheets: readonly string[] = [],
+): (value: readonly Node[]) => readonly StyledNode[] {
+	let rules: Rule[] | undefined;
+	const root: Computed = { cascaded: {}, style: {} };
+	return (value) => {
+		if (!rules) {
+			rules = sheets.flatMap(parse);
+			for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
+			rules.sort((a, b) => compareSpecificity(a.specificity, b.specificity) || a.order - b.order);
+		}
+		return value.map((node) => visit(node, rules!, [], root, ""));
+	};
 }
 
 export function resolveStyles(
 	value: readonly Node[],
 	sheets: readonly string[] = [],
 ): readonly StyledNode[] {
-	const rules = sheets.flatMap(parse);
-	for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
-	rules.sort((a, b) => compareSpecificity(a.specificity, b.specificity) || a.order - b.order);
-	return value.map((node) => visit(node, rules, [], {}, {}, ""));
+	return styleResolver(sheets)(value);
 }

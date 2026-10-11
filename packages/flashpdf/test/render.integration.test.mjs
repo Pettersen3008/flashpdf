@@ -363,6 +363,15 @@ test("given layouts the engine rejects, when rendering, then explains the code a
 	);
 });
 
+test("given an engine error queued in a batch before a compile error, when rendering, then names the element that wrote the failing record", async () => {
+	const lines = Array.from({ length: 50 }, (_, index) => jsx("p", { children: `Line ${index}` }));
+	const huge = jsx("p", { className: "huge", style: { fontSize: 3e38 }, children: "x" });
+	await assert.rejects(
+		render(jsx("main", { children: [...lines, huge, ...lines, jsx("td", { children: "x" })] })),
+		/^Error: TextTooWide: .* on <p\.huge> in <main>$/,
+	);
+});
+
 test("given a repeating header and tagged metadata, when rendering two pages, then writes page furniture and a structure tree", async () => {
 	const logo = png(1, 1, 2, [0, 255, 0, 0]);
 	const document = jsxs("main", {

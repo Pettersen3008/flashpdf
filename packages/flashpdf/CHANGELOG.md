@@ -5,6 +5,8 @@
 ### Changed
 
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
+- A styled 10,000-row invoice renders about 68% faster (630 ms to 200 ms). Elements with the same parent style, tag, id, classes, and inline style share one computed style; box styles and colours are parsed once; stylesheets are parsed once per render instead of once each for the body, header, and footer. Protocol records go to WASM up to 64 KiB per batch instead of one call per record, and `PdfRenderer.records()` reports which record the engine rejected, so errors still name the element that caused them. The protocol framing and output bytes are unchanged.
+- `render` resolves `header` and `footer` components before it registers fonts and attachments, so an error in one of them now comes before a font or attachment error.
 ### Fixed
 
 - With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.

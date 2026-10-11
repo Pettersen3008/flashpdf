@@ -15,17 +15,30 @@ export function edges(
 	];
 }
 
+const BOX_KEYS = [
+	...SIDES.flatMap((side) => [
+		`margin${side}`,
+		`padding${side}`,
+		`border${side}Width`,
+		`border${side}Color`,
+	]),
+	"backgroundColor",
+] as (keyof NormalizedStyle)[];
+
+/** Per computed style, then parent font size; rows share computed styles, so most calls repeat. */
+const boxes = new WeakMap<NormalizedStyle, Map<number, Box | undefined>>();
+
 export function boxStyle(s: NormalizedStyle, parent: number): Box | undefined {
-	const hasBox = [
-		...SIDES.flatMap((side) => [
-			`margin${side}`,
-			`padding${side}`,
-			`border${side}Width`,
-			`border${side}Color`,
-		]),
-		"backgroundColor",
-	].some((key) => s[key as keyof NormalizedStyle] !== undefined);
-	if (!hasBox) return undefined;
+	let sizes = boxes.get(s);
+	if (!sizes) boxes.set(s, (sizes = new Map()));
+	if (sizes.has(parent)) return sizes.get(parent);
+	const box = resolveBox(s, parent);
+	sizes.set(parent, box);
+	return box;
+}
+
+function resolveBox(s: NormalizedStyle, parent: number): Box | undefined {
+	if (!BOX_KEYS.some((key) => s[key] !== undefined)) return undefined;
 	const border = SIDES.map((side) => {
 		const width = s[`border${side}Width`];
 		const paint = s[`border${side}Color`];

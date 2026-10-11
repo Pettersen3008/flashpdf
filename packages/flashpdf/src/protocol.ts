@@ -143,6 +143,8 @@ export class ProtocolWriter {
 		this.body();
 		let slot = this.images.get(src);
 		if (slot === undefined) {
+			// The engine checks a new image against the records before it (PDF/A rejects CMYK).
+			this.binary.flush();
 			try {
 				slot = this.assets.add_image(src);
 			} catch (error) {
@@ -253,6 +255,7 @@ export class ProtocolWriter {
 
 	end() {
 		this.binary.record(opcode.end);
+		this.binary.flush();
 	}
 
 	private body() {

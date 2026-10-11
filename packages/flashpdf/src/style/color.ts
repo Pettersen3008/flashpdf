@@ -105,8 +105,13 @@ function functional(source: string): Rgb | undefined {
 	return rgb.some(Number.isNaN) ? undefined : rgb;
 }
 
+/** Parsed colours; callers share the arrays and never mutate them. */
+const parsed = new Map<string, Rgb>();
+
 export function color(value: unknown): Rgb {
 	if (typeof value !== "string") throw new Error(`invalid color: ${String(value)}`);
+	const cached = parsed.get(value);
+	if (cached) return cached;
 	const source = value.trim().toLowerCase();
 	const named = NAMED.get(source);
 	const rgb = hex(named ? `#${named}` : source) ?? functional(source);
@@ -116,5 +121,8 @@ export function color(value: unknown): Rgb {
 				? "transparent applies only to background and border color"
 				: `unsupported color: ${source}`,
 		);
+	// Bounded, because colour strings come from user input.
+	if (parsed.size >= 1024) parsed.clear();
+	parsed.set(value, rgb);
 	return rgb;
 }

@@ -2,11 +2,11 @@ import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { number, props } from "./assert.js";
 import { asError, Binary } from "./binary.js";
 import { compile } from "./compile.js";
-import { resolveStyles } from "./css.js";
+import { styleResolver } from "./css.js";
 import type { Element } from "./element.js";
 import { registerFonts } from "./fonts.js";
 import { ProtocolWriter } from "./protocol.js";
-import { pageOverflow, resolveTree } from "./tree.js";
+import { pageOverflow, resolveTree, type Node } from "./tree.js";
 
 export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array | undefined };
 export type PdfMetadata = {
@@ -92,44 +92,49 @@ export function createRenderer(loadWasm: LoadWasm) {
 		// Options are checked before user components run; fonts need the engine to parse.
 		const tree = await resolveTree(document);
 		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
-		const wasm = await loadWasm();
-		const renderer = new PdfRenderer();
-		let consumed = false;
-		try {
-			const fonts = registerFonts(renderer, p.fonts);
-			const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
-			writer.header(width, height, margin);
-			writer.metadata(metadata, p.tagged === true);
-			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
-			for (const position of ["header", "footer"] as const) {
-				if (p[position] === undefined) continue;
-				const repeating = await resolveTree(p[position]);
-				if (repeating.length !== 1 || repeating[0]?.kind !== "element")
-					throw new Error(`${position} must resolve to one element`);
-				writer.repeatStart(position);
-				compile(
-					resolveStyles(repeating, p.stylesheets as readonly string[] | undefined),
-					writer,
-					fonts,
-					undefined,
-					0,
-					true,
-				);
-				writer.repeatEnd();
-			}
-			compile(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
-			writer.end();
-			consumed = true;
-			try {
-				return renderer.finish();
-			} catch (error) {
-				throw asError(error);
-			}
-		} catch (error) {
-			throw pageOverflow(error);
-		} finally {
-			if (!consumed) renderer.free();
+		const repeating: ["header" | "footer", readonly Node[]][] = [];
+		for (const position of ["header", "footer"] as const) {
+			if (p[position] === undefined) continue;
+			const nodes = await resolveTree(p[position]);
+			if (nodes.length !== 1 || nodes[0]?.kind !== "element")
+				throw new Error(`${position} must resolve to one element`);
+			repeating.push([position, nodes]);
 		}
+		const wasm = await loadWasm();
+		const styles = styleResolver(p.stylesheets as readonly string[] | undefined);
+		// The second pass pushes the record the engine rejected alone, so the element that wrote it reports.
+		const emit = (replayAt?: number): Uint8Array => {
+			const renderer = new PdfRenderer();
+			const binary = new Binary(renderer, wasm.memory, replayAt);
+			let consumed = false;
+			try {
+				const fonts = registerFonts(renderer, p.fonts);
+				const writer = new ProtocolWriter(binary, renderer);
+				writer.header(width, height, margin);
+				writer.metadata(metadata, p.tagged === true);
+				attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
+				for (const [position, nodes] of repeating) {
+					writer.repeatStart(position);
+					compile(styles(nodes), writer, fonts, undefined, 0, true);
+					writer.repeatEnd();
+				}
+				compile(styles(tree), writer, fonts);
+				writer.end();
+				consumed = true;
+				try {
+					return renderer.finish();
+				} catch (error) {
+					throw asError(error);
+				}
+			} catch (error) {
+				const failed = consumed ? undefined : binary.failure();
+				if (failed !== undefined && replayAt === undefined) return emit(failed);
+				throw pageOverflow(error);
+			} finally {
+				if (!consumed) renderer.free();
+			}
+		};
+		return emit();
 	};
 }
 

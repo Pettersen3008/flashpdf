@@ -229,6 +229,29 @@ test("given a var() fallback with parentheses or a nested var(), when resolving 
 	assert.equal(main.children[0].style.color, "blue");
 });
 
+test("given one element under different parents, when resolving styles, then shares a result only between siblings", async () => {
+	const cell = () => jsx("span", { className: "cell", children: "x" });
+	const [main] = await resolve(
+		jsx("main", {
+			children: [
+				jsx("div", { className: "red", children: [cell(), cell()] }),
+				jsx("div", { style: { fontSize: 20 }, children: cell() }),
+				jsx("section", { children: cell() }),
+			],
+		}),
+		[".red { color: red } section .cell { font-weight: bold }"],
+	);
+	const [[first, second], [big], [nested]] = main.children.map((parent) =>
+		parent.children.map((child) => child.style),
+	);
+	assert.equal(first, second);
+	assert.equal(first.color, "red");
+	assert.equal(big.color, undefined);
+	assert.equal(big.fontSize, 20);
+	assert.equal(nested.fontWeight, "bold");
+	assert.equal(first.fontWeight, undefined);
+});
+
 test("given a long descendant selector that fails on a deep tree, when matching, then finishes quickly", async () => {
 	// Backtracking without memoization took over 5 s here.
 	let element = "x";
