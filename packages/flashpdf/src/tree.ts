@@ -338,10 +338,11 @@ export async function resolveTree(value: unknown): Promise<readonly Node[]> {
 	return host(await reactTree(value));
 }
 
-/** `width` and `flex` size a flex row's columns; anywhere else they would be
+/** `flex` and `align-self` size and align a flex item; anywhere else they would be
  *  silently dropped, so they are rejected instead. */
 export function rowOnly(s: NormalizedStyle, inRow: boolean) {
 	if (inRow) return;
-	for (const key of ["width", "flex"] as const)
-		if (s[key] !== undefined) throw new Error(`${key} applies only to a flex row child`);
+	if (s.flexGrow !== undefined || s.flexShrink !== undefined || s.flexBasis !== undefined)
+		throw new Error("flex applies only to a flex item");
+	if (s.alignSelf !== undefined) throw new Error("align-self applies only to a flex item");
 }

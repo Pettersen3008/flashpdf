@@ -1,6 +1,6 @@
 import { inherited } from "../css/properties.js";
 import { parseBorder } from "./border.js";
-import { edgeValues, SIDES } from "./length.js";
+import { edgeValues, flexShorthand, SIDES } from "./length.js";
 import type { NormalizedStyle } from "./types.js";
 
 /** `initial` values; a property missing here is simply absent by default. */
@@ -15,6 +15,9 @@ const INITIAL: Record<string, unknown> = {
 	orphans: 2,
 	widows: 2,
 	backgroundColor: "transparent",
+	flexGrow: 0,
+	flexShrink: 1,
+	flexBasis: "auto",
 	...Object.fromEntries(
 		SIDES.flatMap((side) => [
 			[`margin${side}`, 0],
@@ -34,6 +37,7 @@ function longhands(key: string): string[] {
 	if (/^border(?:Top|Right|Bottom|Left)$/.test(key)) return [`${key}Width`, `${key}Color`];
 	if (key === "borderWidth" || key === "borderColor")
 		return SIDES.map((side) => `border${side}${key.slice(6)}`);
+	if (key === "flex") return ["flexGrow", "flexShrink", "flexBasis"];
 	return [key === "background" ? "backgroundColor" : key];
 }
 
@@ -82,7 +86,8 @@ export function normalize(
 			}
 		} else if (key === "borderWidth" || key === "borderColor") {
 			for (const side of SIDES) result[`border${side}${key.slice(6)}`] = item;
-		} else if (key === "background") result.backgroundColor = item;
+		} else if (key === "flex") Object.assign(result, flexShorthand(item));
+		else if (key === "background") result.backgroundColor = item;
 		else result[key] = item;
 	}
 	return result as NormalizedStyle;

@@ -106,6 +106,9 @@ fn box_start() -> Vec<u8> {
     }
     payload.extend([1, 0xee, 0xee, 0xee]);
     payload.extend([0, 0, 0].repeat(4));
+    payload.extend([0, 0, 0, 0, 0]);
+    payload.extend(0.0_f32.to_le_bytes());
+    payload.push(0);
     record(17, &payload)
 }
 
@@ -964,4 +967,24 @@ fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_
         .unwrap_err()
         .to_string();
     assert_eq!(message, "attachments exceed 64 MiB per render");
+}
+
+#[test]
+fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
+    let mut bytes = header(VERSION, 595.0, 842.0, 36.0);
+    bytes.extend(record(8, &[0]));
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    bytes.extend(plain("Page \u{1e} of \u{1f}".as_bytes()));
+    bytes.extend(record(4, &[]));
+    bytes.extend(plain(b"First"));
+    bytes.extend(record(7, &[]));
+    bytes.extend(plain(b"Second"));
+    bytes.extend(record(255, &[]));
+
+    let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "First\nPage 1 of 2");
+    assert_eq!(
+        pdf.extract_text(&[2]).unwrap().trim(),
+        "Second\nPage 2 of 2"
+    );
 }

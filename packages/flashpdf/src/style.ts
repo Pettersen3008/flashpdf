@@ -1,15 +1,42 @@
 import { object } from "./assert.js";
 import { supported, unsupported } from "./css/properties.js";
 import { bold } from "./style/font.js";
-import { dimension, flexGrow, lineHeight, point } from "./style/length.js";
+import { dimension, flexBasis, lineHeight, point } from "./style/length.js";
 import { normalize } from "./style/normalize.js";
 import type { NormalizedStyle } from "./style/types.js";
 
-export type { Box, FontSlots, NormalizedStyle } from "./style/types.js";
-export { boxStyle, edges } from "./style/box.js";
+export type { Box, FontSlots, NormalizedStyle, Size } from "./style/types.js";
+export { boxSize, boxStyle, edges } from "./style/box.js";
 export { color } from "./style/color.js";
 export { bold, font, helvetica } from "./style/font.js";
-export { dimension, lineHeight, point, type LineHeight } from "./style/length.js";
+export { dimension, flexBasis, lineHeight, point, type LineHeight } from "./style/length.js";
+
+const ALIGN = ["normal", "stretch", "flex-start", "start", "flex-end", "end", "center"];
+const KEYWORDS: Record<string, readonly string[]> = {
+	justifyContent: [
+		"normal",
+		"flex-start",
+		"start",
+		"flex-end",
+		"end",
+		"center",
+		"space-between",
+		"space-around",
+		"space-evenly",
+	],
+	alignItems: ALIGN,
+	alignSelf: ["auto", ...ALIGN],
+	boxSizing: ["content-box", "border-box"],
+};
+/** Each size's initial value, which reads as absent. */
+const INITIAL_SIZE = {
+	width: "auto",
+	height: "auto",
+	minWidth: "auto",
+	minHeight: "auto",
+	maxWidth: "none",
+	maxHeight: "none",
+} as const;
 
 export function decoration(value: unknown): { underline: boolean; lineThrough: boolean } {
 	if (typeof value !== "string") throw new Error(`invalid textDecoration: ${String(value)}`);
@@ -93,14 +120,29 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 	)
 		throw new Error("invalid borderCollapse");
 	if (result.borderSpacing !== undefined) spacing(result.borderSpacing);
-	if (result.flex !== undefined) {
-		const { grow, basis } = flexGrow(result.flex);
-		// A column keeps only the grow factor, so a length basis, or `auto` beside a width, would be dropped.
-		if (grow > 0 && (basis === "length" || (basis === "auto" && result.width !== undefined)))
+	if (result.flexWrap !== undefined && result.flexWrap !== "nowrap")
+		throw new Error(
+			`flex-wrap: ${String(result.flexWrap)} is not supported; flex items stay on one line, so size them to fit`,
+		);
+	delete result.flexWrap;
+	for (const [key, values] of Object.entries(KEYWORDS))
+		if (result[key] !== undefined && !values.includes(result[key] as string))
 			throw new Error(
-				`flex basis is not supported: ${String(result.flex)}; use flex: ${grow} to share the row or width alone to fix the column`,
+				/baseline/.test(String(result[key]))
+					? `${key}: ${String(result[key])} is not supported; align text with center or flex-start`
+					: `invalid ${key}: ${String(result[key])}`,
 			);
-		result.flex = grow;
+	for (const key of ["flexGrow", "flexShrink"])
+		if (result[key] !== undefined) {
+			const factor = typeof result[key] === "string" ? Number(result[key]) : result[key];
+			if (typeof factor !== "number" || !(factor >= 0) || !Number.isFinite(Math.fround(factor)))
+				throw new Error(`invalid ${key}: ${String(result[key])}`);
+			result[key] = Math.fround(factor);
+		}
+	if (result.flexBasis !== undefined) flexBasis(result.flexBasis);
+	for (const [key, initial] of Object.entries(INITIAL_SIZE)) {
+		if (result[key] === initial) delete result[key];
+		else if (result[key] !== undefined) dimension(result[key], key, true);
 	}
 	if (result.gap !== undefined) point(result.gap);
 	if (result.fontSize !== undefined) point(result.fontSize, 12, true);
@@ -109,8 +151,6 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 	const family = result.fontFamily;
 	if (family !== undefined && (typeof family !== "string" || !family.trim()))
 		throw new Error("fontFamily must name at least one family");
-	if (result.width !== undefined) dimension(result.width, "width");
-	if (result.height !== undefined) dimension(result.height, "height");
 	if (result.textDecoration !== undefined) decoration(result.textDecoration);
 	return result as NormalizedStyle;
 }

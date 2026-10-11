@@ -210,7 +210,8 @@ pub struct RunDecoration {
     pub link: Option<u16>,
 }
 
-/// An image's requested width; `Auto` is the intrinsic size at 96 px per inch, capped to the container.
+/// A width in points or percent of the container's width. An image's `Auto` is its
+/// intrinsic size at 96 px per inch, capped to the container.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ImageSize {
     Auto,
@@ -225,6 +226,77 @@ pub struct BoxStyle {
     pub border: Edges<Pt>,
     pub background: Option<Rgb>,
     pub border_color: Edges<Rgb>,
+}
+
+/// CSS sizing of a box. `Auto` widths and `None` heights follow the content, and each
+/// value sizes the content box unless `border_box` is set.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxSize {
+    pub width: ImageSize,
+    /// `Auto` is zero in block flow and the min-content width for a flex item.
+    pub min_width: ImageSize,
+    /// `Auto` is `none`.
+    pub max_width: ImageSize,
+    pub height: Option<Pt>,
+    pub min_height: Pt,
+    pub max_height: Option<Pt>,
+    pub border_box: bool,
+    /// One bit per `auto` margin in `Edges` order: top 1, right 2, bottom 4, left 8.
+    pub auto_margin: u8,
+}
+
+impl BoxSize {
+    pub const AUTO: Self = Self {
+        width: ImageSize::Auto,
+        min_width: ImageSize::Auto,
+        max_width: ImageSize::Auto,
+        height: None,
+        min_height: Pt::ZERO,
+        max_height: None,
+        border_box: false,
+        auto_margin: 0,
+    };
+}
+
+/// `justify-content`; `start` and `end` are `flex-start` and `flex-end`, as nothing reverses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Justify {
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// `align-items` and `align-self`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Align {
+    Stretch,
+    Start,
+    End,
+    Center,
+}
+
+/// A single-line CSS flex container.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flex {
+    pub column: bool,
+    pub justify: Justify,
+    pub align: Align,
+    pub gap: Pt,
+    /// Bounds of the container's inner height; equal when the height is definite.
+    pub min_height: Pt,
+    pub max_height: Option<Pt>,
+}
+
+/// `align` `None` follows the container's `align-items`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlexItem {
+    pub grow: f32,
+    pub shrink: f32,
+    pub basis: ImageSize,
+    pub align: Option<Align>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -278,4 +350,6 @@ pub enum RenderError {
     MissingGlyph(char),
     DocumentTooLarge,
     ImageTooWide,
+    /// Content is taller than a box's fixed or maximum height, or than its flex container.
+    ContentOverflow,
 }

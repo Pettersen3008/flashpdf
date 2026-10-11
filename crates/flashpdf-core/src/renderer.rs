@@ -4,14 +4,14 @@ use std::rc::Rc;
 use pdf_writer::Content;
 
 use crate::command::{uniform_rows, CommandParser, OwnedCommand};
-use crate::document::{Block, BoxNode, Document, Element, Table};
+use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, Font, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
 use crate::layout::{painted, table_width, LayoutBuffer, LayoutEngine, PositionedBox};
 use crate::paint::{PageLink, PageTag, PaintState, PdfPainter};
 use crate::pdf::{finish_pdf, Metadata};
-use crate::{BoxStyle, Command, FontId, Page, Pt, RenderError, TextStyle};
+use crate::{BoxStyle, Command, FontId, Page, Pt, RenderError};
 
 /// Total content-stream bytes a document may paint before `finish`.
 pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
@@ -333,7 +333,7 @@ impl Renderer {
     fn render_element(&mut self, element: &Element<'_>) -> Result<(), RenderError> {
         match element {
             Element::Table(table) => return self.render_table(table),
-            Element::Box(node) => {
+            Element::Box(node) if node.size == crate::BoxSize::AUTO => {
                 self.open_box(node.style)?;
                 for child in &node.children {
                     self.render_element(child)?;
@@ -888,28 +888,6 @@ impl Renderer {
     }
 }
 
-/// Text, images, and unpainted boxes split across pages. Stack stays atomic: the
-/// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
-fn splittable(element: &Element<'_>) -> bool {
-    match element {
-        Element::Paragraph(_) | Element::Image(_) => true,
-        Element::Box(node) => {
-            node.style.background.is_none()
-                && node
-                    .style
-                    .padding
-                    .iter()
-                    .chain(node.style.border.iter())
-                    .all(|edge| *edge == Pt::ZERO)
-                && node
-                    .children
-                    .iter()
-                    .all(|child| matches!(child, Element::Spacer(_)) || splittable(child))
-        }
-        Element::Spacer(_) | Element::Stack(_) | Element::Row(_) | Element::Table(_) => false,
-    }
-}
-
 /// The first-page block where there is one, else the every-page block.
 fn pick(slots: &[Option<Furniture>; 2], first: bool) -> Option<&Furniture> {
     slots[1].as_ref().filter(|_| first).or(slots[0].as_ref())
@@ -922,7 +900,7 @@ fn numbered(
 ) -> Result<Vec<OwnedCommand>, RenderError> {
     let mut copy = commands.to_vec();
     for command in &mut copy {
-        let OwnedCommand::Paragraph(_, text, runs, _) = command else {
+        let OwnedCommand::Paragraph(_, _, text, runs, _) = command else {
             continue;
         };
         let mut spelled = String::new();

@@ -20,7 +20,10 @@ use pdf_writer::types::AssociationKind;
 use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
-use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun};
+use crate::{
+    Align, BoxSize, Edges, Flex, FlexItem, FontId, Justify, OwnedCommand, Pt, RunDecoration,
+    TextRun,
+};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -79,6 +82,7 @@ enum Frame {
     Stack,
     Box(bool),
     Row { cells: usize, done: usize },
+    Flex { cells: usize, done: usize },
     Table { head: Option<usize> },
 }
 
@@ -242,6 +246,51 @@ impl Decoder {
                     .count();
                 let _ = cells;
                 self.feed(OwnedCommand::RowStart(columns, slots))
+            }
+            Opcode::FlexStart => {
+                let flags = cursor.take(1)?[0];
+                let justify = match cursor.take(1)?[0] {
+                    0 => Justify::Start,
+                    1 => Justify::End,
+                    2 => Justify::Center,
+                    3 => Justify::SpaceBetween,
+                    4 => Justify::SpaceAround,
+                    5 => Justify::SpaceEvenly,
+                    _ => return Err(ProtocolError::InvalidValue("justify-content")),
+                };
+                let style = Flex {
+                    column: match flags {
+                        0 | 1 => flags == 1,
+                        _ => return Err(ProtocolError::InvalidValue("flex flags")),
+                    },
+                    justify,
+                    align: cursor.alignment()?.unwrap_or(Align::Stretch),
+                    gap: pt(cursor.nonnegative_f32("flex gap")?)?,
+                    min_height: pt(cursor.nonnegative_f32("flex min height")?)?,
+                    max_height: cursor.height()?,
+                };
+                let count = usize::from(cursor.u16()?);
+                if count == 0 || count > crate::command::MAX_COLUMNS {
+                    return Err(ProtocolError::InvalidColumnCount);
+                }
+                let mut items = Vec::with_capacity(count);
+                for _ in 0..count {
+                    items.push(FlexItem {
+                        grow: cursor.nonnegative_f32("flex grow")?,
+                        shrink: cursor.nonnegative_f32("flex shrink")?,
+                        basis: cursor.size("flex basis")?,
+                        align: cursor.alignment()?,
+                    });
+                }
+                cursor.done()?;
+                self.open(
+                    Frame::Flex { cells: count, done: 0 },
+                    OwnedCommand::FlexStart(style, items),
+                )
+            }
+            Opcode::FlexEnd => {
+                cursor.done()?;
+                self.close(OwnedCommand::FlexEnd)
             }
             Opcode::RowEnd => {
                 cursor.done()?;
@@ -494,14 +543,34 @@ impl Decoder {
                     bottom: cursor.rgb()?,
                     left: cursor.rgb()?,
                 };
+                // Bit 0 is border-box sizing; bits 1 to 4 are auto margins in `Edges` order.
+                let flags = cursor.take(1)?[0];
+                if flags > 0x1f {
+                    return Err(ProtocolError::InvalidValue("box flags"));
+                }
+                let size = BoxSize {
+                    width: cursor.size("width")?,
+                    min_width: cursor.size("min width")?,
+                    max_width: cursor.size("max width")?,
+                    height: cursor.height()?,
+                    min_height: cursor.height()?.unwrap_or(Pt::ZERO),
+                    max_height: cursor.height()?,
+                    border_box: flags & 1 != 0,
+                    auto_margin: flags >> 1,
+                };
                 cursor.done()?;
-                self.feed(OwnedCommand::BoxStart(crate::BoxStyle {
-                    margin,
-                    padding,
-                    border,
-                    background,
-                    border_color,
-                }))
+                self.feed(
+                    OwnedCommand::BoxStart(
+                        crate::BoxStyle {
+                            margin,
+                            padding,
+                            border,
+                            background,
+                            border_color,
+                        },
+                        size,
+                    ),
+                )
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
@@ -597,6 +666,7 @@ impl Decoder {
                 columns.len() * size_of::<crate::ColumnWidth>()
                     + slots.len() * size_of::<crate::Slot>()
             }
+            OwnedCommand::FlexStart(_, items) => items.len() * size_of::<FlexItem>(),
             OwnedCommand::Image(_, _, _, link, alt) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
@@ -614,11 +684,12 @@ impl Decoder {
     fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = match &command {
             OwnedCommand::StackStart(_) => Frame::Stack,
-            OwnedCommand::BoxStart(_) => Frame::Box(false),
+            OwnedCommand::BoxStart(_, size) => Frame::Box(self.placing() && self.furniture.is_none() && *size == BoxSize::AUTO),
             OwnedCommand::RowStart(_, slots) => Frame::Row {
                 cells: slots.iter().filter(|slot| matches!(slot, crate::Slot::Cell { .. })).count(),
                 done: 0,
             },
+            OwnedCommand::FlexStart(_, items) => Frame::Flex { cells: items.len(), done: 0 },
             OwnedCommand::TableStart(header_rows, footer_rows, _) => Frame::Table {
                 head: self
                     .placing()
@@ -627,6 +698,7 @@ impl Decoder {
             OwnedCommand::StackEnd
             | OwnedCommand::BoxEnd
             | OwnedCommand::RowEnd
+            | OwnedCommand::FlexEnd
             | OwnedCommand::TableEnd => return self.close(command),
             OwnedCommand::Paragraph(..) | OwnedCommand::Spacer(_) | OwnedCommand::Image(..) => {
                 return self.layout_command(command)
@@ -672,7 +744,7 @@ impl Decoder {
             return Err(ProtocolError::NestingTooDeep);
         }
         match (frame, command) {
-            (Frame::Box(true), OwnedCommand::BoxStart(style)) => {
+            (Frame::Box(true), OwnedCommand::BoxStart(style, _)) => {
                 self.ensure_renderer()?.open_box(style)?
             }
             (_, command) => self.push_command(command)?,
@@ -693,7 +765,7 @@ impl Decoder {
             (OwnedCommand::StackEnd, Frame::Stack)
             | (OwnedCommand::BoxEnd, Frame::Box(false))
             | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
-            (OwnedCommand::RowEnd, Frame::Row { cells, done }) if cells == done => {}
+            (OwnedCommand::RowEnd, Frame::Row { cells, done }) | (OwnedCommand::FlexEnd, Frame::Flex { cells, done }) if cells == done => {}
             (OwnedCommand::RowEnd, Frame::Row { .. }) => {
                 return Err(ProtocolError::RowCellCountMismatch)
             }
@@ -703,7 +775,7 @@ impl Decoder {
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {
-        if let Some(Frame::Row { cells, done }) = self.frames.last_mut() {
+        if let Some(Frame::Row { cells, done } | Frame::Flex { cells, done }) = self.frames.last_mut() {
             *done += 1;
             if *done > *cells {
                 return Err(ProtocolError::RowCellCountMismatch);

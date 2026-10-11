@@ -6,6 +6,24 @@ export type Column = { kind: 0 | 1 | 2; value: number };
 export type Slot = { align: 0 | 1 | 2; rows: number } | "join" | "covered";
 /** An image dimension: 1 is points, 2 is percent of the container width. */
 export type Dimension = { kind: 1 | 2; value: number };
+/** Alignment codes: 0 auto, then stretch, start, end, center. */
+export type Flex = {
+	column: boolean;
+	/** Start, end, center, space-between, space-around, space-evenly. */
+	justify: number;
+	align: number;
+	gap: number;
+	/** Bounds of the container's content height; equal when the height is fixed. */
+	minHeight: number;
+	maxHeight: number | undefined;
+};
+/** `basis` undefined is `auto`. */
+export type FlexItem = {
+	grow: number;
+	shrink: number;
+	basis: Dimension | undefined;
+	align: number;
+};
 /** One styled stretch of a paragraph; `break` ends the line after it. */
 export type Run = {
 	font: number;
@@ -26,6 +44,8 @@ const opcode = {
 	stackEnd: 4,
 	rowStart: 5,
 	rowEnd: 6,
+	flexStart: 23,
+	flexEnd: 24,
 	pageBreak: 7,
 	footer: 8,
 	header: 13,
@@ -194,6 +214,28 @@ export class ProtocolWriter {
 		this.binary.record(opcode.rowEnd);
 	}
 
+	flexStart(flex: Flex, items: readonly FlexItem[]) {
+		this.binary.record(opcode.flexStart, () => {
+			this.binary.u8(flex.column ? 1 : 0);
+			this.binary.u8(flex.justify);
+			this.binary.u8(flex.align);
+			this.binary.f32(flex.gap);
+			this.binary.f32(flex.minHeight);
+			this.height(flex.maxHeight);
+			this.binary.u16(items.length);
+			for (const item of items) {
+				this.binary.f32(item.grow);
+				this.binary.f32(item.shrink);
+				this.size(item.basis);
+				this.binary.u8(item.align);
+			}
+		});
+	}
+
+	flexEnd() {
+		this.binary.record(opcode.flexEnd);
+	}
+
 	/** The first `headerRows` children repeat on every page the table continues on. */
 	tableStart(headerRows: number, footerRows: number, width: Column) {
 		if (headerRows > 0xffff) throw new Error("too many header rows");
@@ -240,7 +282,25 @@ export class ProtocolWriter {
 				for (const channel of box.background) this.binary.u8(channel);
 			} else this.binary.u8(0);
 			for (const edge of box.borderColor) for (const channel of edge) this.binary.u8(channel);
+			const size = box.size;
+			this.binary.u8((size?.borderBox ? 1 : 0) | ((size?.autoMargin ?? 0) << 1));
+			this.size(size?.width);
+			this.size(size?.minWidth);
+			this.size(size?.maxWidth);
+			this.height(size?.height);
+			this.height(size?.minHeight);
+			this.height(size?.maxHeight);
 		});
+	}
+
+	/** Kind 0 is `auto`. */
+	private size(value: Dimension | undefined) {
+		this.binary.u8(value?.kind ?? 0);
+		if (value) this.binary.f32(value.value);
+	}
+
+	private height(value: number | undefined) {
+		this.size(value === undefined ? undefined : { kind: 1, value });
 	}
 
 	boxEnd() {

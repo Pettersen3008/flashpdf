@@ -65,15 +65,18 @@ pub(crate) struct ParagraphLayouter<'a> {
     has_word: bool,
     pieces: Vec<Piece>,
     space: Option<Space>,
+    /// The widest word so far: the paragraph's min-content width.
+    widest: Pt,
 }
 
 impl<'a> ParagraphLayouter<'a> {
+    /// Returns the height and the widest word.
     pub(crate) fn layout(
         fonts: &'a FontBook,
         paragraph: &Paragraph<'_>,
         area: LayoutArea,
         output: &mut LayoutBuffer,
-    ) -> Result<Pt, LayoutError> {
+    ) -> Result<(Pt, Pt), LayoutError> {
         let mut runs = Vec::with_capacity(paragraph.runs.len());
         for run in &paragraph.runs {
             if run.size == Pt::ZERO {
@@ -112,6 +115,7 @@ impl<'a> ParagraphLayouter<'a> {
             has_word: false,
             pieces: Vec::new(),
             space: None,
+            widest: Pt::ZERO,
         };
         let mut rest = paragraph.text;
         for (index, run) in paragraph.runs.iter().enumerate() {
@@ -132,7 +136,7 @@ impl<'a> ParagraphLayouter<'a> {
         if state.has_word {
             state.push_line(output);
         }
-        Ok(state.height)
+        Ok((state.height, state.widest))
     }
 
     fn run(
@@ -192,6 +196,9 @@ impl<'a> ParagraphLayouter<'a> {
             .iter()
             .fold(Pt::ZERO, |total, piece| total + piece.width);
         let space = self.space.take();
+        if width > self.widest {
+            self.widest = width;
+        }
         if width > self.area.width {
             if self.has_word {
                 self.push_line(output);

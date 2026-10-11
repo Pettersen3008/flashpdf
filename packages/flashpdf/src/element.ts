@@ -6,19 +6,56 @@ export type Edges =
 	| `${Length} ${Length}`
 	| `${Length} ${Length} ${Length}`
 	| `${Length} ${Length} ${Length} ${Length}`;
+/** `auto` horizontal margins centre a block with a width; flex items absorb free space with them. */
+export type Margin = Length | "auto";
+export type MarginEdges =
+	| Margin
+	| `${Margin} ${Margin}`
+	| `${Margin} ${Margin} ${Margin}`
+	| `${Margin} ${Margin} ${Margin} ${Margin}`;
+export type Alignment =
+	| "normal"
+	| "stretch"
+	| "flex-start"
+	| "start"
+	| "flex-end"
+	| "end"
+	| "center";
 
 export type Style = {
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
-	flex?: number;
-	width?: Width;
-	/** Only `img` takes a height; block height comes from content. */
-	height?: Width;
-	margin?: Edges;
-	marginTop?: Length;
-	marginRight?: Length;
-	marginBottom?: Length;
-	marginLeft?: Length;
+	flexWrap?: "nowrap";
+	justifyContent?:
+		| "normal"
+		| "flex-start"
+		| "start"
+		| "flex-end"
+		| "end"
+		| "center"
+		| "space-between"
+		| "space-around"
+		| "space-evenly";
+	alignItems?: Alignment;
+	alignSelf?: Alignment | "auto";
+	/** `none`, `auto`, a grow factor, or grow and shrink factors with an optional basis. */
+	flex?: number | "auto" | "none" | `${number} ${string}`;
+	flexGrow?: number;
+	flexShrink?: number;
+	flexBasis?: Width | "auto";
+	width?: Width | "auto";
+	minWidth?: Width | "auto";
+	maxWidth?: Width | "none";
+	/** A percent needs a parent with a fixed `height`. */
+	height?: Width | "auto";
+	minHeight?: Width | "auto";
+	maxHeight?: Width | "none";
+	boxSizing?: "content-box" | "border-box";
+	margin?: MarginEdges;
+	marginTop?: Margin;
+	marginRight?: Margin;
+	marginBottom?: Margin;
+	marginLeft?: Margin;
 	padding?: Edges;
 	paddingTop?: Length;
 	paddingRight?: Length;
