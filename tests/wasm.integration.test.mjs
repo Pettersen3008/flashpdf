@@ -47,7 +47,7 @@ function record(opcode, payload = new Uint8Array()) {
 }
 
 function protocolHeader() {
-	return join(encoder.encode("FPDF"), u16(8), f32(120), f32(60), ...[10, 10, 10, 10].map(f32));
+	return join(encoder.encode("FPDF"), u16(12), f32(120), f32(60), ...[10, 10, 10, 10].map(f32));
 }
 
 /** A left-aligned paragraph of one plain Helvetica run. */

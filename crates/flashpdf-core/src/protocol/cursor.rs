@@ -55,9 +55,9 @@ impl<'a> Cursor<'a> {
         Ok(Rgb::from(<[u8; 3]>::try_from(self.take(3)?).unwrap()))
     }
 
-    pub(super) fn text(&mut self, footer: bool) -> Result<&'a str, ProtocolError> {
+    pub(super) fn text(&mut self, furniture: bool) -> Result<&'a str, ProtocolError> {
         let text = self.utf8_text()?;
-        if !valid(text, footer) {
+        if !valid(text, furniture) {
             return Err(ProtocolError::ControlCharacter);
         }
         Ok(text)

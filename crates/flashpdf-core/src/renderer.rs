@@ -2,13 +2,13 @@ use pdf_writer::Content;
 
 use crate::command::{CommandParser, OwnedCommand};
 use crate::document::{Block, Document, Element, Table};
-use crate::font::{EmbeddedFont, FontBook};
-use crate::geometry::{LayoutArea, PageCursor, PageLayout};
+use crate::font::{EmbeddedFont, Font, FontBook};
+use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
 use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
 use crate::paint::{PageLink, PageTag, PdfPainter};
 use crate::pdf::{finish_pdf, Metadata};
-use crate::{Command, Page, Pt, RenderError, TextStyle};
+use crate::{Command, FontId, Page, Pt, RenderError};
 
 /// Total content-stream bytes a document may paint before `finish`.
 pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
@@ -20,7 +20,10 @@ pub fn render(page: Page, commands: &[Command<'_>]) -> Result<Vec<u8>, RenderErr
 }
 
 pub struct Renderer {
+    /// The body of the current page.
     page: PageLayout,
+    /// The body of every page after the first.
+    later: PageLayout,
     contents: Vec<Content>,
     /// Bytes in every page except the open last one.
     content_bytes: usize,
@@ -32,17 +35,17 @@ pub struct Renderer {
     links: Vec<Vec<PageLink>>,
     tags: Vec<Vec<PageTag>>,
     layout: LayoutBuffer,
-    header: Option<Furniture>,
-    footer: Option<Furniture>,
+    /// Index 0 paints on every page; index 1 replaces it on the first page.
+    header: [Option<Furniture>; 2],
+    footer: [Option<Furniture>; 2],
     metadata: Metadata,
 }
 
-/// A header or footer line, painted on every page in `finish`.
+/// A header or footer block, laid out again on every page in `finish` with that page's numbers.
 struct Furniture {
-    template: String,
-    style: TextStyle,
-    /// Baseline y from the page bottom.
-    baseline: Pt,
+    commands: Vec<OwnedCommand>,
+    /// Measured with ten-digit page numbers and reserved on every page it paints on.
+    height: Pt,
 }
 
 impl Renderer {
@@ -54,6 +57,7 @@ impl Renderer {
         let page = PageLayout::new(page);
         Self {
             page,
+            later: page,
             contents: vec![Content::new()],
             content_bytes: 0,
             cursor: PageCursor::new(page),
@@ -63,8 +67,8 @@ impl Renderer {
             links: vec![Vec::new()],
             tags: vec![Vec::new()],
             layout: LayoutBuffer::default(),
-            header: None,
-            footer: None,
+            header: Default::default(),
+            footer: Default::default(),
             metadata: Metadata::default(),
         }
     }
@@ -110,76 +114,72 @@ impl Renderer {
         self.push_block(&block)
     }
 
-    pub(crate) fn set_footer(
+    /// Reserves the block's height, measured with ten-digit page numbers, on
+    /// every page it paints on. Index 1 (`first`) replaces index 0 on the first page.
+    pub(crate) fn set_furniture(
         &mut self,
-        template: String,
-        style: TextStyle,
+        footer: bool,
+        first: bool,
+        commands: Vec<OwnedCommand>,
     ) -> Result<(), RenderError> {
-        if self.footer.is_some() {
+        let placeholder = numbered(&commands, &|_, font| {
+            let font = self.fonts.get(font).ok_or(RenderError::InvalidLayout)?;
+            Ok(widest_digit(font)?.to_string().repeat(10))
+        })?;
+        let height = self.lay_out_furniture(&placeholder, &mut LayoutBuffer::default())?;
+        let slot = &mut if footer {
+            &mut self.footer
+        } else {
+            &mut self.header
+        }[usize::from(first)];
+        if slot.is_some() {
             return Err(RenderError::InvalidLayout);
         }
-        let (ascent, height) = self.measure_furniture(&template, style)?;
-        self.footer = Some(Furniture {
-            template,
-            style,
-            baseline: self.page.bottom() + (height - ascent),
-        });
-        self.page.footer = height;
-        Ok(())
-    }
-
-    pub(crate) fn set_header(
-        &mut self,
-        template: String,
-        style: TextStyle,
-    ) -> Result<(), RenderError> {
-        if self.header.is_some() {
-            return Err(RenderError::InvalidLayout);
-        }
-        let (ascent, height) = self.measure_furniture(&template, style)?;
-        self.header = Some(Furniture {
-            template,
-            style,
-            baseline: self.page.top() - ascent,
-        });
-        self.page.header = height;
+        *slot = Some(Furniture { commands, height });
+        self.page = self.body(true);
+        self.later = self.body(false);
+        self.page.validate_furniture()?;
+        self.later.validate_furniture()?;
         self.cursor.reset(self.page);
         Ok(())
     }
 
-    /// Checks that the line fits the page with ten-digit page numbers and
-    /// returns its ascent and height.
-    fn measure_furniture(
-        &mut self,
-        template: &str,
-        style: TextStyle,
-    ) -> Result<(Pt, Pt), RenderError> {
-        let font = self
-            .fonts
-            .get(style.font)
-            .ok_or(RenderError::InvalidLayout)?;
-        let mut digit = '0';
-        let mut width = 0;
-        let mut scratch = Vec::new();
-        for candidate in '0'..='9' {
-            let candidate_width = font.encode_into(candidate, &mut scratch)?;
-            if candidate_width > width {
-                digit = candidate;
-                width = candidate_width;
-            }
-        }
-        let placeholder = digit.to_string().repeat(10);
-        let (_, text_width) = footer_line(template, &placeholder, &placeholder, font, style)?;
-        if text_width > self.page.content_width() {
-            return Err(RenderError::TextTooWide);
-        }
-        let (ascent, descent, gap) = font.metrics();
-        let scale = style.size.get() / 1000.0;
-        let ascent = ascent * scale;
-        let height = Pt((ascent - descent * scale + gap * scale).max(0.0));
-        self.page.validate_block(height)?;
-        self.fonts.mark_used(style.font, &[]);
-        Ok((Pt(ascent), height))
+    /// The body of the first or a later page, between the header and footer it paints.
+    fn body(&self, first: bool) -> PageLayout {
+        let height = |slots: &[Option<Furniture>; 2]| {
+            pick(slots, first).map_or(Pt::ZERO, |furniture| furniture.height)
+        };
+        let mut body = self.page;
+        body.header = height(&self.header);
+        body.footer = height(&self.footer);
+        body
+    }
+
+    /// Furniture never splits, so it lays out whole at the body width.
+    fn lay_out_furniture(
+        &self,
+        commands: &[OwnedCommand],
+        output: &mut LayoutBuffer,
+    ) -> Result<Pt, RenderError> {
+        let Block::Element(element) = CommandParser::new(commands)
+            .parse_single_block()
+            .map_err(|_| RenderError::InvalidLayout)?
+        else {
+            return Err(RenderError::InvalidLayout);
+        };
+        output.clear();
+        Ok(LayoutEngine::new(&self.fonts, &self.images).layout(
+            &element,
+            LayoutArea::root(self.page.content_width()),
+            output,
+        )?)
+    }
+
+    /// A block too tall for the first page's body can still fit a later, taller one.
+    fn validate_block(&self, height: Pt) -> Result<(), RenderError> {
+        self.page
+            .validate_block(height)
+            .or_else(|_| self.later.validate_block(height))
     }
 
     pub(crate) fn set_metadata(&mut self, metadata: Metadata) {
@@ -239,7 +239,7 @@ impl Renderer {
     ) -> Result<(), RenderError> {
         let lines = layout.lines.len();
         if !splittable(element) {
-            self.page.validate_block(height)?;
+            self.validate_block(height)?;
             if !self.cursor.fits(height, self.page) {
                 self.start_page();
             }
@@ -287,7 +287,7 @@ impl Renderer {
         let (header, header_height) = self.layout_rows(&table.rows[..table.header_rows], area)?;
         let (footer, footer_height) = self.layout_rows(&table.rows[split..], area)?;
         let reserved = header_height + footer_height;
-        self.page.validate_block(reserved)?;
+        self.validate_block(reserved)?;
         let body = &table.rows[table.header_rows..split];
         if body.is_empty() {
             if !self.cursor.fits(reserved, self.page) {
@@ -303,7 +303,7 @@ impl Renderer {
                 LayoutEngine::new(&self.fonts, &self.images).layout(row, area, &mut self.layout)?;
             let layout = std::mem::take(&mut self.layout);
             self.mark_used(&layout);
-            if self.page.validate_block(height + reserved).is_err() {
+            if self.validate_block(height + reserved).is_err() {
                 return Err(RenderError::TableRowOverflow(table.header_rows + index));
             }
             let needed = height
@@ -369,53 +369,71 @@ impl Renderer {
         self.contents.push(Content::new());
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
+        self.page = self.later;
         self.cursor.reset(self.page);
     }
 
     pub fn finish(mut self) -> Result<Vec<u8>, RenderError> {
         // The header and footer repeat on every page, so they count against the cap too.
         let mut bytes = self.content_bytes + self.contents.last().unwrap().len();
-        let total = self.contents.len() as i32;
-        for (index, (content, links)) in self.contents.iter_mut().zip(&mut self.links).enumerate() {
-            let before = content.len();
-            for furniture in self.header.iter().chain(&self.footer) {
-                let mut page_buffer = itoa::Buffer::new();
-                let mut total_buffer = itoa::Buffer::new();
-                let font = self.fonts.get(furniture.style.font).unwrap();
-                let (text, width) = footer_line(
-                    &furniture.template,
-                    page_buffer.format(index as i32 + 1),
-                    total_buffer.format(total),
-                    font,
-                    furniture.style,
-                )
-                .unwrap();
-                self.fonts.mark_used(furniture.style.font, &text);
+        let page = self.page.page();
+        let furniture = [
+            (std::mem::take(&mut self.header), false),
+            (std::mem::take(&mut self.footer), true),
+        ];
+        let mut total = itoa::Buffer::new();
+        let total = total.format(self.contents.len());
+        let mut layout = LayoutBuffer::default();
+        for index in 0..self.contents.len() {
+            let mut number = itoa::Buffer::new();
+            let number = number.format(index + 1);
+            let before = self.contents[index].len();
+            for (slots, footer) in &furniture {
+                let Some(item) = pick(slots, index == 0) else {
+                    continue;
+                };
+                let commands = numbered(&item.commands, &|token, _| {
+                    Ok(if token == crate::PAGE_NUMBER {
+                        number
+                    } else {
+                        total
+                    }
+                    .to_owned())
+                })?;
+                // A shorter number can pull a taller run up a line, so a page can outgrow the measure.
+                if self.lay_out_furniture(&commands, &mut layout)? > item.height {
+                    return Err(RenderError::PageOverflow);
+                }
+                self.mark_used(&layout);
+                let y = if *footer {
+                    page.margin.bottom + item.height
+                } else {
+                    page.height - page.margin.top
+                };
+                let content = &mut self.contents[index];
                 if self.metadata.tagged {
                     content.begin_marked_content(pdf_writer::Name(b"Artifact"));
                 }
-                PdfPainter::new(content, links, None).paint_line(
-                    &text,
-                    furniture.style,
-                    crate::geometry::Point {
-                        x: self.page.left(),
-                        y: furniture.baseline,
+                PdfPainter::new(content, &mut self.links[index], None).paint(
+                    &layout,
+                    0..layout.lines.len(),
+                    Point {
+                        x: page.margin.left,
+                        y,
                     },
-                    self.page.content_width(),
-                    width,
                 );
                 if self.metadata.tagged {
                     content.end_marked_content();
                 }
             }
-            bytes += content.len() - before;
+            bytes += self.contents[index].len() - before;
             if bytes > MAX_CONTENT_BYTES {
                 return Err(RenderError::DocumentTooLarge);
             }
         }
         let (fonts, used) = self.fonts.into_parts();
         Ok(finish_pdf(
-            self.page.page(),
+            page,
             self.contents,
             fonts,
             used,
@@ -450,27 +468,53 @@ fn splittable(element: &Element<'_>) -> bool {
     }
 }
 
-fn footer_line(
-    text: &str,
-    page_number: &str,
-    total_pages: &str,
-    font: &crate::font::Font,
-    style: TextStyle,
-) -> Result<(Vec<u8>, Pt), RenderError> {
-    let mut bytes = Vec::new();
-    let mut width = 0_u32;
-    for character in text.chars() {
-        let token = match character {
-            crate::PAGE_NUMBER => page_number,
-            crate::TOTAL_PAGES => total_pages,
-            _ => {
-                width += u32::from(font.encode_into(character, &mut bytes)?);
-                continue;
-            }
+/// The first-page block where there is one, else the every-page block.
+fn pick(slots: &[Option<Furniture>; 2], first: bool) -> Option<&Furniture> {
+    slots[1].as_ref().filter(|_| first).or(slots[0].as_ref())
+}
+
+/// Copies a furniture block with each page token spelled by `spell(token, run font)`.
+fn numbered(
+    commands: &[OwnedCommand],
+    spell: &dyn Fn(char, FontId) -> Result<String, RenderError>,
+) -> Result<Vec<OwnedCommand>, RenderError> {
+    let mut copy = commands.to_vec();
+    for command in &mut copy {
+        let OwnedCommand::Paragraph(_, text, runs, _) = command else {
+            continue;
         };
-        for digit in token.chars() {
-            width += u32::from(font.encode_into(digit, &mut bytes)?);
+        let mut spelled = String::new();
+        let mut rest = text.as_str();
+        for run in runs {
+            let (part, tail) = rest
+                .split_at_checked(run.len)
+                .ok_or(RenderError::InvalidLayout)?;
+            rest = tail;
+            let start = spelled.len();
+            for character in part.chars() {
+                match character {
+                    crate::PAGE_NUMBER | crate::TOTAL_PAGES => {
+                        spelled.push_str(&spell(character, run.font)?)
+                    }
+                    _ => spelled.push(character),
+                }
+            }
+            run.len = spelled.len() - start;
+        }
+        *text = spelled;
+    }
+    Ok(copy)
+}
+
+/// Placeholder numbers use the widest digit, so a real number is never wider.
+fn widest_digit(font: &Font) -> Result<char, RenderError> {
+    let mut scratch = Vec::new();
+    let mut widest = ('0', 0);
+    for digit in '0'..='9' {
+        let width = font.encode_into(digit, &mut scratch)?;
+        if width > widest.1 {
+            widest = (digit, width);
         }
     }
-    Ok((bytes, Pt(width as f32 * style.size.get() / 1000.0)))
+    Ok(widest.0)
 }

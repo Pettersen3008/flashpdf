@@ -49,7 +49,7 @@ impl LayoutArea {
     }
 }
 
-/// The page body: the page minus its margins and the repeating header and footer lines.
+/// The page body: the page minus its margins and the header and footer it paints.
 #[derive(Clone, Copy)]
 pub(crate) struct PageLayout {
     page: Page,
@@ -88,6 +88,16 @@ impl PageLayout {
 
     pub(crate) fn left(self) -> Pt {
         self.page.margin.left
+    }
+
+    /// The header and footer may take at most half the height between the margins.
+    pub(crate) fn validate_furniture(self) -> Result<(), RenderError> {
+        let between = self.page.height - self.page.margin.top - self.page.margin.bottom;
+        if (self.header + self.footer).get() <= between.get() / 2.0 {
+            Ok(())
+        } else {
+            Err(RenderError::PageOverflow)
+        }
     }
 
     pub(crate) fn validate_block(self, height: Pt) -> Result<(), RenderError> {

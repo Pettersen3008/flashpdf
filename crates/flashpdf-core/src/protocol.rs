@@ -20,7 +20,7 @@ use pdf_writer::types::AssociationKind;
 use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
-use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle};
+use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -33,7 +33,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 30;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 8;
+const VERSION: u16 = 12;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -65,6 +65,8 @@ pub struct Decoder {
     metadata: crate::pdf::Metadata,
     pdfa: bool,
     body_started: bool,
+    /// `(footer, first page)` of a Header or Footer record waiting for its block.
+    furniture: Option<(bool, bool)>,
 }
 
 #[derive(Clone, Copy)]
@@ -257,36 +259,27 @@ impl Decoder {
             }
             Opcode::PageBreak => {
                 cursor.done()?;
-                if !self.frames.is_empty() {
+                if !self.frames.is_empty() || self.furniture.is_some() {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 self.body_started = true;
                 self.ensure_renderer()?.page_break();
                 Ok(())
             }
+            // The next top-level block is the header or footer, for every page or the first.
             Opcode::Footer | Opcode::Header => {
-                let size = pt(cursor.positive_f32("font size")?)?;
-                let align = cursor.align()?;
-                let color = cursor.rgb()?;
-                let font = self.font(cursor.take(1)?[0])?;
-                let text = cursor.text(true)?.to_owned();
+                let first = match cursor.take(1)?[0] {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(ProtocolError::InvalidValue("furniture page")),
+                };
                 cursor.done()?;
-                if self.body_started || !self.frames.is_empty() {
+                if self.body_started || !self.frames.is_empty() || self.furniture.is_some() {
                     return Err(ProtocolError::InvalidNesting);
                 }
-                let style = TextStyle {
-                    size,
-                    align,
-                    color,
-                    font,
-                };
-                let renderer = self.ensure_renderer()?;
-                if matches!(opcode, Opcode::Header) {
-                    renderer.set_header(text, style)
-                } else {
-                    renderer.set_footer(text, style)
-                }
-                .map_err(ProtocolError::from)
+                self.ensure_renderer()?;
+                self.furniture = Some((matches!(opcode, Opcode::Footer), first));
+                Ok(())
             }
             Opcode::Metadata => {
                 let tagged = match cursor.take(1)?[0] {
@@ -416,7 +409,7 @@ impl Decoder {
                     } else {
                         None
                     };
-                    let run = cursor.text(false)?;
+                    let run = cursor.text(self.furniture.is_some())?;
                     text.push_str(run);
                     runs.push(TextRun {
                         len: run.len(),
@@ -503,7 +496,7 @@ impl Decoder {
             }
             Opcode::End => {
                 cursor.done()?;
-                if !self.frames.is_empty() {
+                if !self.frames.is_empty() || self.furniture.is_some() {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 if self.renderer.is_none() {
@@ -602,7 +595,6 @@ impl Decoder {
     }
 
     fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
-        self.body_started = true;
         self.push_command(command)?;
         self.complete_child()?;
         if self.frames.is_empty() {
@@ -612,7 +604,6 @@ impl Decoder {
     }
 
     fn open(&mut self, frame: Frame, command: OwnedCommand) -> Result<(), ProtocolError> {
-        self.body_started = true;
         if self.frames.len() >= MAX_LAYOUT_DEPTH {
             return Err(ProtocolError::NestingTooDeep);
         }
@@ -647,14 +638,17 @@ impl Decoder {
     }
 
     fn flush_block(&mut self) -> Result<(), ProtocolError> {
+        let furniture = self.furniture.take();
+        self.body_started |= furniture.is_none();
         let block = std::mem::take(&mut self.block);
-        let result = self
-            .ensure_renderer()?
-            .push_owned(&block)
-            .map_err(ProtocolError::from);
+        self.block_bytes = 0;
+        let renderer = self.ensure_renderer()?;
+        if let Some((footer, first)) = furniture {
+            return Ok(renderer.set_furniture(footer, first, block)?);
+        }
+        let result = renderer.push_owned(&block).map_err(ProtocolError::from);
         self.block = block;
         self.block.clear();
-        self.block_bytes = 0;
         result
     }
 

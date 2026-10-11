@@ -36,16 +36,13 @@ pub(crate) fn encode(character: char) -> Result<u8, RenderError> {
     Ok(byte)
 }
 
-/// Control characters never render; body text may hold the ASCII whitespace
-/// word splitting consumes, a footer only the page sentinels. Whether a
-/// printable character has a glyph is the font's decision at layout.
-pub(crate) fn valid(text: &str, footer: bool) -> bool {
+/// Control characters never render; text may hold the ASCII whitespace word
+/// splitting consumes, and header and footer text the page sentinels too.
+/// Whether a printable character has a glyph is the font's decision at layout.
+pub(crate) fn valid(text: &str, furniture: bool) -> bool {
     text.chars().all(|character| {
         !character.is_control()
-            || if footer {
-                matches!(character, crate::PAGE_NUMBER | crate::TOTAL_PAGES)
-            } else {
-                character.is_ascii_whitespace()
-            }
+            || character.is_ascii_whitespace()
+            || furniture && matches!(character, crate::PAGE_NUMBER | crate::TOTAL_PAGES)
     })
 }

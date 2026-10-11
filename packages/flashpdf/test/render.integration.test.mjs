@@ -344,6 +344,57 @@ test("given a page token character in user text, when it sits in a footer, then 
 	);
 });
 
+test("given first-page variants and a two-column linked footer, when rendering tagged pages, then page one paints its own and all furniture is an artifact", async () => {
+	const document = jsx("main", {
+		children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+	});
+	const footer = jsxs("div", {
+		style: { display: "flex", gap: "12pt", borderTop: "1px solid #999", fontSize: "8pt" },
+		children: [
+			jsxs("p", { children: ["Acme AS", jsx("br", {}), "Org. no. 123 456 789"] }),
+			jsxs("a", {
+				href: "https://example.com",
+				style: { textAlign: "right" },
+				children: ["Page ", jsx(PageNumber, {}), " of ", jsx(TotalPages, {})],
+			}),
+		],
+	});
+	const pdf = await render(document, {
+		header: jsx("p", { children: "Continued" }),
+		firstPageHeader: jsx("h1", { children: "Letterhead" }),
+		footer,
+		firstPageFooter: null,
+		metadata: { language: "en" },
+		tagged: true,
+	});
+	const output = string(pdf);
+	assert.equal(output.match(/\/Type \/Page\b/g).length, 2);
+	for (const text of ["Letterhead", "Continued", "Org. no. 123 456 789", "Page 2 of 2"])
+		assert.equal(output.split(`(${text})`).length, 2, text);
+	assert.equal(output.match(/\/URI \(https:\/\/example\.com\/\)/g).length, 1);
+	assert.doesNotMatch(output, /\(Page 1 of/);
+	for (const text of ["(Letterhead)", "(Continued)", "(Page 2 of 2)"]) {
+		const at = output.indexOf(text);
+		assert.ok(output.lastIndexOf("/Artifact BMC", at) > output.lastIndexOf("BDC", at), text);
+	}
+});
+
+test("given furniture the engine cannot place, when rendering, then rejects with the reason", async () => {
+	const body = jsx("main", { children: "x" });
+	await assert.rejects(
+		render(body, { footer: jsx("div", { style: { paddingTop: "400pt" }, children: "x" }) }),
+		/^Error: PageOverflow: with footer, the header and footer take more than half the page/,
+	);
+	await assert.rejects(
+		render(body, { header: jsx("div", { style: { breakAfter: "page" }, children: "x" }) }),
+		/^Error: header cannot break the page on <div>$/,
+	);
+	await assert.rejects(
+		render(body, { firstPageFooter: ["Page ", jsx(PageNumber, {})] }),
+		/firstPageFooter expects elements/,
+	);
+});
+
 test("given layouts the engine rejects, when rendering, then explains the code and names the element", async () => {
 	const column = jsx("div", {
 		style: { display: "flex" },

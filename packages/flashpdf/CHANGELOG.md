@@ -7,8 +7,13 @@
 - Page setup: `pageFormat` takes `A3`, `A4`, `A5`, `Letter`, `Legal`, or `{ width, height }`, `orientation: 'landscape'` puts the longer side across, and `margin` takes one to four lengths in CSS shorthand order or `{ top, right, bottom, left }`. The body, header, and footer follow all four margins.
 - `@page { size; margin }` in stylesheets, with the four margin longhands. `size` takes `auto`, a named size with an optional orientation, or one or two lengths. Render options win over `@page`.
 - `mm`, `cm`, `in`, `pc`, and `Q` lengths wherever a length or width is accepted, converted at 72pt per inch.
+- `header` and `footer` take any element tree the body takes: several lines, bold and coloured runs, links, flex rows and columns, images, tables, borders, and backgrounds. `PageNumber` and `TotalPages` work anywhere inside them. Each page lays its header and footer out again with its own numbers; the reserved height counts every number as ten digits.
+- `firstPageHeader` and `firstPageFooter` replace the header and footer on the first page, and `null` leaves the first page without one. Each page reserves the height of the header and footer it paints.
 
 ### Changed
+
+- A page's header and footer may take at most half the page between its margins; more rejects with `PageOverflow` naming the option. Headers and footers lay out like body text, so whitespace collapses, and a right-aligned line can move by under 0.0001pt.
+- The binary protocol is version 12: a `Header` or `Footer` record carries a first-page flag, and the next top-level block is its content. The JavaScript and WASM halves ship together, so this affects no public API.
 
 - `@page` rules apply instead of being skipped. Page selectors such as `:first`, margin boxes such as `@top-center`, and properties other than `size` and the margins reject with a reason.
 - The binary protocol is version 8: the header carries four page margins. The JavaScript and WASM halves ship together, so this affects no public API.

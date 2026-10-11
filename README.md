@@ -130,14 +130,22 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` is `{ pageFormat?: 'A3' | 'A4' | 'A5' | 'Letter' | 'Legal' | { width: Length; height: Length }; orientation?: 'portrait' | 'landscape'; margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length }; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. The page defaults to A4 portrait with 36pt margins; see [Page setup](#page-setup). Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A3' | 'A4' | 'A5' | 'Letter' | 'Legal' | { width: Length; height: Length }; orientation?: 'portrait' | 'landscape'; margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length }; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element | Iterable<Element>; footer?: Element | Iterable<Element>; firstPageHeader?: Element | Iterable<Element> | null; firstPageFooter?: Element | Iterable<Element> | null; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. The page defaults to A4 portrait with 36pt margins; see [Page setup](#page-setup).
+
+A header or footer takes any element tree the body takes: several lines, links, flex columns, images, tables, borders, and backgrounds. It paints on every page and reserves its height before body pagination. `firstPageHeader` and `firstPageFooter` replace them on the first page, and `null` leaves the first page without one. Together a page's header and footer may take at most half the page between its margins.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
 
 const pdf = await render(<Invoice />, {
-  header: <header style={{ fontSize: '9pt' }}>Acme invoice</header>,
-  footer: <footer style={{ fontSize: '9pt', textAlign: 'center' }}>Page <PageNumber /> of <TotalPages /></footer>,
+  firstPageHeader: <Letterhead />,
+  header: <header style={{ fontSize: '9pt' }}>Acme invoice 42</header>,
+  footer: (
+    <footer style={{ display: 'flex', fontSize: '8pt', borderTop: '1px solid #ccc' }}>
+      <p>Acme Supply AS<br />Org. no. 912 345 678</p>
+      <p style={{ textAlign: 'right' }}>Page <PageNumber /> of <TotalPages /></p>
+    </footer>
+  ),
   metadata: { title: 'Invoice 42', author: 'Acme', language: 'en-US' },
   tagged: true,
 });
