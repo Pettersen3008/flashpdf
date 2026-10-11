@@ -1,7 +1,10 @@
+use std::ops::Range;
+use std::rc::Rc;
+
 use pdf_writer::Content;
 
 use crate::command::{uniform_rows, CommandParser, OwnedCommand};
-use crate::document::{Block, BoxNode, Document, Element, Table};
+use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
@@ -43,26 +46,72 @@ pub struct Renderer {
     table: Option<OpenTable>,
     /// The open page's fill colour and font.
     state: PaintState,
-    /// Boxes too tall to place whole, outermost first, while their children stream:
-    /// each one's fragment on this page, as an index into `fragments`, and the
-    /// column to restore when it closes.
-    boxes: Vec<(usize, LayoutArea)>,
+    /// Open boxes, outermost first, as their children arrive: the column to
+    /// restore when each closes, and its style.
+    boxes: Vec<(LayoutArea, BoxStyle)>,
+    /// The painted open boxes' fragments on this page, as indices into `fragments`.
+    open: Vec<usize>,
     /// Where children lay out: the page body, or the innermost open box's content area.
     column: LayoutArea,
+    /// Content after the page's last allowed break point, unpainted until a later
+    /// break point is allowed, so the page can still end before it.
+    held: Vec<Held>,
+    held_bytes: usize,
+    /// Whether the break point after the held content is avoided.
+    chained: bool,
+    /// Where boxes opened since the last content start in `held`, and whether
+    /// the break before them is avoided. A box's top stays with its first child.
+    opened: Option<(usize, bool)>,
+    /// The table whose painted rows end this page, so its footer goes below them.
+    trailer: Option<Rc<TableEdges>>,
+    /// Whether the page started at an unforced break, which truncates the margins after it.
+    unforced: bool,
+    /// Where in `held` a forced break waits for the next content, so boxes that
+    /// close right after it end above it, as CSS propagates a break to a parent's edge.
+    forced: Option<usize>,
 }
 
 /// A top-level table between its start and end: the header and footer rows lay
 /// out once, and each body row lays out and places as it arrives.
 struct OpenTable {
     area: LayoutArea,
+    edges: Rc<TableEdges>,
+    columns: Option<usize>,
+    /// The next row's index among the table's children, which `TableRowOverflow` reports.
+    index: usize,
+}
+
+/// The header and footer rows a table repeats on every page it has body rows on.
+struct TableEdges {
     header: LayoutBuffer,
     header_height: Pt,
     footer: LayoutBuffer,
     footer_height: Pt,
-    columns: Option<usize>,
-    /// The next row's index among the table's children, which `TableRowOverflow` reports.
-    index: usize,
-    header_on_page: bool,
+}
+
+/// Placed content waiting in `Renderer::held`.
+enum Held {
+    /// A block's lines, painted with block y `offset` at the cursor, and the height they take.
+    Lines(LayoutBuffer, Range<usize>, Pt, Pt),
+    /// A margin, which a page end truncates.
+    Space(Pt),
+    /// A box's top edge, where its fragment starts.
+    Open(PositionedBox),
+    /// A box's bottom edge.
+    Close(BoxStyle),
+    /// A table body row, or the table's last footer when `None`, and its height;
+    /// the header goes above when it is the table's first on the page.
+    Row(Option<LayoutBuffer>, Pt, Rc<TableEdges>),
+}
+
+impl Held {
+    fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + match self {
+                Self::Lines(layout, ..) | Self::Row(Some(layout), ..) => layout.capacity(),
+                _ => 0,
+            }
+    }
 }
 
 /// A header or footer line, painted on every page in `finish`.
@@ -99,7 +148,15 @@ impl Renderer {
             table: None,
             state: PaintState::default(),
             boxes: Vec::new(),
+            open: Vec::new(),
             column: LayoutArea::root(page.content_width()),
+            held: Vec::new(),
+            held_bytes: 0,
+            chained: false,
+            opened: None,
+            trailer: None,
+            unforced: false,
+            forced: None,
         }
     }
 
@@ -244,7 +301,8 @@ impl Renderer {
 
     fn push_block(&mut self, block: &Block<'_>) -> Result<(), RenderError> {
         match block {
-            Block::PageBreak => self.start_page(),
+            Block::PageBreak => self.page_break(),
+            Block::Avoid => self.avoid(),
             Block::Element(element) => self.render_element(element)?,
         }
         self.check_size()
@@ -257,116 +315,248 @@ impl Renderer {
         Ok(())
     }
 
+    /// A forced break, placed before the next content; boxes opened just before
+    /// it move along, since a break before a first child is one before its parent.
     pub(crate) fn page_break(&mut self) {
-        self.start_page();
+        self.forced = Some(self.opened.map_or(self.held.len(), |(at, _)| at));
+        self.chained = false;
+    }
+
+    /// Avoids a break here, or before the boxes opened since the last content.
+    pub(crate) fn avoid(&mut self) {
+        match &mut self.opened {
+            Some((_, avoid)) => *avoid = true,
+            None => self.chained = true,
+        }
     }
 
     fn render_element(&mut self, element: &Element<'_>) -> Result<(), RenderError> {
-        if let Element::Table(table) = element {
-            return self.render_table(table);
-        }
-        let height = self.layout_element(element)?;
-        if let Element::Box(node) = element {
-            if self.streams(element, height) {
-                return self.stream_box(node);
+        match element {
+            Element::Table(table) => return self.render_table(table),
+            Element::Box(node) => {
+                self.open_box(node.style)?;
+                for child in &node.children {
+                    self.render_element(child)?;
+                }
+                return self.close_box();
             }
+            Element::Spacer(spacer) => {
+                self.page.validate_block(spacer.height)?;
+                return self.hold(Held::Space(spacer.height));
+            }
+            _ => {}
         }
-        let layout = std::mem::take(&mut self.layout);
-        self.mark_used(&layout);
-        let result = self.place(element, &layout, height);
-        self.layout = layout;
-        result
-    }
-
-    fn layout_element(&mut self, element: &Element<'_>) -> Result<Pt, RenderError> {
+        self.begin(false)?;
         self.layout.clear();
-        Ok(LayoutEngine::new(&self.fonts, &self.images).layout(
+        let height = LayoutEngine::new(&self.fonts, &self.images).layout(
             element,
             self.column,
             &mut self.layout,
-        )?)
+        )?;
+        let layout = std::mem::take(&mut self.layout);
+        self.mark_used(&layout);
+        self.place(element, layout, height)?;
+        self.chained = false;
+        Ok(())
     }
 
-    /// A box that fits a page still places whole; an atomic one taller than a page streams.
-    fn streams(&self, element: &Element<'_>, height: Pt) -> bool {
-        matches!(element, Element::Box(_))
-            && !splittable(element)
-            && self.page.validate_block(height).is_err()
-    }
-
-    /// Whether a box the decoder still holds, closed early, can no longer place whole.
-    pub(crate) fn overflows(&mut self, commands: &[OwnedCommand]) -> bool {
-        let Ok(Block::Element(element)) = CommandParser::new(commands).parse_single_block() else {
-            return false;
-        };
-        self.layout_element(&element)
-            .is_ok_and(|height| self.streams(&element, height))
-    }
-
-    fn stream_box(&mut self, node: &BoxNode<'_>) -> Result<(), RenderError> {
-        self.open_box(node.style)?;
-        for child in &node.children {
-            self.render_element(child)?;
-            self.check_size()?;
-        }
-        self.close_box()
-    }
-
-    /// Lays a split box's top margin, border and padding at the cursor; its
-    /// children then place in its content area until `close_box`. The caller has
-    /// laid the box out, which checked its widths.
+    /// Starts a box whose children place in its content area until `close_box`,
+    /// so it breaks across pages like CSS `box-decoration-break: slice`.
     pub(crate) fn open_box(&mut self, style: BoxStyle) -> Result<(), RenderError> {
         let column = self.column;
+        let width = column.width - style.margin.left - style.margin.right;
+        let inset = style.border.left + style.padding.left;
+        let inner = width - inset - style.padding.right - style.border.right;
+        if inner <= Pt::ZERO {
+            return Err(RenderError::InvalidLayout);
+        }
         let top = style.margin.top + style.border.top + style.padding.top;
         self.page
             .validate_block(top + style.padding.bottom + style.border.bottom)?;
-        if !self.cursor.fits(top, self.page) {
-            self.start_page();
-        }
-        self.cursor.advance(style.margin.top);
-        self.boxes.push((self.fragments.len(), column));
-        let width = column.width - style.margin.left - style.margin.right;
-        self.fragments.push(PositionedBox {
+        self.boxes.push((column, style));
+        self.column = column
+            .translated(style.margin.left + inset, Pt::ZERO)
+            .with_width(inner);
+        self.opened.get_or_insert((self.held.len(), self.chained));
+        self.chained = false;
+        self.hold(Held::Open(PositionedBox {
             origin: Point {
                 x: column.origin.x + style.margin.left,
-                y: Pt::ZERO - self.cursor.origin(self.page).y,
+                y: Pt::ZERO,
             },
             width,
             height: Pt::ZERO,
             style,
-        });
-        let inset = style.border.left + style.padding.left;
-        self.column = column
-            .translated(style.margin.left + inset, Pt::ZERO)
-            .with_width(width - inset - style.padding.right - style.border.right);
-        self.cursor.advance(style.border.top + style.padding.top);
+        }))
+    }
+
+    /// Ends the innermost box. Its bottom border and padding stay with its last
+    /// content, and only its last fragment has them, as `slice` does.
+    pub(crate) fn close_box(&mut self) -> Result<(), RenderError> {
+        let (column, style) = self.boxes.pop().ok_or(RenderError::InvalidLayout)?;
+        self.column = column;
+        self.begin(true)?;
+        self.room(style.padding.bottom + style.border.bottom, None)?;
+        let after = self.forced == Some(self.held.len());
+        self.hold(Held::Close(style))?;
+        self.hold(Held::Space(style.margin.bottom))?;
+        if after {
+            self.forced = Some(self.held.len());
+        }
         Ok(())
     }
 
-    /// Lays the bottom padding, border and margin; a split box's last fragment
-    /// is the only one with a bottom border, like CSS `box-decoration-break: slice`.
-    pub(crate) fn close_box(&mut self) -> Result<(), RenderError> {
-        let style = self.fragments[self.boxes.last().ok_or(RenderError::InvalidLayout)?.0].style;
-        let bottom = style.padding.bottom + style.border.bottom;
-        if !self.cursor.fits(bottom, self.page) {
+    /// Settles the break point before new content: what precedes the page's
+    /// last allowed break point paints, because no later break can move it.
+    fn begin(&mut self, sticky: bool) -> Result<(), RenderError> {
+        if let Some(at) = self.forced.filter(|_| !sticky) {
+            self.forced = None;
+            self.commit(at)?;
+            // At a page top a forced break has nothing to move.
+            if !self.cursor.at_top(self.page) {
+                self.start_page();
+                self.unforced = false;
+            }
+        }
+        let at = match self.opened.take() {
+            Some((at, avoid)) => (!avoid).then_some(at),
+            None => (!sticky && !self.chained).then_some(self.held.len()),
+        };
+        at.map_or(Ok(()), |at| self.commit(at))
+    }
+
+    fn hold(&mut self, item: Held) -> Result<(), RenderError> {
+        self.held_bytes += item.size();
+        self.held.push(item);
+        // Past this, avoid rules give way rather than buffer more, as CSS lets them.
+        if self.held_bytes > MAX_CONTENT_BYTES {
+            self.commit(self.held.len())?;
+        }
+        Ok(())
+    }
+
+    /// Paints the first `count` held items at the cursor.
+    fn commit(&mut self, count: usize) -> Result<(), RenderError> {
+        self.opened = None;
+        self.forced = self.forced.map(|at| at.saturating_sub(count));
+        let rest = self.held.split_off(count);
+        for item in std::mem::replace(&mut self.held, rest) {
+            self.held_bytes -= item.size();
+            match item {
+                Held::Lines(layout, lines, offset, height) => {
+                    self.paint(&layout, lines, offset, height)?;
+                    self.layout = layout;
+                }
+                Held::Space(height) if !self.truncates() => {
+                    let room = self.cursor.remaining(self.page).get().max(0.0);
+                    self.cursor.advance(Pt(height.get().min(room)));
+                }
+                Held::Space(_) => {}
+                Held::Open(mut fragment) => {
+                    let style = fragment.style;
+                    if !self.truncates() {
+                        self.cursor.advance(style.margin.top);
+                    }
+                    fragment.origin.y = Pt::ZERO - self.cursor.origin(self.page).y;
+                    self.open.push(self.fragments.len());
+                    self.fragments.push(fragment);
+                    self.cursor.advance(style.border.top + style.padding.top);
+                }
+                Held::Close(style) => {
+                    self.cursor
+                        .advance(style.padding.bottom + style.border.bottom);
+                    let y = self.cursor.origin(self.page).y;
+                    if let Some(fragment) = self
+                        .open
+                        .pop()
+                        .and_then(|slot| self.fragments.get_mut(slot))
+                    {
+                        fragment.height = Pt::ZERO - fragment.origin.y - y;
+                    }
+                }
+                Held::Row(row, height, edges) => {
+                    self.table_top(&edges)?;
+                    let rows = row.as_ref().unwrap_or(&edges.footer);
+                    self.paint(rows, 0..rows.lines.len(), Pt::ZERO, height)?;
+                    self.trailer = row.is_some().then(|| edges.clone());
+                    if let Some(row) = row {
+                        self.layout = row;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The height the held content takes on this page, or on an empty one, plus
+    /// `table`'s header when its next row would be its first on the page.
+    // Inlined into both callers, it costs about 1 KB of WASM.
+    #[inline(never)]
+    fn ahead(&self, fresh: bool, table: Option<&Rc<TableEdges>>) -> Pt {
+        let header = |trailer: Option<&Rc<TableEdges>>, edges: &Rc<TableEdges>| {
+            if trailer.is_some_and(|trailer| Rc::ptr_eq(trailer, edges)) {
+                Pt::ZERO
+            } else {
+                edges.header_height
+            }
+        };
+        let mut trailer = self.trailer.as_ref().filter(|_| !fresh);
+        let mut height = Pt::ZERO;
+        for item in &self.held {
+            height += match item {
+                Held::Lines(_, _, _, height) | Held::Space(height) => *height,
+                Held::Open(fragment) => {
+                    let style = fragment.style;
+                    style.margin.top + style.border.top + style.padding.top
+                }
+                Held::Close(style) => style.padding.bottom + style.border.bottom,
+                Held::Row(row, height, edges) => {
+                    let top = header(trailer, edges);
+                    trailer = row.as_ref().map(|_| edges);
+                    top + *height
+                }
+            };
+        }
+        height + table.map_or(Pt::ZERO, |edges| header(trailer, edges))
+    }
+
+    fn truncates(&self) -> bool {
+        self.unforced && self.cursor.at_top(self.page)
+    }
+
+    fn fits(&self, need: Pt, table: Option<&Rc<TableEdges>>) -> bool {
+        self.ahead(false, table) + need <= self.cursor.remaining(self.page)
+    }
+
+    /// Breaks before the held content, the page's last allowed break point,
+    /// unless that is the page top or the content would not fit an empty page.
+    fn rewind(&mut self, need: Pt, table: Option<&Rc<TableEdges>>) -> bool {
+        let moves = !self.cursor.at_top(self.page)
+            && self.ahead(true, table) + need <= self.page.content_height();
+        if moves {
             self.start_page();
         }
-        self.cursor.advance(bottom);
-        let (slot, column) = self.boxes.pop().unwrap();
-        self.column = column;
-        let fragment = &mut self.fragments[slot];
-        fragment.height = Pt::ZERO - fragment.origin.y - self.cursor.origin(self.page).y;
-        // Whatever places next checks that it fits, so a margin past the page end is harmless.
-        self.cursor.advance(style.margin.bottom);
-        self.check_size()
+        moves
+    }
+
+    /// Makes room for `need` after the held content. When no allowed break point
+    /// helps, the avoided break before the new content gives way, as CSS lets it.
+    fn room(&mut self, need: Pt, table: Option<&Rc<TableEdges>>) -> Result<(), RenderError> {
+        if !self.fits(need, table) && !self.rewind(need, table) {
+            self.commit(self.held.len())?;
+            if !self.fits(need, table) {
+                self.rewind(need, table);
+            }
+        }
+        Ok(())
     }
 
     /// Paints the open page's fragments for `finish` to put before its content.
     /// Open boxes end theirs at the body bottom without a bottom border and
     /// continue on the next page without a top border.
     fn end_page(&mut self) {
-        let mut next = Vec::with_capacity(self.boxes.len());
-        for (slot, _) in &mut self.boxes {
+        let mut next = Vec::with_capacity(self.open.len());
+        for slot in &mut self.open {
             let fragment = &mut self.fragments[*slot];
             let mut continued = *fragment;
             continued.origin.y = Pt::ZERO - self.page.top();
@@ -400,50 +590,70 @@ impl Renderer {
         self.underlays.push(underlay);
     }
 
+    /// Holds a block's lines after its last allowed break point on the page and
+    /// paints those before it. Only a paragraph breaks inside, between lines,
+    /// leaving at least `orphans` lines before a break and `widows` after it.
     fn place(
         &mut self,
         element: &Element<'_>,
-        layout: &LayoutBuffer,
+        layout: LayoutBuffer,
         height: Pt,
     ) -> Result<(), RenderError> {
         let lines = layout.lines.len();
-        if !splittable(element) {
+        let Element::Paragraph(paragraph) = element else {
             self.page.validate_block(height)?;
-            if !self.cursor.fits(height, self.page) {
-                self.start_page();
-            }
-            return self.paint_block(layout, height);
-        }
-        // Stream positioned lines page by page; `offset` is the block y where
-        // the current page starts, so gaps straddling a break collapse.
-        let mut offset = Pt::ZERO;
-        let mut index = 0;
+            self.room(height, None)?;
+            return self.hold(Held::Lines(layout, 0..lines, Pt::ZERO, height));
+        };
+        let allowed = |start: usize, split: usize| {
+            split - start >= usize::from(paragraph.orphans)
+                && lines - split >= usize::from(paragraph.widows)
+        };
+        let head = (1..lines)
+            .find(|split| allowed(0, *split))
+            .map_or(height, |split| layout.lines[split - 1].bottom);
+        // `offset` is the block y where this page starts, so gaps straddling a break collapse.
+        let (mut start, mut offset) = (0, Pt::ZERO);
         loop {
-            let available = self.cursor.remaining(self.page);
-            let start = index;
+            let available = self.cursor.remaining(self.page) - self.ahead(false, None);
+            let mut end = start;
             while layout
                 .lines
-                .get(index)
+                .get(end)
                 .is_some_and(|line| line.bottom - offset <= available)
             {
-                index += 1;
+                end += 1;
             }
-            if index == start && index < lines {
-                if self.cursor.at_top(self.page) {
-                    return Err(RenderError::PageOverflow);
+            if end == lines {
+                if let Some(split) = (start + 1..lines)
+                    .rev()
+                    .find(|split| allowed(start, *split))
+                {
+                    self.commit(self.held.len())?;
+                    let top = layout.lines[split].top;
+                    self.paint(&layout, start..split, offset, top - offset)?;
+                    (start, offset) = (split, top);
                 }
-                self.start_page();
-                continue;
+                return self.hold(Held::Lines(layout, start..lines, offset, height - offset));
             }
-            let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
-            self.painter().paint(layout, start..index, origin);
-            if index == lines {
-                let rest = (height - offset).get().min(available.get());
-                self.cursor.advance(Pt(rest.max(0.0)));
-                return Ok(());
-            }
-            offset = layout.lines[index].top;
+            let split = match (start + 1..=end).rev().find(|split| allowed(start, *split)) {
+                Some(split) => split,
+                None if start == 0 && self.rewind(head, None) => continue,
+                // CSS drops orphans and widows first, then breaks before the paragraph.
+                None if end > start => end,
+                None if self.cursor.at_top(self.page) && self.held.is_empty() => {
+                    return Err(RenderError::PageOverflow)
+                }
+                None => {
+                    self.commit(self.held.len())?;
+                    self.start_page();
+                    continue;
+                }
+            };
+            self.commit(self.held.len())?;
+            self.paint(&layout, start..split, offset, Pt::ZERO)?;
             self.start_page();
+            (start, offset) = (split, layout.lines[split].top);
         }
     }
 
@@ -474,76 +684,62 @@ impl Renderer {
         }
         self.table = Some(OpenTable {
             area,
-            header,
-            header_height,
-            footer,
-            footer_height,
+            edges: Rc::new(TableEdges {
+                header,
+                header_height,
+                footer,
+                footer_height,
+            }),
             columns,
             index: head,
-            header_on_page: false,
         });
         Ok(())
     }
 
+    /// A body row moves whole, and stays with the next one under `break-after: avoid`.
     fn table_row(&mut self, row: &Element<'_>) -> Result<(), RenderError> {
-        let mut table = self.table.take().ok_or(RenderError::InvalidLayout)?;
-        let result = self.place_row(&mut table, row);
-        self.table = Some(table);
-        result
-    }
-
-    fn place_row(&mut self, table: &mut OpenTable, row: &Element<'_>) -> Result<(), RenderError> {
+        let table = self.table.as_mut().ok_or(RenderError::InvalidLayout)?;
         if !uniform_rows(row, &mut table.columns) {
             return Err(RenderError::InvalidLayout);
         }
+        let (area, index, edges) = (table.area, table.index, table.edges.clone());
+        table.index += 1;
+        self.begin(false)?;
         self.layout.clear();
-        let height = LayoutEngine::new(&self.fonts, &self.images).layout(
-            row,
-            table.area,
-            &mut self.layout,
-        )?;
+        let height =
+            LayoutEngine::new(&self.fonts, &self.images).layout(row, area, &mut self.layout)?;
         let layout = std::mem::take(&mut self.layout);
         self.mark_used(&layout);
-        let reserved = table.header_height + table.footer_height;
+        let reserved = edges.header_height + edges.footer_height;
         if self.page.validate_block(height + reserved).is_err() {
-            return Err(RenderError::TableRowOverflow(table.index));
+            return Err(RenderError::TableRowOverflow(index));
         }
-        table.index += 1;
-        let needed = height
-            + if table.header_on_page {
-                table.footer_height
-            } else {
-                reserved
-            };
-        if !self.cursor.fits(needed, self.page) {
-            if table.header_on_page {
-                self.paint_block(&table.footer, table.footer_height)?;
-            }
-            self.start_page();
-            table.header_on_page = false;
-        }
-        if !table.header_on_page {
-            self.paint_block(&table.header, table.header_height)?;
-            table.header_on_page = true;
-        }
-        let painted = self.paint_block(&layout, height);
-        self.layout = layout;
-        painted
+        self.room(height + edges.footer_height, Some(&edges))?;
+        self.hold(Held::Row(Some(layout), height, edges))?;
+        self.chained = false;
+        Ok(())
     }
 
-    /// Paints the last footer; a table without body rows paints its header above it.
+    /// Holds the last footer, which stays with the last body row; a table
+    /// without body rows paints its header above it.
     pub(crate) fn end_table(&mut self) -> Result<(), RenderError> {
-        let table = self.table.take().ok_or(RenderError::InvalidLayout)?;
-        if !table.header_on_page {
-            if !self
-                .cursor
-                .fits(table.header_height + table.footer_height, self.page)
-            {
-                self.start_page();
-            }
-            self.paint_block(&table.header, table.header_height)?;
+        let edges = self.table.take().ok_or(RenderError::InvalidLayout)?.edges;
+        self.begin(true)?;
+        self.room(edges.footer_height, Some(&edges))?;
+        self.hold(Held::Row(None, edges.footer_height, edges))
+    }
+
+    /// Paints a table's header above its first row on a page.
+    fn table_top(&mut self, edges: &Rc<TableEdges>) -> Result<(), RenderError> {
+        if self
+            .trailer
+            .as_ref()
+            .is_some_and(|trailer| Rc::ptr_eq(trailer, edges))
+        {
+            return Ok(());
         }
-        self.paint_block(&table.footer, table.footer_height)
+        let header = &edges.header;
+        self.paint(header, 0..header.lines.len(), Pt::ZERO, edges.header_height)
     }
 
     fn layout_rows(
@@ -565,9 +761,15 @@ impl Renderer {
     }
 
     /// Checks the cap per paint: a repeated table header multiplies one block's bytes.
-    fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) -> Result<(), RenderError> {
-        let origin = self.cursor.origin(self.page);
-        self.painter().paint(layout, 0..layout.lines.len(), origin);
+    fn paint(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        offset: Pt,
+        height: Pt,
+    ) -> Result<(), RenderError> {
+        let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
+        self.painter().paint(layout, lines, origin);
         self.cursor.advance(height);
         self.check_size()
     }
@@ -581,16 +783,24 @@ impl Renderer {
         )
     }
 
+    /// Ends the page below the painted content, under a table's footer if its rows end it.
     fn start_page(&mut self) {
+        if let Some(edges) = self.trailer.take() {
+            let origin = self.cursor.origin(self.page);
+            let footer = &edges.footer;
+            self.painter().paint(footer, 0..footer.lines.len(), origin);
+        }
         self.end_page();
         self.contents.push(Content::new());
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
         self.state = PaintState::default();
         self.cursor.reset(self.page);
+        self.unforced = true;
     }
 
     pub fn finish(mut self) -> Result<Vec<u8>, RenderError> {
+        self.commit(self.held.len())?;
         self.end_page();
         // The header and footer repeat on every page, so they count against the cap too.
         let mut bytes = self.content_bytes;
@@ -658,28 +868,6 @@ impl Renderer {
             self.tags,
             self.metadata,
         ))
-    }
-}
-
-/// Text, images, and unpainted boxes split across pages. Stack stays atomic: the
-/// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
-fn splittable(element: &Element<'_>) -> bool {
-    match element {
-        Element::Paragraph(_) | Element::Image(_) => true,
-        Element::Box(node) => {
-            node.style.background.is_none()
-                && node
-                    .style
-                    .padding
-                    .iter()
-                    .chain(node.style.border.iter())
-                    .all(|edge| *edge == Pt::ZERO)
-                && node
-                    .children
-                    .iter()
-                    .all(|child| matches!(child, Element::Spacer(_)) || splittable(child))
-        }
-        Element::Spacer(_) | Element::Stack(_) | Element::Row(_) | Element::Table(_) => false,
     }
 }
 

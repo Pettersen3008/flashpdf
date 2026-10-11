@@ -20,12 +20,13 @@ const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	th: { fontWeight: "bold", textAlign: "left" },
 	a: { color: "#0000EE", textDecoration: "underline" },
 	hr: { borderBottom: "1pt solid black" },
-	h1: { fontSize: "2em", fontWeight: "bold" },
-	h2: { fontSize: "1.5em", fontWeight: "bold" },
-	h3: { fontSize: "1.17em", fontWeight: "bold" },
-	h4: { fontSize: "1em", fontWeight: "bold" },
-	h5: { fontSize: "0.83em", fontWeight: "bold" },
-	h6: { fontSize: "0.67em", fontWeight: "bold" },
+	// Print UA sheets keep a heading with what follows it: CSS 2.1 Appendix D, Prince, WeasyPrint.
+	h1: { fontSize: "2em", fontWeight: "bold", breakAfter: "avoid" },
+	h2: { fontSize: "1.5em", fontWeight: "bold", breakAfter: "avoid" },
+	h3: { fontSize: "1.17em", fontWeight: "bold", breakAfter: "avoid" },
+	h4: { fontSize: "1em", fontWeight: "bold", breakAfter: "avoid" },
+	h5: { fontSize: "0.83em", fontWeight: "bold", breakAfter: "avoid" },
+	h6: { fontSize: "0.67em", fontWeight: "bold", breakAfter: "avoid" },
 };
 
 function cascade(target: CascadedStyle, source: CascadedStyle | undefined) {

@@ -76,10 +76,15 @@ impl LayoutBuffer {
         self.links.clear();
     }
 
-    #[cfg(test)]
+    /// Heap bytes held, leaving out link and alt text.
     pub(crate) fn capacity(&self) -> usize {
-        self.lines.capacity() * std::mem::size_of::<PositionedLine>()
-            + self.segments.capacity() * std::mem::size_of::<Segment>()
+        use std::mem::size_of;
+        self.lines.capacity() * size_of::<PositionedLine>()
+            + self.segments.capacity() * size_of::<Segment>()
+            + self.decorations.capacity() * size_of::<Decoration>()
             + self.text.capacity()
+            + self.boxes.capacity() * size_of::<PositionedBox>()
+            + self.images.capacity() * size_of::<PositionedImage>()
+            + self.links.capacity() * size_of::<String>()
     }
 }

@@ -325,6 +325,8 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
     let pdf = parsed(&[Command::Paragraph {
         links: &[],
         align: TextAlign::Left,
+        orphans: 2,
+        widows: 2,
         text: "WWWWW WWWWWW",
         runs: &runs,
     }]);
@@ -357,6 +359,8 @@ fn given_a_hard_break_when_laying_out_then_starts_a_new_line_without_a_space() {
     let pdf = parsed(&[Command::Paragraph {
         links: &[],
         align: TextAlign::Left,
+        orphans: 2,
+        widows: 2,
         text: "a b",
         runs: &runs,
     }]);
@@ -371,6 +375,8 @@ fn given_mixed_sizes_on_one_line_when_laying_out_then_the_line_takes_the_larger_
         Command::Paragraph {
             links: &[],
             align: TextAlign::Left,
+            orphans: 2,
+            widows: 2,
             text: "ab",
             runs: &runs,
         },
@@ -390,6 +396,8 @@ fn given_runs_that_do_not_cover_the_text_when_laying_out_then_rejects() {
             &[Command::Paragraph {
                 links: &[],
                 align: TextAlign::Left,
+                orphans: 2,
+                widows: 2,
                 text: "ab",
                 runs: &runs,
             }]
@@ -456,8 +464,15 @@ fn given_a_bordered_box_taller_than_the_page_when_placed_then_splits_with_its_to
     assert_eq!(text.matches("word").count(), 40);
 }
 
+fn page_texts(pdf: &lopdf::Document) -> Vec<String> {
+    (1..=pdf.get_pages().len() as u32)
+        .map(|page| pdf.extract_text(&[page]).unwrap().trim().to_owned())
+        .collect()
+}
+
 #[test]
-fn given_a_bordered_box_that_fits_a_page_when_it_crosses_the_page_end_then_moves_whole() {
+fn given_a_bordered_box_that_crosses_the_page_end_when_placed_then_breaks_there_with_one_edge_per_page(
+) {
     let pdf = parsed(&[
         text("first"),
         text("second"),
@@ -467,8 +482,152 @@ fn given_a_bordered_box_that_fits_a_page_when_it_crosses_the_page_end_then_moves
         text("b"),
         Command::BoxEnd,
     ]);
-    assert_eq!(pdf.get_pages().len(), 2);
-    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "a\nb");
+    assert_eq!(page_texts(&pdf), ["first\nsecond\nthird\na", "b"]);
+    for id in pdf.get_pages().values() {
+        let content = String::from_utf8(pdf.get_page_content(*id)).unwrap();
+        assert_eq!(content.matches(" 100 1 re").count(), 1, "{content}");
+    }
+}
+
+#[test]
+fn given_a_box_whose_first_line_does_not_fit_below_its_top_edge_when_placed_then_moves_whole() {
+    let style = super::BoxStyle {
+        padding: Edges::all(Pt(3.0)),
+        ..bordered()
+    };
+    let pdf = parsed(&[
+        text("first"),
+        text("second"),
+        text("third"),
+        Command::BoxStart { style },
+        text("a"),
+        Command::BoxEnd,
+    ]);
+    assert_eq!(page_texts(&pdf), ["first\nsecond\nthird", "a"]);
+}
+
+#[test]
+fn given_a_box_whose_bottom_edge_does_not_fit_below_its_last_line_when_closed_then_the_line_moves_with_it(
+) {
+    let style = super::BoxStyle {
+        padding: Edges::all(Pt(1.0)),
+        ..bordered()
+    };
+    let pdf = parsed(&[
+        text("first"),
+        text("second"),
+        Command::BoxStart { style },
+        text("a"),
+        text("b"),
+        Command::BoxEnd,
+    ]);
+    assert_eq!(page_texts(&pdf), ["first\nsecond\na", "b"]);
+}
+
+/// Four lines of one 66pt word each, keeping `keep` orphans and widows.
+fn four_lines(runs: &[TextRun; 1], keep: u16) -> Command<'_> {
+    Command::Paragraph {
+        align: TextAlign::Left,
+        orphans: keep,
+        widows: keep,
+        text: FOUR_WORDS,
+        runs,
+        links: &[],
+    }
+}
+
+const FOUR_WORDS: &str = "WWWWWWW WWWWWWW WWWWWWW WWWWWWW";
+
+#[test]
+fn given_room_for_one_line_of_a_four_line_paragraph_when_breaking_then_two_orphans_move_it_whole_and_one_splits_it(
+) {
+    let runs = [run(FOUR_WORDS.len(), false, 10.0, false)];
+    let lines = |keep| {
+        parsed(&[
+            text("first"),
+            text("second"),
+            text("third"),
+            four_lines(&runs, keep),
+        ])
+    };
+    let w = "WWWWWWW";
+    assert_eq!(
+        page_texts(&lines(2)),
+        ["first\nsecond\nthird".to_owned(), [w; 4].join("\n")]
+    );
+    assert_eq!(
+        page_texts(&lines(1)),
+        [format!("first\nsecond\nthird\n{w}"), [w; 3].join("\n")]
+    );
+}
+
+#[test]
+fn given_room_for_three_lines_of_a_four_line_paragraph_when_breaking_then_two_widows_go_to_the_next_page(
+) {
+    let runs = [run(FOUR_WORDS.len(), false, 10.0, false)];
+    let pdf = parsed(&[text("first"), four_lines(&runs, 2)]);
+    let two = ["WWWWWWW"; 2].join("\n");
+    assert_eq!(page_texts(&pdf), [format!("first\n{two}"), two]);
+}
+
+#[test]
+fn given_a_heading_that_avoids_a_break_after_it_when_the_next_paragraph_moves_then_the_heading_moves_with_it(
+) {
+    let pdf = parsed(&[
+        text("first"),
+        text("second"),
+        text("Heading"),
+        Command::Avoid,
+        text(&"WWWWWWW ".repeat(3)),
+    ]);
+    assert_eq!(
+        page_texts(&pdf),
+        ["first\nsecond", "Heading\nWWWWWWW\nWWWWWWW\nWWWWWWW"]
+    );
+}
+
+#[test]
+fn given_an_avoided_break_after_a_page_filling_paragraph_when_the_next_block_moves_then_its_last_two_lines_move_too(
+) {
+    let runs = [run(FOUR_WORDS.len(), false, 10.0, false)];
+    let pdf = parsed(&[four_lines(&runs, 2), Command::Avoid, text("next")]);
+    let two = ["WWWWWWW"; 2].join("\n");
+    assert_eq!(page_texts(&pdf), [two.clone(), format!("{two}\nnext")]);
+}
+
+#[test]
+fn given_a_chain_of_avoided_breaks_taller_than_a_page_when_placed_then_breaks_anyway() {
+    let mut commands = Vec::new();
+    for line in ["a", "b", "c", "d", "e"] {
+        commands.extend([text(line), Command::Avoid]);
+    }
+    assert_eq!(page_texts(&parsed(&commands)), ["a\nb\nc\nd", "e"]);
+}
+
+#[test]
+fn given_a_margin_that_does_not_fit_at_a_page_end_when_the_next_line_moves_then_the_next_page_starts_with_the_line(
+) {
+    let pdf = parsed(&[
+        text("first"),
+        text("second"),
+        text("third"),
+        Command::Spacer(Pt(13.0)),
+        text("next"),
+    ]);
+    // The 40pt body starts at y 50, so a first line's baseline sits at 50 - 7.18.
+    assert_eq!(baselines(&pdf, pdf.get_pages()[&2]), [42.82]);
+}
+
+#[test]
+fn given_a_forced_break_with_nothing_above_it_when_placed_then_adds_no_blank_page() {
+    let pdf = parsed(&[
+        Command::PageBreak,
+        text("a"),
+        Command::PageBreak,
+        Command::PageBreak,
+        text("b"),
+    ]);
+    assert_eq!(page_texts(&pdf), ["a", "b"]);
 }
 
 #[test]
@@ -887,6 +1046,8 @@ fn given_a_15pt_line_height_on_three_lines_when_rendered_then_the_third_line_mov
     let pdf = parsed(&[Command::Paragraph {
         links: &[],
         align: TextAlign::Left,
+        orphans: 2,
+        widows: 2,
         text: "abc",
         runs: &runs,
     }]);
@@ -943,6 +1104,8 @@ fn given_a_header_and_a_line_taller_than_the_page_when_rendered_then_rejects_wit
         let _ = sender.send(renderer.push(&[Command::Paragraph {
             links: &[],
             align: TextAlign::Left,
+            orphans: 2,
+            widows: 2,
             text: "a",
             runs: &runs,
         }]));
@@ -993,6 +1156,8 @@ fn given_two_sizes_with_the_same_line_height_on_one_line_when_wrapping_then_the_
         Command::Paragraph {
             links: &[],
             align: TextAlign::Left,
+            orphans: 2,
+            widows: 2,
             text: "ab",
             runs: &runs,
         },
@@ -1010,6 +1175,8 @@ fn given_a_long_footer_and_many_page_breaks_when_finishing_then_rejects_past_the
     renderer
         .set_footer("x".repeat(60_000), TextStyle::plain(Pt(0.01)))
         .unwrap();
-    renderer.push(&vec![Command::PageBreak; 300]).unwrap();
+    renderer
+        .push(&[text("x"), Command::PageBreak].repeat(300))
+        .unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::DocumentTooLarge));
 }

@@ -52,15 +52,26 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 		result.textAlign !== "right"
 	)
 		throw new Error("invalid text alignment");
-	for (const key of ["breakBefore", "breakAfter"] as const)
-		if (result[key] !== undefined && result[key] !== "auto" && result[key] !== "page")
-			throw new Error(`invalid ${key}`);
-	if (
-		result.breakInside !== undefined &&
-		result.breakInside !== "auto" &&
-		result.breakInside !== "avoid"
-	)
-		throw new Error("invalid breakInside");
+	for (const key of ["breakBefore", "breakAfter", "breakInside"] as const) {
+		const value = result[key] as string | undefined;
+		const allowed = key === "breakInside" ? ["auto", "avoid"] : ["auto", "avoid", "page"];
+		// Without columns or regions, avoiding a page break is avoiding any break.
+		if (value === "avoid-page") result[key] = "avoid";
+		else if (key !== "breakInside" && ["left", "right", "recto", "verso"].includes(value!))
+			throw new Error(`${key}: ${value} is not supported (pages have no sides; use page)`);
+		else if (value !== undefined && !allowed.includes(value)) throw new Error(`invalid ${key}`);
+	}
+	for (const key of ["orphans", "widows"] as const) {
+		const value =
+			typeof result[key] === "string" && /^\s*\d+\s*$/.test(result[key])
+				? Number(result[key])
+				: result[key];
+		if (value === undefined) continue;
+		if (!Number.isInteger(value) || (value as number) < 1)
+			throw new Error(`invalid ${key}: ${String(value)} (use a whole number of lines from 1)`);
+		// No paragraph record holds 65,535 lines, so the cap changes nothing.
+		result[key] = Math.min(value as number, 0xffff);
+	}
 	if (result.flex !== undefined) {
 		const { grow, basis } = flexGrow(result.flex);
 		// A column keeps only the grow factor, so a length basis, or `auto` beside a width, would be dropped.

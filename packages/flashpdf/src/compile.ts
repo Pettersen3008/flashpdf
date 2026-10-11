@@ -31,6 +31,8 @@ type TextState = {
 	lineHeight: LineHeight;
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
+	orphans: number;
+	widows: number;
 };
 /** `cell` is set only for the direct children of a table row. */
 type Context = TextState & { inRow: boolean; cell?: boolean };
@@ -46,6 +48,8 @@ const ROOT: Context = {
 	lineThrough: false,
 	lineHeight: undefined,
 	link: undefined,
+	orphans: 2,
+	widows: 2,
 	inRow: false,
 };
 
@@ -97,6 +101,8 @@ function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): Text
 		lineHeight:
 			style.lineHeight === undefined ? current.lineHeight : lineHeight(style.lineHeight, size),
 		link: current.link,
+		orphans: style.orphans ?? current.orphans,
+		widows: style.widows ?? current.widows,
 	};
 }
 
@@ -178,15 +184,17 @@ function writeParagraph(
 		runs.some(({ text }) => text.includes(PAGE_NUMBER) || text.includes(TOTAL_PAGES))
 	)
 		throw new Error("page tokens are only valid in a header or footer");
-	writer.paragraph(runs, state.align);
+	writer.paragraph(runs, state.align, state.orphans, state.widows);
 }
 
+/** Inside a flex row or a kept-together group every break is avoided already, so the engine ignores `avoid` there. */
 function pageBreak(
 	writer: ProtocolWriter,
 	style: NormalizedStyle,
 	key: "breakBefore" | "breakAfter",
 	depth: number,
 ) {
+	if (style[key] === "avoid") writer.avoid();
 	if (style[key] !== "page") return;
 	if (depth)
 		throw new Error(
@@ -350,10 +358,18 @@ function element(
 				throw new Error(
 					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles`,
 				);
-			box(writer, boxStyle(style, next.size), () =>
-				runs === undefined
-					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
-					: writeParagraph(writer, runs, next, pageTokens),
+			const avoid = style.breakInside === "avoid";
+			box(
+				writer,
+				boxStyle(style, next.size),
+				() => {
+					if (avoid) writer.stackStart(0);
+					if (runs === undefined)
+						flow(node.children, writer, fonts, inner, avoid ? depth + 1 : depth, pageTokens, 0);
+					else writeParagraph(writer, runs, next, pageTokens);
+					if (avoid) writer.stackEnd();
+				},
+				avoid,
 			);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
@@ -404,8 +420,6 @@ function element(
 }
 
 type RowGroup = { group?: StyledElement; rows: StyledElement[] };
-/** Rows and row groups sit inside the table, where `pageBreak` rejects both as nested. */
-const BREAKS = ["breakBefore", "breakAfter"] as const;
 
 /** `thead` groups first, then `tbody` and bare `tr` in source order, then `tfoot`, as browsers paint them. */
 function rowGroups(node: StyledElement): {
@@ -487,7 +501,8 @@ function table(
 	const row = (tr: StyledElement, state: Context) => {
 		try {
 			rowOnly(tr.style, false);
-			for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
+			// Rows sit inside the table, where a forced break rejects as nested.
+			pageBreak(writer, tr.style, "breakBefore", depth + 1);
 			const own = inherit(tr.style, state, fonts);
 			box(writer, boxStyle(tr.style, own.size), () => {
 				writer.rowStart(columns);
@@ -501,6 +516,7 @@ function table(
 				);
 				writer.rowEnd();
 			});
+			pageBreak(writer, tr.style, "breakAfter", depth + 1);
 		} catch (error) {
 			throw locate(error, tr.where);
 		}
@@ -510,7 +526,7 @@ function table(
 		if (group)
 			try {
 				rowOnly(group.style, false);
-				for (const key of BREAKS) pageBreak(writer, group.style, key, depth + 1);
+				pageBreak(writer, group.style, "breakBefore", depth + 1);
 				if (boxStyle(group.style, inner.size))
 					throw new Error(`<${group.tag}> accepts no box styles; style <tr> or its cells`);
 				state = { ...inherit(group.style, inner, fonts), inRow: false };
@@ -523,12 +539,17 @@ function table(
 			for (const tr of rows) row(tr, state);
 			writer.stackEnd();
 			wheres.push(group.where);
-			return;
-		}
-		for (const tr of rows) {
-			row(tr, state);
-			wheres.push(tr.where);
-		}
+		} else
+			for (const tr of rows) {
+				row(tr, state);
+				wheres.push(tr.where);
+			}
+		if (group)
+			try {
+				pageBreak(writer, group.style, "breakAfter", depth + 1);
+			} catch (error) {
+				throw locate(error, group.where);
+			}
 	};
 	try {
 		if (style.breakInside === "avoid") writer.stackStart(0);

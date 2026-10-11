@@ -50,6 +50,8 @@ const properties = {
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
+	orphans: { inherited: true },
+	widows: { inherited: true },
 	minWidth: {
 		css: "min-width",
 		unsupported: "only width on a flex row child is implemented",

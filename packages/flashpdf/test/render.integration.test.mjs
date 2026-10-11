@@ -522,6 +522,105 @@ test("given a long table in a bordered card inside a padded main, when rendering
 	);
 });
 
+/** Each page's text, or its content stream with `--operators`; `pdf` must have `count` pages. */
+function pageContents(pdf, name, count, ...flags) {
+	const path = new URL(`../../../dist/${name}.pdf`, import.meta.url);
+	writeFileSync(path, pdf);
+	const parsed = spawnSync(
+		"cargo",
+		[
+			"run",
+			"--locked",
+			"-q",
+			"-p",
+			"flashpdf-core",
+			"--example",
+			"validate_pdf",
+			"--",
+			path.pathname,
+			String(count),
+			...flags,
+		],
+		{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+	);
+	assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+	return parsed.stdout.split("\f");
+}
+
+// A4 with 36pt margins has 770pt of body, and a 12pt Helvetica line is 11.1pt tall.
+const lines = (...texts) =>
+	jsx("p", { children: texts.flatMap((text, index) => (index ? [jsx("br", {}), text] : [text])) });
+
+test("given a heading whose next paragraph cannot start below it, when rendering, then the heading moves with the paragraph unless break-after is auto", async () => {
+	const page = (heading) =>
+		render(
+			jsx("main", {
+				children: [
+					jsx("p", { children: "Intro" }),
+					jsx("div", { style: { marginTop: 718 } }),
+					heading,
+					lines("a", "b", "c"),
+				],
+			}),
+		);
+	const kept = await page(jsx("h2", { style: { fontSize: 12 }, children: "Section" }));
+	assert.deepEqual(pageContents(kept, "heading-kept", 2), ["Intro", "Section\na\nb\nc"]);
+	const loose = await page(
+		jsx("h2", { style: { fontSize: 12, breakAfter: "auto" }, children: "Section" }),
+	);
+	assert.deepEqual(pageContents(loose, "heading-loose", 2), ["Intro\nSection", "a\nb\nc"]);
+});
+
+test("given a table row with break-after: avoid at a page end, when rendering, then it moves with the next row under the repeated header and the footer closes each page", async () => {
+	const row = (text, style) => jsx("tr", { style, children: jsx("td", { children: text }) });
+	const pdf = await render(
+		jsx("main", {
+			children: [
+				jsx("div", { style: { marginTop: 698 } }),
+				jsxs("table", {
+					children: [
+						jsx("thead", { children: row("Item") }),
+						jsx("tbody", {
+							children: ["r1", "r2", "r3", "r4", "r5", "r6"].map((text) =>
+								row(text, text === "r4" ? { breakAfter: "avoid" } : undefined),
+							),
+						}),
+						jsx("tfoot", { children: row("Sum") }),
+					],
+				}),
+			],
+		}),
+	);
+	assert.deepEqual(pageContents(pdf, "row-avoid", 2), [
+		"Item\nr1\nr2\nr3\nSum",
+		"Item\nr4\nr5\nr6\nSum",
+	]);
+});
+
+test("given forced breaks inside bordered boxes, when rendering, then a box continues on the next page and breaks at its first or last child move to its edge", async () => {
+	const card = (...children) =>
+		jsx("div", { style: { border: "1pt solid black", padding: 4 }, children });
+	const p = (children, style) => jsx("p", { style, children });
+	const pdf = await render(
+		jsx("main", {
+			children: [
+				p("intro"),
+				card(p("a"), p("b", { breakBefore: "page" })),
+				card(p("c", { breakBefore: "page" }), p("d", { breakAfter: "page" })),
+				p("e"),
+			],
+		}),
+	);
+	assert.deepEqual(pageContents(pdf, "forced-in-box", 4), ["intro\na", "b", "c\nd", "e"]);
+	// The 523pt-wide top and bottom edges: no page holds a box edge without its content.
+	assert.deepEqual(
+		pageContents(pdf, "forced-in-box", 4, "--operators").map(
+			(page) => page.match(/ 523 1 re/g)?.length ?? 0,
+		),
+		[1, 1, 2, 0],
+	);
+});
+
 test("given per-edge borders and hr, when rendering, then emits native rules", async () => {
 	const pdf = await render(
 		jsx("main", {
@@ -532,8 +631,8 @@ test("given per-edge borders and hr, when rendering, then emits native rules", a
 		}),
 	);
 	assert.match(string(pdf), /1 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
-	// The text already set black, so the hr rule paints without another rg.
-	assert.match(string(pdf), /0 0 0 rg\n[^]*?ET\n36 [\d.]+ 523 1 re\nf/);
+	// Box rules paint beneath the page's text, so the hr sets black after the red border.
+	assert.match(string(pdf), /f\n0 0 0 rg\n36 [\d.]+ 523 1 re\nf\nBT/);
 });
 
 test("given an invalid option, when rendering, then rejects before running any component", async () => {
@@ -666,6 +765,11 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 			{ boxDecorationBreak: "clone" },
 			/boxDecorationBreak \(.*clone is not implemented\) on <main>/,
 		],
+		[
+			{ breakBefore: "left" },
+			/breakBefore: left is not supported \(pages have no sides; use page\) on <main>/,
+		],
+		[{ orphans: 0 }, /invalid orphans: 0 \(use a whole number of lines from 1\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
 		[{ width: "40pt" }, /width applies only to a flex row child on <main>/],

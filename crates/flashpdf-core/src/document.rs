@@ -7,6 +7,7 @@ pub(crate) struct Document<'a> {
 pub(crate) enum Block<'a> {
     Element(Element<'a>),
     PageBreak,
+    Avoid,
 }
 
 pub(crate) enum Element<'a> {
@@ -21,6 +22,9 @@ pub(crate) enum Element<'a> {
 
 pub(crate) struct Paragraph<'a> {
     pub(crate) align: TextAlign,
+    /// Lines a page break leaves before it and after it, at least 1.
+    pub(crate) orphans: u16,
+    pub(crate) widows: u16,
     pub(crate) text: &'a str,
     pub(crate) runs: Vec<TextRun>,
     pub(crate) links: &'a [String],

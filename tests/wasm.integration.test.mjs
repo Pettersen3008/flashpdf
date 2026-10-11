@@ -47,15 +47,17 @@ function record(opcode, payload = new Uint8Array()) {
 }
 
 function protocolHeader() {
-	return join(encoder.encode("FPDF"), u16(9), f32(120), f32(60), f32(10));
+	return join(encoder.encode("FPDF"), u16(18), f32(120), f32(60), f32(10));
 }
 
-/** A left-aligned paragraph of one plain Helvetica run. */
+/** A left-aligned paragraph of one plain Helvetica run, with two orphans and two widows. */
 function text(value, size = 10) {
 	return record(
 		9,
 		join(
 			Uint8Array.of(0),
+			u16(2),
+			u16(2),
 			u16(0),
 			u16(1),
 			Uint8Array.of(0),

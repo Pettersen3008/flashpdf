@@ -123,12 +123,7 @@ impl<'a> LayoutEngine<'a> {
                 ..*run
             });
         }
-        let keyed = Paragraph {
-            align: paragraph.align,
-            text: paragraph.text,
-            runs,
-            links: paragraph.links,
-        };
+        let keyed = Paragraph { runs, ..*paragraph };
         let first = output.segments.len();
         let link_base = output.links.len();
         let height = text::ParagraphLayouter::layout(self.fonts, &keyed, area, output)?;

@@ -1,6 +1,6 @@
 # FlashPDF guide
 
-Setup for bundlers and browsers, fixes for common rejections, three recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
+Setup for bundlers and browsers, fixes for common rejections, four recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
 
 ## Bundlers and runtimes
 
@@ -47,6 +47,9 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
+| `breakBefore: left is not supported (pages have no sides; use page)` | `left`, `right`, `recto`, and `verso` pick a page side, and pages have none. | Use `page`. |
+| `invalid orphans: 0 (use a whole number of lines from 1)` | `orphans` and `widows` count lines. | Use 1 to break wherever the page ends. |
+| `nested break-before is not implemented` | Flex rows, table rows, and `break-inside: avoid` groups never break inside. | Put the break on the flex row, the table, or the group. |
 
 ## Recipes
 
@@ -62,7 +65,7 @@ const amount = { width: '90pt', textAlign: 'right' } as const;
 const subtotal = items.reduce((sum, item) => sum + item.cents, 0);
 const tax = Math.round(subtotal * 0.25);
 
-<table style={{ marginTop: 8, breakInside: 'avoid' }}>
+<table style={{ marginTop: 8, breakInside: 'avoid', breakBefore: 'avoid' }}>
   <tbody>
     <tr>
       <td style={{ textAlign: 'right' }}>Subtotal</td>
@@ -80,7 +83,25 @@ const tax = Math.round(subtotal * 0.25);
 </table>
 ```
 
-Add amounts as integer cents and round once. `breakInside: 'avoid'` keeps the three rows on one page.
+Add amounts as integer cents and round once. `breakInside: 'avoid'` keeps the three rows on one page, and `breakBefore: 'avoid'` keeps them with the last item rows, so the totals never start a page alone.
+
+### Page breaks
+
+Pages break as in CSS: between blocks, between table rows, and between the lines of a paragraph, keeping at least two lines on each side (`orphans` and `widows`). A box with a border or background that crosses the page end splits there, drawing its top edge on the first page and its bottom edge on the last.
+
+```tsx
+<section style={{ breakBefore: 'page' }}>        {/* start on a new page */}
+  <h2>Payment terms</h2>                          {/* stays with the next lines */}
+  <p style={{ orphans: 3, widows: 3 }}>…</p>      {/* three lines on each side of a break */}
+  <div style={{ breakInside: 'avoid', border: '1pt solid #d0d5dd', padding: 8 }}>
+    Bank details, kept on one page
+  </div>
+</section>
+```
+
+Headings `h1` to `h6` default to `breakAfter: 'avoid'`, so a heading moves to the next page when the first two lines of its paragraph do not fit below it. That leaves space at the bottom of the page on purpose; set `breakAfter: 'auto'` on the heading to fill it instead. `breakAfter: 'avoid'` on a `tr` keeps it with the next row, under the repeated header.
+
+When avoid rules leave no break point on a page, FlashPDF breaks anyway rather than lose content, first ignoring `orphans` and `widows`, then the avoid rules. It holds back at most one page of content for these decisions, so a run of avoided breaks taller than a page breaks where the page ends. A `breakInside: 'avoid'` box taller than a page rejects with `PageOverflow`.
 
 ### Page X of Y footer
 
@@ -119,7 +140,7 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `Document` | No wrapper. Pass the root element, or an array of roots, to `render`. `metadata` sets title, author, subject, keywords, and language. |
 | `Page size="A4"` | `pageFormat: 'A4'` or `'Letter'`. One size for the whole document. |
 | `Page style={{ padding }}` | `margin`, in points, on all four sides. |
-| A second `Page`, or `break` | `breakBefore: 'page'` on a direct child of the root. |
+| A second `Page`, or `break` | `breakBefore: 'page'` on any block outside a flex row, table, or `breakInside: 'avoid'` group. |
 | `View` | `div`, `section`, `article`, `header`, `footer`, or `main`. |
 | `Text` | `p`, `span`, `b`, `strong`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span` or `b` inside a `p`. |
 | `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG or JPEG bytes. |
@@ -129,6 +150,7 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `fixed` header or footer | The `header` and `footer` options, one text line each. |
 | `render={({ pageNumber, totalPages }) => …}` | `<PageNumber />` and `<TotalPages />` inside `header` or `footer`. |
 | `wrap={false}` | `breakInside: 'avoid'`. |
+| `orphans`, `widows`, `minPresenceAhead` | The `orphans` and `widows` CSS properties, 2 by default, and `breakAfter: 'avoid'` to keep an element with what follows. |
 | `renderToBuffer`, `renderToStream`, `pdf().toBlob()` | `await render(…)` returns a `Uint8Array`. Wrap it in a `Blob` yourself. |
 | `PDFViewer`, `PDFDownloadLink` | None. FlashPDF ships no viewer or download helper. |
 
