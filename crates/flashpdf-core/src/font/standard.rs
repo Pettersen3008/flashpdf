@@ -40,9 +40,22 @@ pub(crate) fn width(face: u8, byte: u8) -> u16 {
     })
 }
 
-/// Ascender and descender in 1/1000 em, which a line adds up with no line gap.
+// hhea ascent, descent, and line gap in 2048 units of Liberation Sans, Serif, and Mono (OFL), which have the metrics of Arial, Times New Roman, and Courier New.
+const LINE_METRICS: [[f32; 3]; 3] = [
+    [1854.0, 434.0, 67.0],
+    [1825.0, 443.0, 87.0],
+    [1705.0, 615.0, 0.0],
+];
+
+/// Ascent and descent in 1/1000 em of the line a browser draws for the face's metric-compatible
+/// font, so `line-height: normal` matches. The line gap splits evenly above and below the text.
 pub(crate) fn metrics(face: u8) -> (f32, f32) {
-    [(718.0, -207.0), (683.0, -217.0), (629.0, -157.0)][usize::from(face / 4)]
+    let [ascent, descent, gap] = LINE_METRICS[usize::from(face / 4)];
+    let half = gap / 2.0;
+    (
+        (ascent + half) * 1000.0 / 2048.0,
+        -(descent + half) * 1000.0 / 2048.0,
+    )
 }
 
 /// Half the x-height in 1/1000 em, where a line-through sits.
