@@ -500,7 +500,10 @@ fn given_a_bordered_box_taller_than_the_page_when_placed_then_splits_with_its_to
 ) {
     let long = "word ".repeat(40);
     let pdf = parsed(&[
-        Command::BoxStart { style: bordered(), size: crate::BoxSize::AUTO },
+        Command::BoxStart {
+            style: bordered(),
+            size: crate::BoxSize::AUTO,
+        },
         text(&long),
         Command::BoxEnd,
     ]);
@@ -538,7 +541,10 @@ fn given_a_bordered_box_that_crosses_the_page_end_when_placed_then_breaks_there_
         text("first"),
         text("second"),
         text("third"),
-        Command::BoxStart { style: bordered(), size: crate::BoxSize::AUTO },
+        Command::BoxStart {
+            style: bordered(),
+            size: crate::BoxSize::AUTO,
+        },
         text("a"),
         text("b"),
         Command::BoxEnd,
@@ -560,7 +566,10 @@ fn given_a_box_whose_first_line_does_not_fit_below_its_top_edge_when_placed_then
         text("first"),
         text("second"),
         text("third"),
-        Command::BoxStart { style, size: crate::BoxSize::AUTO },
+        Command::BoxStart {
+            style,
+            size: crate::BoxSize::AUTO,
+        },
         text("a"),
         Command::BoxEnd,
     ]);
@@ -577,7 +586,10 @@ fn given_a_box_whose_bottom_edge_does_not_fit_below_its_last_line_when_closed_th
     let pdf = parsed(&[
         text("first"),
         text("second"),
-        Command::BoxStart { style, size: crate::BoxSize::AUTO },
+        Command::BoxStart {
+            style,
+            size: crate::BoxSize::AUTO,
+        },
         text("a"),
         text("b"),
         Command::BoxEnd,
@@ -862,7 +874,10 @@ fn given_a_painted_cell_beside_a_taller_cell_when_laid_out_then_its_background_c
             columns: &columns,
             slots: &[],
         },
-        Command::BoxStart { style, size: crate::BoxSize::AUTO },
+        Command::BoxStart {
+            style,
+            size: crate::BoxSize::AUTO,
+        },
         text("a"),
         Command::BoxEnd,
         Command::StackStart { gap: Pt(0.0) },
@@ -1044,8 +1059,14 @@ fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint
         ..red
     };
     let pdf = parsed(&[
-        Command::BoxStart { style: red, size: crate::BoxSize::AUTO },
-        Command::BoxStart { style: blue, size: crate::BoxSize::AUTO },
+        Command::BoxStart {
+            style: red,
+            size: crate::BoxSize::AUTO,
+        },
+        Command::BoxStart {
+            style: blue,
+            size: crate::BoxSize::AUTO,
+        },
         text("x"),
         Command::BoxEnd,
         Command::BoxEnd,
@@ -1423,7 +1444,8 @@ fn given_a_two_line_first_page_header_and_a_numbered_header_when_rendering_then_
         .set_furniture(false, false, line("Later \u{1e}", plain))
         .unwrap();
     let runs = vec![run(5, false, 10.0, true), run(4, false, 10.0, false)];
-    let first = crate::OwnedCommand::Paragraph(TextAlign::Left, [2,2], "Firstpage".into(), runs, vec![]);
+    let first =
+        crate::OwnedCommand::Paragraph(TextAlign::Left, [2, 2], "Firstpage".into(), runs, vec![]);
     renderer.set_furniture(false, true, vec![first]).unwrap();
     renderer.push(&["a", "b", "c", "d", "e"].map(text)).unwrap();
     let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
@@ -1454,12 +1476,12 @@ fn given_a_page_number_whose_real_width_pulls_a_larger_word_up_a_line_when_finis
     // In 90pt, ten 10pt digits push the first 40pt "M" to a second line; "1" lets it
     // stay and pushes the second one down, so two 37pt lines replace 9.25pt and 37pt.
     let runs = vec![run(1, false, 10.0, false), run(4, false, 40.0, false)];
-    let footer = crate::OwnedCommand::Paragraph(TextAlign::Left, [2,2], "\u{1e} M M".into(), runs, vec![]);
+    let footer =
+        crate::OwnedCommand::Paragraph(TextAlign::Left, [2, 2], "\u{1e} M M".into(), runs, vec![]);
     renderer.set_furniture(true, false, vec![footer]).unwrap();
     renderer.push(&[text("body")]).unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::PageOverflow));
 }
-
 
 #[test]
 fn given_space_between_and_center_when_a_row_lays_out_then_items_touch_both_edges_and_centre_across(
@@ -1688,4 +1710,3 @@ fn sized(size: super::BoxSize, background: Option<Rgb>) -> Command<'static> {
 }
 
 const RED: Option<Rgb> = Some(Rgb { r: 255, g: 0, b: 0 });
-

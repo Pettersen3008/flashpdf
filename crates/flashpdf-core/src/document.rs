@@ -1,4 +1,7 @@
-use crate::{BoxSize, BoxStyle, ColumnWidth, Flex, FlexItem, ImageSize, Pt, TextAlign, TextRun, VerticalAlign};
+use crate::{
+    BoxSize, BoxStyle, ColumnWidth, Flex, FlexItem, ImageSize, Pt, TextAlign, TextRun,
+    VerticalAlign,
+};
 
 pub(crate) struct Document<'a> {
     pub(crate) blocks: Vec<Block<'a>>,

@@ -5,7 +5,8 @@ use crate::document::{
     Table,
 };
 use crate::{
-    BoxSize, BoxStyle, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun, TextStyle, VerticalAlign,
+    BoxSize, BoxStyle, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun,
+    TextStyle, VerticalAlign,
 };
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;

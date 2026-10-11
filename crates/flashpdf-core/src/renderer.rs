@@ -843,7 +843,13 @@ impl Renderer {
                 if self.metadata.tagged {
                     content.begin_marked_content(pdf_writer::Name(b"Artifact"));
                 }
-                PdfPainter::new(content, &mut self.links[index], None, &mut PaintState::default()).paint(
+                PdfPainter::new(
+                    content,
+                    &mut self.links[index],
+                    None,
+                    &mut PaintState::default(),
+                )
+                .paint(
                     &layout,
                     0..layout.lines.len(),
                     Point {

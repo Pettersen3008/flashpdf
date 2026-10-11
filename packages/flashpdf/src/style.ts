@@ -112,7 +112,11 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 		result.verticalAlign !== "middle" &&
 		result.verticalAlign !== "bottom"
 	)
-		throw new Error("invalid verticalAlign (use top, middle, or bottom)");
+		throw new Error(
+			result.verticalAlign === "baseline"
+				? "vertical-align: baseline is not implemented"
+				: "invalid verticalAlign (use top, middle, or bottom)",
+		);
 	if (
 		result.borderCollapse !== undefined &&
 		result.borderCollapse !== "collapse" &&

@@ -284,7 +284,10 @@ impl Decoder {
                 }
                 cursor.done()?;
                 self.open(
-                    Frame::Flex { cells: count, done: 0 },
+                    Frame::Flex {
+                        cells: count,
+                        done: 0,
+                    },
                     OwnedCommand::FlexStart(style, items),
                 )
             }
@@ -559,18 +562,16 @@ impl Decoder {
                     auto_margin: flags >> 1,
                 };
                 cursor.done()?;
-                self.feed(
-                    OwnedCommand::BoxStart(
-                        crate::BoxStyle {
-                            margin,
-                            padding,
-                            border,
-                            background,
-                            border_color,
-                        },
-                        size,
-                    ),
-                )
+                self.feed(OwnedCommand::BoxStart(
+                    crate::BoxStyle {
+                        margin,
+                        padding,
+                        border,
+                        background,
+                        border_color,
+                    },
+                    size,
+                ))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
@@ -684,12 +685,20 @@ impl Decoder {
     fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = match &command {
             OwnedCommand::StackStart(_) => Frame::Stack,
-            OwnedCommand::BoxStart(_, size) => Frame::Box(self.placing() && self.furniture.is_none() && *size == BoxSize::AUTO),
+            OwnedCommand::BoxStart(_, size) => {
+                Frame::Box(self.placing() && self.furniture.is_none() && *size == BoxSize::AUTO)
+            }
             OwnedCommand::RowStart(_, slots) => Frame::Row {
-                cells: slots.iter().filter(|slot| matches!(slot, crate::Slot::Cell { .. })).count(),
+                cells: slots
+                    .iter()
+                    .filter(|slot| matches!(slot, crate::Slot::Cell { .. }))
+                    .count(),
                 done: 0,
             },
-            OwnedCommand::FlexStart(_, items) => Frame::Flex { cells: items.len(), done: 0 },
+            OwnedCommand::FlexStart(_, items) => Frame::Flex {
+                cells: items.len(),
+                done: 0,
+            },
             OwnedCommand::TableStart(header_rows, footer_rows, _) => Frame::Table {
                 head: self
                     .placing()
@@ -765,7 +774,9 @@ impl Decoder {
             (OwnedCommand::StackEnd, Frame::Stack)
             | (OwnedCommand::BoxEnd, Frame::Box(false))
             | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
-            (OwnedCommand::RowEnd, Frame::Row { cells, done }) | (OwnedCommand::FlexEnd, Frame::Flex { cells, done }) if cells == done => {}
+            (OwnedCommand::RowEnd, Frame::Row { cells, done })
+            | (OwnedCommand::FlexEnd, Frame::Flex { cells, done })
+                if cells == done => {}
             (OwnedCommand::RowEnd, Frame::Row { .. }) => {
                 return Err(ProtocolError::RowCellCountMismatch)
             }
@@ -775,7 +786,9 @@ impl Decoder {
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {
-        if let Some(Frame::Row { cells, done } | Frame::Flex { cells, done }) = self.frames.last_mut() {
+        if let Some(Frame::Row { cells, done } | Frame::Flex { cells, done }) =
+            self.frames.last_mut()
+        {
             *done += 1;
             if *done > *cells {
                 return Err(ProtocolError::RowCellCountMismatch);

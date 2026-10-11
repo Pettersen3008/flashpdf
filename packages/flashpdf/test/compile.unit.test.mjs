@@ -259,7 +259,11 @@ test("given a cell spanning two rows beside striped rows, when compiling, then b
 		{ kind: 1, value: 1 },
 		{ kind: 1, value: 1 },
 	];
-	const text = (value) => [["stackStart", 0], ["paragraph", [run(0, value)], "left"], ["stackEnd"]];
+	const text = (value) => [
+		["stackStart", 0],
+		["paragraph", [run(0, value)], "left", 2, 2],
+		["stackEnd"],
+	];
 	assert.deepEqual(calls, [
 		["tableStart", 0, 0, { kind: 1, value: 1 }],
 		["stackStart", 0],
@@ -382,58 +386,13 @@ test("given break-inside: avoid on a paragraph, when compiling, then it is one k
 	);
 });
 
-test("given width on an hr or padding on a br, when compiling, then rejects instead of dropping it", async () => {
-	await assert.rejects(
-		compiled(jsx("hr", { style: { width: "50%" } })),
-		/width applies only to a flex row child on <hr>$/,
-	);
-test("given padding on a br, when compiling, then rejects instead of dropping it", async () => {
+test("given width on an hr or padding on a br, when compiling, then honours the rule width and rejects br padding", async () => {
+	const calls = await compiled(jsx("hr", { style: { width: "50%" } }));
+	assert.equal(calls[0][1].size.width.value, 50);
+
 	await assert.rejects(
 		compiled(jsxs("p", { children: ["a", jsx("br", { style: { padding: 10 } }), "b"] })),
 		/<br> takes no paddingTop; style the text around it on <br> in <p>$/,
-	);
-});
-
-test("given justify-content on a row, when compiling, then emits one flex record and keeps each item's width on its own box", async () => {
-	const calls = await compiled(
-		jsxs("div", {
-			style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
-			children: [
-				jsx("div", { style: { width: "80pt" }, children: "Logo" }),
-				jsx("p", { style: { flex: "1 0 50%" }, children: "Due" }),
-			],
-		}),
-	);
-	assert.deepEqual(calls[0], [
-		"flexStart",
-		{ column: false, justify: 3, align: 4, gap: 0, minHeight: 0, maxHeight: undefined },
-		[
-			{ grow: 0, shrink: 1, basis: undefined, align: 0 },
-			{ grow: 1, shrink: 0, basis: { kind: 2, value: 50 }, align: 0 },
-		],
-	]);
-	assert.equal(calls[1][0], "boxStart");
-	assert.deepEqual(calls[1][1].size.width, { kind: 1, value: 80 });
-	assert.deepEqual(
-		calls.slice(2).map(([method]) => method),
-		["paragraph", "boxEnd", "paragraph", "flexEnd"],
-	);
-});
-
-test("given a flex column without a height, when compiling justify-content or a grow factor, then rejects with the reason", async () => {
-	const column = { display: "flex", flexDirection: "column" };
-	await assert.rejects(
-		compiled(jsx("div", { style: { ...column, justifyContent: "center" }, children: "x" })),
-		/justify-content in a flex column needs a height or min-height on the column on <div>$/,
-	);
-	await assert.rejects(
-		compiled(
-			jsx("div", {
-				style: { ...column, height: 100 },
-				children: jsx("p", { style: { flex: 1 }, children: "x" }),
-			}),
-		),
-		/flex-grow and flex-basis size flex row items; give a column item a height on <p> in <div>$/,
 	);
 });
 
@@ -513,4 +472,54 @@ test("given a unitless line-height on a block, when a child changes font size, t
 			2,
 		],
 	]);
+});
+
+test("given padding on a br, when compiling, then rejects instead of dropping it", async () => {
+	await assert.rejects(
+		compiled(jsxs("p", { children: ["a", jsx("br", { style: { padding: 10 } }), "b"] })),
+		/<br> takes no paddingTop; style the text around it on <br> in <p>$/,
+	);
+});
+
+test("given justify-content on a row, when compiling, then emits one flex record and keeps each item's width on its own box", async () => {
+	const calls = await compiled(
+		jsxs("div", {
+			style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+			children: [
+				jsx("div", { style: { width: "80pt" }, children: "Logo" }),
+				jsx("p", { style: { flex: "1 0 50%" }, children: "Due" }),
+			],
+		}),
+	);
+	assert.deepEqual(calls[0], [
+		"flexStart",
+		{ column: false, justify: 3, align: 4, gap: 0, minHeight: 0, maxHeight: undefined },
+		[
+			{ grow: 0, shrink: 1, basis: undefined, align: 0 },
+			{ grow: 1, shrink: 0, basis: { kind: 2, value: 50 }, align: 0 },
+		],
+	]);
+	assert.equal(calls[1][0], "boxStart");
+	assert.deepEqual(calls[1][1].size.width, { kind: 1, value: 80 });
+	assert.deepEqual(
+		calls.slice(2).map(([method]) => method),
+		["paragraph", "boxEnd", "paragraph", "flexEnd"],
+	);
+});
+
+test("given a flex column without a height, when compiling justify-content or a grow factor, then rejects with the reason", async () => {
+	const column = { display: "flex", flexDirection: "column" };
+	await assert.rejects(
+		compiled(jsx("div", { style: { ...column, justifyContent: "center" }, children: "x" })),
+		/justify-content in a flex column needs a height or min-height on the column on <div>$/,
+	);
+	await assert.rejects(
+		compiled(
+			jsx("div", {
+				style: { ...column, height: 100 },
+				children: jsx("p", { style: { flex: 1 }, children: "x" }),
+			}),
+		),
+		/flex-grow and flex-basis size flex row items; give a column item a height on <p> in <div>$/,
+	);
 });

@@ -40,7 +40,12 @@ type TextState = {
 /** A cell's collapsed borders, and its row's background when rowSpan joins the row to others. */
 type CellPaint = Partial<Pick<Box, "border" | "borderColor" | "background">>;
 /** `cell` is set only for the direct children of a table row. */
-type Context = TextState & { inRow: boolean; cell?: CellPaint; item?: boolean; height?: number | undefined };
+type Context = TextState & {
+	inRow: boolean;
+	cell?: CellPaint;
+	item?: boolean;
+	height?: number | undefined;
+};
 type Fonts = ReadonlyMap<string, FontSlots>;
 
 const ROOT: Context = {
@@ -521,38 +526,45 @@ function element(
 			const streamed = streamMargin(paint, context, style);
 			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
 			// A CSS flex item is one element, so one without a box of its own gets an empty one.
-			box(writer, streamed ? undefined : (paint ?? (context.item ? EMPTY : undefined)), () => {
-				const flex = style.display === "flex";
-				const row = flex && (style.flexDirection ?? "row") === "row";
-				const [minHeight, maxHeight] = heights(paint);
-				const inner = {
-					...next,
-					inRow: false,
-					height: minHeight === maxHeight ? minHeight : undefined,
-				};
-				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
-				// A whitespace-only text child is no flex item, as in CSS.
-				const items = node.children.filter((child) => child.kind !== "text" || !blank(child.value));
-				if (flex && items.length && cssFlex(style, items, !row))
-					flexbox(node, items, writer, fonts, next, paint, depth, pageTokens);
-				else if (row && items.length) {
-					// A gap is a fixed-width empty column between items, so flex grow shares what is left.
-					const spacer: Column = { kind: 0, value: gap };
-					const columns = items.map(column);
-					writer.rowStart(
-						gap ? columns.flatMap((item, i) => (i ? [spacer, item] : [item])) : columns,
+			box(
+				writer,
+				streamed ? undefined : (paint ?? (context.item ? EMPTY : undefined)),
+				() => {
+					const flex = style.display === "flex";
+					const row = flex && (style.flexDirection ?? "row") === "row";
+					const [minHeight, maxHeight] = heights(paint);
+					const inner = {
+						...next,
+						inRow: false,
+						height: minHeight === maxHeight ? minHeight : undefined,
+					};
+					const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
+					// A whitespace-only text child is no flex item, as in CSS.
+					const items = node.children.filter(
+						(child) => child.kind !== "text" || !blank(child.value),
 					);
-					for (const [index, child] of items.entries()) {
-						if (index && gap) writer.spacer(0);
-						compile([child], writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
-					}
-					writer.rowEnd();
-				} else if ((context.inRow && !context.item) || style.breakInside === "avoid") {
-					writer.stackStart(gap);
-					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
-					writer.stackEnd();
-				} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
-			}, style.breakInside === "avoid");
+					if (flex && items.length && cssFlex(style, items, !row))
+						flexbox(node, items, writer, fonts, next, paint, depth, pageTokens);
+					else if (row && items.length) {
+						// A gap is a fixed-width empty column between items, so flex grow shares what is left.
+						const spacer: Column = { kind: 0, value: gap };
+						const columns = items.map(column);
+						writer.rowStart(
+							gap ? columns.flatMap((item, i) => (i ? [spacer, item] : [item])) : columns,
+						);
+						for (const [index, child] of items.entries()) {
+							if (index && gap) writer.spacer(0);
+							compile([child], writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
+						}
+						writer.rowEnd();
+					} else if ((context.inRow && !context.item) || style.breakInside === "avoid") {
+						writer.stackStart(gap);
+						flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
+						writer.stackEnd();
+					} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
+				},
+				style.breakInside === "avoid",
+			);
 			if (streamed && paint?.margin[2]) writer.spacer(paint.margin[2]);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
@@ -579,10 +591,18 @@ function element(
 					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles`,
 				);
 			const own = layoutBox(style, next.size, context);
-			box(writer, own ?? (context.item && runs === undefined ? EMPTY : undefined), () =>
-				runs === undefined
-					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
-					: writeParagraph(writer, runs, next, pageTokens),
+			const avoid = style.breakInside === "avoid";
+			box(
+				writer,
+				own ?? (context.item && runs === undefined ? EMPTY : undefined),
+				() => {
+					if (avoid) writer.stackStart(0);
+					if (runs === undefined)
+						flow(node.children, writer, fonts, inner, avoid ? depth + 1 : depth, pageTokens, 0);
+					else writeParagraph(writer, runs, next, pageTokens);
+					if (avoid) writer.stackEnd();
+				},
+				avoid,
 			);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
@@ -654,7 +674,6 @@ type Edge = { width: number; color: [number, number, number] };
 const BLACK: [number, number, number] = [0, 0, 0];
 const ALIGN = { top: 0, middle: 1, bottom: 2 } as const;
 /** Rows and row groups sit inside the table, where `pageBreak` rejects both as nested. */
-const BREAKS = ["breakBefore", "breakAfter"] as const;
 
 /** `thead` groups first, then `tbody` and bare `tr` in source order, then `tfoot`, as browsers
  *  paint them. Adjacent bare rows form one group, as HTML's implied `tbody` does. */
@@ -793,7 +812,8 @@ function table(
 		if (group)
 			try {
 				rowOnly(group.style, false);
-				pageBreak(writer, group.style, "breakBefore", depth + 1);
+				if (group.style.breakBefore === "page" || group.style.breakAfter === "page")
+					throw new Error("page breaks inside tables are not supported; split the table");
 				if (boxStyle(group.style, inner.size))
 					throw new Error(`<${group.tag}> accepts no box styles; style <tr> or its cells`);
 				state = { ...inherit(group.style, inner, fonts), inRow: false };
@@ -805,7 +825,8 @@ function table(
 		const placed = trs.map((tr, index) => {
 			try {
 				rowOnly(tr.style, false);
-				for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
+				if (tr.style.breakBefore === "page" || tr.style.breakAfter === "page")
+					throw new Error("page breaks inside tables are not supported; split the table");
 				const own = { ...inherit(tr.style, state, fonts), inRow: false };
 				const row: GridRow = {
 					node: tr,
@@ -905,6 +926,7 @@ function table(
 	const wheres: { where: string; joined: boolean }[] = [];
 	const row = (item: GridRow, joined: boolean) => {
 		try {
+			if (item.node.style.breakBefore === "avoid") writer.avoid();
 			// Collapsed borders belong to the cells.
 			const own =
 				collapsed && item.paint
@@ -933,11 +955,13 @@ function table(
 					);
 				writer.rowEnd();
 			});
+			if (item.node.style.breakAfter === "avoid") writer.avoid();
 		} catch (error) {
 			throw locate(error, item.node.where);
 		}
 	};
 	const group = ({ group, rows }: GridGroup, repeated: boolean) => {
+		if (!repeated && group?.style.breakBefore === "avoid") writer.avoid();
 		// Header and footer rows always share a page, so `break-inside: avoid` only groups body rows.
 		const avoid = group?.style.breakInside === "avoid" && !repeated;
 		// Each path goes in first: the engine rejects an overflowing child the moment it closes.
@@ -957,6 +981,7 @@ function table(
 			start = end;
 		}
 		if (avoid) writer.stackEnd();
+		if (!repeated && group?.style.breakAfter === "avoid") writer.avoid();
 	};
 	try {
 		if (style.breakInside === "avoid") writer.stackStart(0);

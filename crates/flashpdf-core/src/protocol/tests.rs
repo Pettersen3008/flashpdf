@@ -106,9 +106,7 @@ fn box_start() -> Vec<u8> {
     }
     payload.extend([1, 0xee, 0xee, 0xee]);
     payload.extend([0, 0, 0].repeat(4));
-    payload.extend([0, 0, 0, 0, 0]);
-    payload.extend(0.0_f32.to_le_bytes());
-    payload.push(0);
+    payload.extend([0; 7]);
     record(17, &payload)
 }
 
@@ -292,7 +290,7 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     let expected = decode(&bytes).unwrap();
     assert!(expected.starts_with(b"%PDF-"));
     let pdf = lopdf::Document::load_mem(&expected).unwrap();
-    assert_eq!(pdf.get_pages().len(), 5);
+    assert_eq!(pdf.get_pages().len(), 4);
     assert_eq!(
         pdf.extract_text(&[1]).unwrap().trim(),
         "Before\nBoxed\nrow\n1\n4"
@@ -302,8 +300,7 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
         "head\nbody\nspan\nx\ny"
     );
     assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Stacked\nStyled");
-    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "");
-    assert_eq!(pdf.extract_text(&[5]).unwrap().trim(), "After");
+    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
     for split in 0..=bytes.len() {
         let mut decoder = decoder();
         decoder.push(&bytes[..split]).unwrap();
