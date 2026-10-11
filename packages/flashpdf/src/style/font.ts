@@ -64,15 +64,21 @@ export function font(
 	fonts: ReadonlyMap<string, FontSlots>,
 ) {
 	let family = inherited;
-	if (typeof s.fontFamily === "string")
-		for (const { name, quoted } of families(s.fontFamily)) {
-			const key = name.toLowerCase().replace(/\s+/g, " ");
-			const found = fonts.get(name) ?? NAMED.get(key) ?? (quoted ? undefined : GENERIC.get(key));
-			if (found) {
-				family = found;
-				break;
-			}
-		}
+	if (s.fontFamily !== undefined) {
+		const names = typeof s.fontFamily === "string" ? families(s.fontFamily) : [];
+		// An entry that matches nothing is skipped for a later one; a list with no match rejects.
+		const found = names
+			.map(({ name, quoted }) => {
+				const key = name.toLowerCase().replace(/\s+/g, " ");
+				return fonts.get(name) ?? NAMED.get(key) ?? (quoted ? undefined : GENERIC.get(key));
+			})
+			.find(Boolean);
+		if (!found)
+			throw new Error(
+				`unregistered font family: ${String(s.fontFamily)} (register it in fonts, or end the list with serif, sans-serif, or monospace)`,
+			);
+		family = found;
+	}
 	const weight = s.fontWeight === undefined ? inheritedBold : bold(s.fontWeight);
 	const slanted = s.fontStyle === undefined ? inheritedItalic : italic(s.fontStyle);
 	if (weight && face(family, true, slanted).font === undefined)

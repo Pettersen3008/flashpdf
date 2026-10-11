@@ -90,9 +90,16 @@ test("given a font-family list, when selecting a font, then takes the first regi
 	assert.equal(pick("'serif', monospace"), courier);
 });
 
-test("given a font-family list with no match, when selecting a font, then keeps the inherited family", () => {
+test("given a font-family list with no match, when selecting a font, then rejects naming the families, and inherits when there is no list", () => {
 	const fonts = new Map([["Helvetica", helvetica]]);
-	assert.equal(font({ fontFamily: "Missing, cursive" }, times, false, false, fonts).family, times);
+	assert.throws(
+		() => font({ fontFamily: "Missing, 'Also Missing', cursive" }, times, false, false, fonts),
+		/unregistered font family: Missing, 'Also Missing', cursive \(register it in fonts/,
+	);
+	assert.throws(
+		() => font({ fontFamily: "'serif'" }, times, false, false, fonts),
+		/unregistered font family: 'serif'/,
+	);
 	assert.equal(font({}, courier, false, false, fonts).family, courier);
 });
 

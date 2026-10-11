@@ -147,12 +147,19 @@ test("given registered regular and bold fonts, when fontFamily selects them, the
 	);
 });
 
+test("given a font family that is neither registered nor built in, when rendering, then rejects naming it", async () => {
+	await assert.rejects(
+		render(jsx("main", { style: { fontFamily: "Missing" }, children: "x" })),
+		/unregistered font family: Missing .*on <main>/,
+	);
+});
+
 test("given serif and monospace font families, when rendering, then the PDF uses Times-Roman and Courier, which PDF/A rejects", async () => {
 	const document = jsxs("main", {
 		children: [
 			jsx("p", { style: { fontFamily: "Georgia, serif" }, children: "Serif" }),
 			jsx("p", { style: { fontFamily: "monospace", fontWeight: "bold" }, children: "Mono" }),
-			jsx("p", { style: { fontFamily: "Missing" }, children: "Inherited" }),
+			jsx("p", { style: { fontFamily: "Missing, sans-serif" }, children: "Helvetica" }),
 		],
 	});
 	const pdf = string(await render(document));
