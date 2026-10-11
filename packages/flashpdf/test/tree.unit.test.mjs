@@ -198,7 +198,7 @@ test("given ref and key props on a host element, when resolving, then ignores th
 		},
 	]);
 	await assert.rejects(
-		resolveTree(jsx("main", { children: { type: "ul", props: {} } })),
-		/unsupported element <ul> in <main>: lists are not supported yet; use one <p> per item/,
+		resolveTree(jsx("main", { children: { type: "caption", props: {} } })),
+		/unsupported element <caption> in <main>: captions are not supported; use a <p> before the table/,
 	);
 });

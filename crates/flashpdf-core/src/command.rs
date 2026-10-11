@@ -170,7 +170,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_block(&mut self) -> Result<Block<'a>, CommandParseError> {
-        if self.peek() == Some(Command::PageBreak) {
+        if matches!(self.peek(), Some(Command::PageBreak)) {
             self.index += 1;
             Ok(Block::PageBreak)
         } else {
@@ -191,6 +191,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     color: style.color,
                     hard_break: false,
                     decoration: Default::default(),
+                    typography: style.typography,
                 }],
                 links: &[],
             })),
@@ -241,7 +242,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                         content: self.parse_element(depth + 1)?,
                     });
                 }
-                if self.next()? != Command::RowEnd {
+                if !matches!(self.next()?, Command::RowEnd) {
                     return Err(CommandParseError::InvalidRow);
                 }
                 Ok(Element::Row(Row { cells }))
@@ -283,7 +284,11 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     ) -> Result<Vec<Element<'a>>, CommandParseError> {
         let mut children = Vec::new();
         loop {
-            if self.peek() == Some(end) {
+            // Only the kind matters, and comparing kinds keeps `Command`'s deep equality out of the build.
+            if self
+                .peek()
+                .is_some_and(|next| std::mem::discriminant(&next) == std::mem::discriminant(&end))
+            {
                 self.index += 1;
                 return Ok(children);
             }

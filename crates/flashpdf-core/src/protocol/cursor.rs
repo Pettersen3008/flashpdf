@@ -1,5 +1,8 @@
 use crate::win_ansi::valid;
-use crate::{Fraction, ImageSize, Percent, Rgb, TextAlign};
+use crate::{Fraction, ImageSize, Marker, Percent, Rgb, TextAlign, Typography};
+
+/// Letter and word spacing in points, either sign; the largest page side.
+pub(super) const MAX_SPACING: f32 = 14_400.0;
 
 use super::ProtocolError;
 
@@ -47,7 +50,40 @@ impl<'a> Cursor<'a> {
             0 => TextAlign::Left,
             1 => TextAlign::Center,
             2 => TextAlign::Right,
+            3 => TextAlign::Justify,
             _ => return Err(ProtocolError::InvalidTextAlignment),
+        })
+    }
+
+    /// Run flag bit 5 slants the face, 6, 7, and 11 mean an f32 letter spacing, word spacing, and
+    /// baseline shift follow, 9 turns kerning off, 12 forbids wrapping, and bits 13 and 14 make a
+    /// marker: 1 outside, 2 inside.
+    pub(super) fn typography(&mut self, flags: u16) -> Result<Typography, ProtocolError> {
+        let mut spacing = |bit: u16, name: &'static str| {
+            if flags & bit == 0 {
+                return Ok(0.0);
+            }
+            let value = f32::from_le_bytes(self.take(4)?.try_into().unwrap());
+            // CSS allows negative spacing; the bound keeps every line width finite.
+            if value.is_finite() && value.abs() <= MAX_SPACING {
+                Ok(value)
+            } else {
+                Err(ProtocolError::InvalidValue(name))
+            }
+        };
+        Ok(Typography {
+            letter_spacing: spacing(64, "letter spacing")?,
+            word_spacing: spacing(128, "word spacing")?,
+            rise: spacing(2048, "baseline shift")?,
+            oblique: flags & 32 != 0,
+            kerning: flags & 512 == 0,
+            nowrap: flags & 4096 != 0,
+            marker: match flags >> 13 {
+                0 => Marker::None,
+                1 => Marker::Outside,
+                2 => Marker::Inside,
+                _ => return Err(ProtocolError::InvalidValue("run flags")),
+            },
         })
     }
 

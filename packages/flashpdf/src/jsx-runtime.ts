@@ -1,4 +1,13 @@
-import type { BlockProps, Element, ImageProps, LinkProps, PdfProps, VoidProps } from "./element.js";
+import type {
+	BlockProps,
+	Element,
+	ImageProps,
+	LinkProps,
+	ListItemProps,
+	OrderedListProps,
+	PdfProps,
+	VoidProps,
+} from "./element.js";
 import type { BlockTag, TableTag, TextTag } from "./tree.js";
 
 export const Fragment = Symbol.for("flashpdf.fragment");
@@ -37,5 +46,7 @@ export namespace JSX {
 		br: VoidProps;
 		img: ImageProps;
 		a: LinkProps;
+		ol: OrderedListProps;
+		li: ListItemProps;
 	}
 }

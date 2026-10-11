@@ -1,8 +1,10 @@
 mod cmap;
-mod helvetica;
+mod kern;
+mod standard;
 mod subset;
 mod truetype;
 
+pub(crate) use standard::name as base_font;
 pub(crate) use truetype::EmbeddedFont;
 
 use pdf_writer::types::{CidFontType, FontFlags, SystemInfo, UnicodeCmap};
@@ -10,11 +12,19 @@ use pdf_writer::{Filter, Finish, Name, Pdf, Ref, Str};
 
 use crate::layout::LayoutBuffer;
 use crate::pdf::deflate;
-use crate::{FontId, RenderError};
+use crate::{FontId, RenderError, BUILT_IN};
 
 pub(crate) enum Font {
-    Helvetica { bold: bool },
+    /// A built-in face, by its `FontId` slot.
+    Standard(u8),
     Embedded(Box<EmbeddedFont>),
+}
+
+/// Centre offset above the baseline and thickness of a decoration line, in 1/1000 em.
+#[derive(Clone, Copy)]
+pub(crate) struct Stroke {
+    pub(crate) offset: f32,
+    pub(crate) thickness: f32,
 }
 
 pub(crate) struct FontBook {
@@ -24,10 +34,7 @@ pub(crate) struct FontBook {
 
 impl FontBook {
     pub(crate) fn new(embedded: Vec<EmbeddedFont>) -> Self {
-        let mut fonts = vec![
-            Font::Helvetica { bold: false },
-            Font::Helvetica { bold: true },
-        ];
+        let mut fonts: Vec<Font> = (0..BUILT_IN as u8).map(Font::Standard).collect();
         fonts.extend(
             embedded
                 .into_iter()
@@ -69,7 +76,7 @@ impl FontBook {
 
 impl Font {
     /// Appends the show-string code for `character` and returns its advance in
-    /// 1/1000 em: one WinAnsi byte for Helvetica, a big-endian glyph id for an
+    /// 1/1000 em: one WinAnsi byte for a built-in font, a big-endian glyph id for an
     /// embedded font. This is the only place that decides how text is encoded.
     pub(crate) fn encode_into(
         &self,
@@ -77,14 +84,16 @@ impl Font {
         out: &mut Vec<u8>,
     ) -> Result<u16, RenderError> {
         match self {
-            Self::Helvetica { bold } => {
+            Self::Standard(face) => {
                 let byte = crate::win_ansi::encode(character)?;
                 out.push(byte);
-                Ok(helvetica::width(*bold, byte))
+                Ok(standard::width(*face, byte))
             }
             Self::Embedded(font) => {
+                // A font without U+00A0 shows its space, as browsers do; preformatted text relies on it.
                 let gid = font
                     .glyph(character)
+                    .or_else(|| font.glyph(' ').filter(|_| character == '\u{a0}'))
                     .ok_or(RenderError::MissingGlyph(character))?;
                 out.extend(gid.to_be_bytes());
                 Ok(font.advance(gid))
@@ -92,10 +101,21 @@ impl Font {
         }
     }
 
+    /// Pair kerning in 1/1000 em between two codes from `encode_into`.
+    pub(crate) fn kern(&self, left: &[u8], right: &[u8]) -> i16 {
+        match self {
+            Self::Standard(face) => standard::kern(*face, left[0], right[0]),
+            Self::Embedded(font) => font.kern(
+                u16::from_be_bytes([left[0], left[1]]),
+                u16::from_be_bytes([right[0], right[1]]),
+            ),
+        }
+    }
+
     /// Bytes per code in a show string.
     pub(crate) fn stride(&self) -> usize {
         match self {
-            Self::Helvetica { .. } => 1,
+            Self::Standard(_) => 1,
             Self::Embedded(_) => 2,
         }
     }
@@ -103,7 +123,7 @@ impl Font {
     /// Advance of one code produced by `encode_into`.
     pub(crate) fn advance(&self, code: &[u8]) -> u16 {
         match self {
-            Self::Helvetica { bold } => helvetica::width(*bold, code[0]),
+            Self::Standard(face) => standard::width(*face, code[0]),
             Self::Embedded(font) => font.advance(u16::from_be_bytes([code[0], code[1]])),
         }
     }
@@ -111,16 +131,45 @@ impl Font {
     /// Ascent, descent and line gap per 1000 units; a line is ascent - descent + gap.
     pub(crate) fn metrics(&self) -> (f32, f32, f32) {
         match self {
-            Self::Helvetica { .. } => (718.0, -207.0, 0.0),
+            Self::Standard(face) => {
+                let (ascent, descent) = standard::metrics(*face);
+                (ascent, descent, 0.0)
+            }
             Self::Embedded(font) => (font.ascent, font.descent, font.line_gap),
+        }
+    }
+
+    /// Underline and line-through strokes: the AFM underline, shared by every built-in
+    /// face, and half its x-height, or the embedded font's `post` and `OS/2` values.
+    pub(crate) fn strokes(&self) -> (Stroke, Stroke) {
+        match self {
+            Self::Standard(face) => (
+                Stroke {
+                    offset: -100.0,
+                    thickness: 50.0,
+                },
+                Stroke {
+                    offset: standard::strike(*face),
+                    thickness: 50.0,
+                },
+            ),
+            Self::Embedded(font) => (font.underline, font.strikeout),
         }
     }
 }
 
-/// `/F1` is slot 0, so a PDF resource name never collides with a slot number.
+/// Helvetica is `/F1` to `/F4` and registered fonts follow from `/F5`, as before Times and
+/// Courier existed, so a document that uses neither keeps its bytes. Times is `/T1` to `/T4`
+/// and Courier `/C1` to `/C4`.
 pub(crate) fn font_name(font: FontId, buffer: &mut [u8; 4]) -> &[u8] {
-    let number = u32::from(font.slot()) + 1;
-    buffer[0] = b'F';
+    let slot = u32::from(font.slot());
+    let (prefix, number) = match slot {
+        0..=3 => (b'F', slot + 1),
+        4..=7 => (b'T', slot - 3),
+        8..=11 => (b'C', slot - 7),
+        _ => (b'F', slot - 7),
+    };
+    buffer[0] = prefix;
     let mut length = 1;
     for divisor in [100, 10] {
         if number >= divisor {

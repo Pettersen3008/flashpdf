@@ -12,10 +12,7 @@ const resolve = async (value, sheets) => resolveStyles(await resolveTree(value),
 
 test("given CSS outside the supported subset, when parsing a stylesheet, then rejects it with its source position", () => {
 	for (const [source, message] of [
-		[
-			".a { letter-spacing: 1pt }",
-			/letter-spacing \(text shaping is not implemented\).*"\.a" at 1:1/,
-		],
+		[".a { border-radius: 1pt }", /border-radius \(box corners are square\).*"\.a" at 1:1/],
 		[
 			".a { grid-template-columns: 1fr }",
 			/unsupported CSS property: grid-template-columns.*"\.a" at 1:1/,
@@ -24,7 +21,7 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 		[".a { color: #000 } oops", /invalid CSS stylesheet at 1:20/],
 		["{bad}p { color: red }", /invalid CSS stylesheet/],
 		["@layer x { .a { color: red }", /invalid CSS stylesheet at 1:1/],
-		["/* one\n\n\n*/\n.a { letter-spacing: 1pt }", /"\.a" at 5:1/],
+		["/* one\n\n\n*/\n.a { border-radius: 1pt }", /"\.a" at 5:1/],
 	]) {
 		assert.throws(() => stylesheet(source), message, source);
 	}

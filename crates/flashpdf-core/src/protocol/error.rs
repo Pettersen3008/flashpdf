@@ -80,7 +80,7 @@ impl std::fmt::Display for ProtocolError {
             Self::AttachmentsTooLarge => "attachments exceed 64 MiB per render",
             Self::DuplicateAttachment => "duplicate attachment name",
             Self::PdfAFont => {
-                "PDF/A embeds every font and Helvetica has none; register one with `fonts` and set fontFamily"
+                "PDF/A embeds every font and the built-in Helvetica, Times, and Courier have none; register one with `fonts` and set fontFamily"
             }
             Self::PdfACmyk => "PDF/A output uses an sRGB output intent, so CMYK JPEGs are not supported",
         };

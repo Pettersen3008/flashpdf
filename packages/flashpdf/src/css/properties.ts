@@ -4,8 +4,7 @@ export type RejectedProperty =
 	| "minWidth"
 	| "maxWidth"
 	| "borderRadius"
-	| "letterSpacing"
-	| "verticalAlign"
+	| "listStyleImage"
 	| "objectFit"
 	| "borderCollapse"
 	| "borderSpacing";
@@ -40,12 +39,26 @@ const properties = {
 	fontSize: { css: "font-size", inherited: true },
 	fontFamily: { css: "font-family", inherited: true },
 	fontWeight: { css: "font-weight", inherited: true },
+	fontStyle: { css: "font-style", inherited: true },
+	fontKerning: { css: "font-kerning", inherited: true },
 	textAlign: { css: "text-align", inherited: true },
+	textTransform: { css: "text-transform", inherited: true },
 	// CSS propagates decoration to descendants rather than inheriting it; the effect is the same here.
 	textDecoration: { css: "text-decoration", inherited: true },
+	textDecorationColor: { css: "text-decoration-color", inherited: true },
+	whiteSpace: { css: "white-space", inherited: true },
+	// Not inherited: the compiler accumulates the shift down nested inline elements.
+	verticalAlign: { css: "vertical-align" },
+	// Inherited so a child sees the shorthand in its cascade order, which decides against longhands.
+	listStyle: { css: "list-style", inherited: true },
+	listStyleType: { css: "list-style-type", inherited: true },
+	listStylePosition: { css: "list-style-position", inherited: true },
 	color: { inherited: true },
 	// Inherits through the compiler's text state: a factor stays a factor, a length stays a length.
 	lineHeight: { css: "line-height" },
+	// Inherit through the text state too, so `em` resolves once, against the declaring element.
+	letterSpacing: { css: "letter-spacing" },
+	wordSpacing: { css: "word-spacing" },
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
@@ -58,17 +71,13 @@ const properties = {
 		unsupported: "only width on a flex row child is implemented",
 	},
 	borderRadius: { css: "border-radius", unsupported: "box corners are square" },
-	letterSpacing: {
-		css: "letter-spacing",
-		unsupported: "text shaping is not implemented",
-	},
 	objectFit: {
 		css: "object-fit",
 		unsupported: "size an image with width and height; it always scales to fill them",
 	},
-	verticalAlign: {
-		css: "vertical-align",
-		unsupported: "cells align to the top; middle and bottom are not implemented",
+	listStyleImage: {
+		css: "list-style-image",
+		unsupported: "markers are text or drawn shapes; choose list-style-type",
 	},
 	borderCollapse: {
 		css: "border-collapse",

@@ -22,6 +22,8 @@ const string = (pdf) =>
 				return match;
 			}
 		});
+/** `string` with kerned `TJ` arrays joined, so `/\(Invoice\)/` still finds a kerned word. */
+const shown = (pdf) => string(pdf).replace(/\) -?[\d.]+ \(/g, "");
 const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", import.meta.url)));
 
 test("given the package entry point, when importing it, then exposes only the renderer, stylesheet validator, and JSX fallback", async () => {
@@ -110,15 +112,15 @@ test("given native JSX components and fragments, when rendering, then preserves 
 		],
 	});
 	const pdf = await render(document, { pageFormat: "A4", margin: 36 });
-	assert.match(string(pdf), /\(Invoice\)/);
-	assert.match(string(pdf), /\(1001\)/);
+	assert.match(shown(pdf), /\(Invoice\)/);
+	assert.match(shown(pdf), /\(1001\)/);
 	assert.deepEqual(pdf, await render(document, { pageFormat: "A4", margin: 36 }));
 
 	// A root fragment flattens to an array; the root check must look through it.
 	const siblings = jsxs(Fragment, {
 		children: [jsx("h1", { children: "One" }), jsx("p", { children: "Two" })],
 	});
-	assert.match(string(await render(siblings)), /\(Two\)/);
+	assert.match(shown(await render(siblings)), /\(Two\)/);
 	await assert.rejects(render("bare text"), /expected element or props/);
 });
 
@@ -143,9 +145,30 @@ test("given registered regular and bold fonts, when fontFamily selects them, the
 		}),
 		/font family has no bold face/,
 	);
+});
+
+test("given a font family that is neither registered nor built in, when rendering, then rejects naming it", async () => {
 	await assert.rejects(
 		render(jsx("main", { style: { fontFamily: "Missing" }, children: "x" })),
-		/unregistered font family/,
+		/unregistered font family: Missing .*on <main>/,
+	);
+});
+
+test("given serif and monospace font families, when rendering, then the PDF uses Times-Roman and Courier, which PDF/A rejects", async () => {
+	const document = jsxs("main", {
+		children: [
+			jsx("p", { style: { fontFamily: "Georgia, serif" }, children: "Serif" }),
+			jsx("p", { style: { fontFamily: "monospace", fontWeight: "bold" }, children: "Mono" }),
+			jsx("p", { style: { fontFamily: "Missing, sans-serif" }, children: "Helvetica" }),
+		],
+	});
+	const pdf = string(await render(document));
+	assert.match(pdf, /\/BaseFont \/Times-Roman/);
+	assert.match(pdf, /\/BaseFont \/Courier-Bold/);
+	assert.match(pdf, /\/BaseFont \/Helvetica\b/);
+	await assert.rejects(
+		render(document, { pdfa: "3b" }),
+		/PDF\/A embeds every font and the built-in Helvetica, Times, and Courier have none/,
 	);
 });
 
@@ -185,7 +208,7 @@ test("given text outside WinAnsi in an embedded font, when rendering, then emits
 	);
 	await assert.rejects(
 		render(jsx("p", { children: "中" })),
-		/Helvetica has no glyph for "中" \(U\+4E2D\); register a font that has it on <p>/,
+		/the built-in font has no glyph for "中" \(U\+4E2D\); register a font that has it on <p>/,
 	);
 });
 
@@ -262,7 +285,7 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 	}
 	await assert.rejects(
 		render(jsx("p", { children: "Total" }), options),
-		/PDF\/A embeds every font and Helvetica has none; register one with `fonts` and set fontFamily on <p>/,
+		/PDF\/A embeds every font and the built-in Helvetica, Times, and Courier have none; register one with `fonts` and set fontFamily on <p>/,
 	);
 	await assert.rejects(
 		render(document, { ...options, attachments: [{ ...note, relationship: "Related" }] }),
@@ -289,7 +312,7 @@ test("given CSS cascade variables and a box, when rendering, then emits painted 
 	});
 	const pdf = await render(document, { stylesheets: [css] });
 	assert.match(string(pdf), /re\nf/);
-	assert.match(string(pdf), /\(\$100\)/);
+	assert.match(shown(pdf), /\(\$100\)/);
 });
 
 test("given a long native main with a page break rule, when rendering, then it paginates", async () => {
@@ -329,8 +352,8 @@ test("given a page footer, when rendering multiple pages, then repeats resolved 
 		children: ["Page ", jsx(PageNumber, {}), " of ", jsx(TotalPages, {})],
 	});
 	const pdf = await render(document, { footer });
-	assert.match(string(pdf), /\(Page 1 of 2\)/);
-	assert.match(string(pdf), /\(Page 2 of 2\)/);
+	assert.match(shown(pdf), /\(Page 1 of 2\)/);
+	assert.match(shown(pdf), /\(Page 2 of 2\)/);
 	await assert.rejects(
 		render(jsx("main", { children: jsx(PageNumber, {}) })),
 		/only valid in a header or footer/,
@@ -379,7 +402,7 @@ test("given a repeating header and tagged metadata, when rendering two pages, th
 		metadata: { title: "Invoice", author: "Acme", language: "en-US" },
 		tagged: true,
 	});
-	const output = string(pdf);
+	const output = shown(pdf);
 	assert.match(output, /\(Report 1 of 2\)/);
 	assert.match(output, /\(Report 2 of 2\)/);
 	for (const part of [
@@ -430,20 +453,20 @@ test("given adjacent text and plain spans, when rendering, then keeps them in on
 			children: [jsx("span", { children: "Label:" }), " value"],
 		}),
 	);
-	assert.match(string(pdf), /\(Label: value\)/);
+	assert.match(shown(pdf), /\(Label: value\)/);
 });
 
 test("given inline bold inside a paragraph, when rendering, then paints both fonts in one text object", async () => {
 	const pdf = await render(
 		jsxs("p", { children: ["Hello ", jsx("b", { children: "World" }), " again"] }),
 	);
-	const objects = string(pdf)
+	const objects = shown(pdf)
 		.split("ET")
 		.filter((object) => object.includes("Tj"));
 	assert.equal(objects.length, 1, objects.join("\n"));
 	assert.match(
 		objects[0],
-		/\/F1 12 Tf\n[\d.]+ [\d.]+ Td\n\(Hello \) Tj\n\/F2 12 Tf\n[\d.]+ 0 Td\n\(World\) Tj\n\/F1 12 Tf\n[\d.]+ 0 Td\n\( again\) Tj/,
+		/\/F1 12 Tf\n[\d.]+ [\d.]+ Td\n\(Hello \) Tj\n\/F2 12 Tf\n[\d.]+ 0 Td\n\[\(World\)\] TJ\n\/F1 12 Tf\n[\d.]+ 0 Td\n\( again\) Tj/,
 	);
 });
 
@@ -486,10 +509,7 @@ test("given an hr border, when rendering, then uses the author rule", async () =
 });
 
 test("given non-native JSX, when rendering, then rejects it", async () => {
-	await assert.rejects(
-		render({ type: "ul", props: {} }),
-		/unsupported element <ul>: lists are not supported yet/,
-	);
+	await assert.rejects(render({ type: "marquee", props: {} }), /unsupported element <marquee>/);
 });
 
 test("given a table that spans two pages, when rendering, then the header row repeats on the second page", async () => {
@@ -703,4 +723,96 @@ test("given two stylesheets of equal specificity, when rendering, then the later
 	});
 	assert.match(string(pdf), /0 0 1 rg/);
 	assert.doesNotMatch(string(pdf), /1 0 0 rg/);
+});
+
+test("given em text in a family with and without an italic face, when rendered, then it uses that face or slants the upright one", async () => {
+	const doc = jsx("p", { style: { fontFamily: "Abel" }, children: jsx("em", { children: "x" }) });
+	const slanted = string(await render(doc, { fonts: [{ family: "Abel", regular: font }] }));
+	assert.match(slanted, /\n1 0 0\.25 1 [\d.]+ [\d.]+ Tm\n/);
+	const italic = { fonts: [{ family: "Abel", regular: font, italic: font }] };
+	const faced = string(await render(doc, italic));
+	assert.doesNotMatch(faced, / Tm\n/);
+	assert.match(faced, /\/F6 12 Tf/);
+});
+
+test("given letter-spaced, word-spaced, justified text, when rendered, then the PDF sets Tc and widens spaces in TJ", async () => {
+	const pdf = string(
+		await render(
+			jsx("p", {
+				style: { textAlign: "justify", letterSpacing: "1pt", wordSpacing: "2pt" },
+				children: "word ".repeat(60),
+			}),
+		),
+	);
+	assert.match(pdf, /\n1 Tc\n/);
+	assert.match(pdf, / \) -[\d.]+ \(w/);
+});
+
+test("given AVA in Helvetica, when rendered, then TJ tightens both pairs unless font-kerning is none", async () => {
+	const show = async (fontKerning) =>
+		string(await render(jsx("p", { style: { fontKerning }, children: "AVA" })));
+	assert.match(await show("auto"), /\[\(A\) 70 \(V\) 80 \(A\)\] TJ/);
+	assert.match(await show("none"), /\(AVA\) Tj/);
+});
+
+test("given lists, a pre block, and inline elements, when rendered, then the PDF draws marker shapes, sets pre in Courier, and fills the mark", async () => {
+	const item = (children) => jsx("li", { children });
+	const document = jsxs("main", {
+		children: [
+			jsxs("ul", { children: [item("one"), item("two")] }),
+			jsxs("ol", { style: { listStyleType: "lower-roman" }, children: [item("three")] }),
+			jsx("pre", { children: "a\tb" }),
+			jsxs("p", {
+				children: [
+					"H",
+					jsx("sub", { children: "2" }),
+					"O ",
+					jsx("mark", { children: "mark" }),
+					jsx("code", { children: "code" }),
+				],
+			}),
+		],
+	});
+	const pdf = await render(document);
+	const text = string(pdf);
+	assert.match(text, /\/BaseFont \/Courier\b/);
+	// A disc is a polygon fill and the numeral is text; the mark's yellow fill comes before its text.
+	assert.match(text, /\nh\nf\n/);
+	assert.match(text, /\(i\. \) Tj/);
+	assert.match(text, /1 1 0 rg\n[^]*?\nf\n[^]*?BT/);
+	assert.deepEqual(pdf, await render(document));
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-lists.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+});
+
+test("given a pre line wider than its container, when rendering, then rejects naming the element unless it is pre-wrap", async () => {
+	const line = "x".repeat(200);
+	await assert.rejects(
+		render(jsx("pre", { children: line })),
+		/LineTooWide: a line of white-space: pre or nowrap text is wider than its container.* on <pre>/,
+	);
+	await assert.rejects(
+		render(jsx("p", { style: { whiteSpace: "nowrap" }, children: line })),
+		/LineTooWide/,
+	);
+	await render(jsx("pre", { style: { whiteSpace: "pre-wrap" }, children: line }));
+});
+
+test("given a list and a pre block in an embedded font under PDF/A, when rendered, then markers are drawn and the spaces use the font", async () => {
+	const pdf = await render(
+		jsxs("main", {
+			style: { fontFamily: "Abel" },
+			children: [
+				jsx("ul", { children: jsx("li", { children: "Item" }) }),
+				jsx("pre", { style: { fontFamily: "Abel" }, children: "a  b" }),
+			],
+		}),
+		{ pdfa: "3b", fonts: [{ family: "Abel", regular: font }] },
+	);
+	assert.doesNotMatch(string(pdf), /\/Type1\b/);
+	assert.match(string(pdf), /\nh\nf\n/);
 });

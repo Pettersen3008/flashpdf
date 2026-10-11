@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Vertical margins collapse as in CSS 2.1. Adjacent siblings, a box and its first or last child with no border or padding between them, and an empty block share the largest margin instead of adding them up, so two `blockquote`s in a row are `1em` apart, not `2em`. Flex items and table cells keep their margins. Documents with adjoining vertical margins get less space between blocks.
+- A margin that does not fit at the bottom of a page no longer moves to the top of the next one, and a forced page break drops the margin before it. Before, such a margin could push the next block a page further or leave a blank page.
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
 ### Fixed
 
@@ -61,10 +63,30 @@
 - `RenderOptions.pdfa: '3b'` writes PDF/A-3b: XMP metadata that repeats `metadata`, an sRGB output intent, and a document ID hashed from the content. In this mode, text that would use the unembedded Helvetica and CMYK JPEGs reject.
 - `RenderOptions.attachments` embeds files with an `AFRelationship`, listed in the catalog's `/AF` array and the EmbeddedFiles name tree. Names, MIME types, and relationships are validated, with a 64 MiB cap per render.
 - `RenderOptions.facturx: { xml, profile }` embeds Factur-X or ZUGFeRD XML as `factur-x.xml` (`xrechnung.xml` for `XRECHNUNG`) with the Factur-X XMP extension schema, and implies `pdfa: '3b'`. FlashPDF does not validate the XML content.
+- Italic text: `font-style: italic | oblique`, and `em`, `i`, and `cite` default to italic. Helvetica gains Helvetica-Oblique and Helvetica-BoldOblique, `fonts` entries take optional `italic` and `boldItalic` files, and a family without the italic file for a weight slants its upright face by a quarter, as browsers do.
+- `letter-spacing` and `word-spacing`, negative values included. Both count when lines break. Embedded fonts get word spacing through `TJ` positioning, because PDF word spacing skips their two-byte codes.
+- `text-align: justify`. Wrapped lines stretch their spaces to the full width; the last line and a line ending in `<br>` stay left-aligned.
+- `text-transform: uppercase | lowercase | capitalize | none`, with locale-independent case mapping.
+- `text-decoration-color`, and a colour in the `text-decoration` shorthand.
+- Kerning, on by default, with `font-kerning: auto | normal | none`. Helvetica uses Adobe's AFM pairs; embedded fonts use GPOS pair adjustment under the `kern` feature, or the `kern` table. Line breaking measures kerned widths.
+- Times and Courier built-in fonts, each in regular, bold, italic or oblique, and bold italic, with Adobe's AFM widths and, for Times, its kerning pairs. `font-family` takes `serif`, `Times`, and `Times New Roman` for Times, and `monospace`, `Courier`, and `Courier New` for Courier. Output of a document that uses neither is unchanged.
+- Lists: `ul`, `ol`, and `li`, with `list-style-type` (`disc`, `circle`, `square`, `decimal`, `decimal-leading-zero`, `lower-alpha`, `lower-latin`, `upper-alpha`, `upper-latin`, `lower-roman`, `upper-roman`, `none`), `list-style-position`, the `list-style` shorthand, `ol` `start` and `reversed`, and `li` `value`. A `ul` nested one and two lists deep uses circles and squares, as browsers do. Bullets are shapes the engine draws, so they need no font glyph, and a marker stays with its item's first line across pages.
+- `dl`, `dt`, `dd`, `blockquote`, `address`, `figure`, `figcaption`, `nav`, and `aside` as blocks with the browser's default margins, indent, and italic.
+- `small`, `sub`, `sup`, `u`, `ins`, `s`, `del`, `mark`, `code`, `kbd`, and `samp`, with `vertical-align: baseline | sub | super` on inline elements. `mark` paints a yellow background behind each line of its text.
+- `pre` and `white-space: normal | nowrap | pre | pre-wrap | pre-line`, with tabs to the next multiple of 8 characters. A `pre` or `nowrap` line wider than its container rejects with `LineTooWide`.
 
 ### Changed
 
 - Link annotations carry the print flag, which PDF/A requires.
+- Underlines and line-throughs use the font's metrics: Helvetica's AFM underline position and thickness, or an embedded font's `post` and `OS/2` values. They were 1/14 em thick at fixed offsets before.
+- The binary protocol is version 8: run flags are a u16 with slant, letter spacing, word spacing, decoration colour, and kerning off, headers and footers carry the same typography flags, alignment 3 is justify, and embedded font slots start at 4 after the four Helvetica faces. The JavaScript and WASM halves ship together, so this affects no public API.
+- `font-family` reads its list in order and takes the first registered family or built-in name. A name that is neither, such as `Georgia`, is skipped for the next entry, and a list where nothing matches still rejects with `unregistered font family`. `serif` and `ui-serif` select Times, where they selected Helvetica.
+- The glyph error for a character outside WinAnsi reads `the built-in font has no glyph for ...`, because Times and Courier share the limit. PDF/A rejects text in any built-in font.
+- The binary protocol is version 15: embedded font slots start at 12 after the twelve built-in faces. The JavaScript and WASM halves ship together, so this affects no public API.
+- `ul`, `ol`, and `li` no longer reject as unsupported elements, and `vertical-align` works on inline elements. It still rejects on blocks and table cells.
+- A font without a U+00A0 glyph shows its space glyph for it, where it rejected the character. `pre` relies on this.
+- The binary protocol is version 16: run flags carry a background colour, a baseline shift, no-wrap, and a list marker. The JavaScript and WASM halves ship together, so this affects no public API.
+- `line-height: normal` for the built-in fonts matches browsers. It was the AFM ascender plus descender (Helvetica 0.925em, Times 0.900em, Courier 0.786em), tighter than the metric-compatible Arial, Times New Roman, and Courier New a browser uses. It is now their hhea ascent, descent, and line gap: 1.150em for Helvetica and Times, 1.133em for Courier, with the gap split above and below the text. Every document that uses a built-in font spaces its lines more widely, and header, footer, and link-box heights follow. Embedded fonts keep their own metrics, and an explicit `line-height` keeps its height, with the text about 0.1em lower inside it, where a browser puts it.
 
 ## 0.4.0 - 2026-10-02
 

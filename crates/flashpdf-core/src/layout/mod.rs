@@ -4,7 +4,7 @@ mod text;
 
 use std::collections::BTreeMap;
 
-pub(crate) use output::{Decoration, LayoutBuffer, PositionedImage, Segment};
+pub(crate) use output::{Decoration, Gap, LayoutBuffer, PositionedImage, Segment, MARKER_SHAPE};
 pub(crate) use row::table_width;
 
 use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Stack, Table};
@@ -25,6 +25,7 @@ pub(crate) enum LayoutError {
     UnsupportedCharacter(char),
     MissingGlyph(char),
     TextTooWide,
+    LineTooWide,
     InvalidBox,
     InvalidColumnWidth,
     ColumnsOverflow,
@@ -40,6 +41,7 @@ impl From<LayoutError> for RenderError {
             LayoutError::UnsupportedCharacter(character) => Self::UnsupportedCharacter(character),
             LayoutError::MissingGlyph(character) => Self::MissingGlyph(character),
             LayoutError::TextTooWide => Self::TextTooWide,
+            LayoutError::LineTooWide => Self::LineTooWide,
             LayoutError::ImageTooWide => Self::ImageTooWide,
             LayoutError::InvalidWidth
             | LayoutError::UnknownFont(_)
@@ -99,7 +101,9 @@ impl<'a> LayoutEngine<'a> {
             let RunDecoration {
                 underline,
                 line_through,
+                color,
                 link,
+                background,
             } = run.decoration;
             if link.is_some_and(|link| usize::from(link) >= paragraph.links.len()) {
                 return Err(LayoutError::InvalidRuns);
@@ -108,7 +112,9 @@ impl<'a> LayoutEngine<'a> {
                 [run.color.r, run.color.g, run.color.b],
                 underline,
                 line_through,
+                color.map(|color| [color.r, color.g, color.b]),
                 link,
+                background.map(|color| [color.r, color.g, color.b]),
             );
             let index = *indices.entry(key).or_insert_with(|| {
                 keys.push((run.color, run.decoration));
@@ -139,15 +145,18 @@ impl<'a> LayoutEngine<'a> {
                 | usize::from(segment.color.b) << 16;
             let (color, decoration) = keys[index];
             segment.color = color;
-            let (ascent, descent, _) = self
+            let font = self
                 .fonts
                 .get(segment.font)
-                .ok_or(LayoutError::UnknownFont(segment.font))?
-                .metrics();
+                .ok_or(LayoutError::UnknownFont(segment.font))?;
+            let (ascent, descent, _) = font.metrics();
+            let (underline, line_through) = font.strokes();
             let scale = segment.size.get() / 1000.0;
             output.decorations.push(Decoration {
-                underline: decoration.underline,
-                line_through: decoration.line_through,
+                underline: decoration.underline.then_some(underline),
+                line_through: decoration.line_through.then_some(line_through),
+                color: decoration.color.unwrap_or(color),
+                background: decoration.background,
                 link: decoration.link.map(|link| link_base + usize::from(link)),
                 ascent: Pt(ascent * scale),
                 descent: Pt((-descent * scale).max(0.0)),

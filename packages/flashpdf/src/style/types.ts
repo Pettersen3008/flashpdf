@@ -24,4 +24,9 @@ export type Box = {
 	];
 };
 
-export type FontSlots = { regular: number; bold?: number | undefined };
+export type FontSlots = {
+	regular: number;
+	bold?: number | undefined;
+	italic?: number | undefined;
+	boldItalic?: number | undefined;
+};

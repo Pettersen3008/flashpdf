@@ -1,6 +1,8 @@
 import { inherited } from "../css/properties.js";
 import { parseBorder } from "./border.js";
+import { decoration } from "./decoration.js";
 import { edgeValues, SIDES } from "./length.js";
+import { parseListStyle } from "./list.js";
 import type { NormalizedStyle } from "./types.js";
 
 /** `initial` values; a property missing here is simply absent by default. */
@@ -80,6 +82,15 @@ export function normalize(
 			}
 		} else if (key === "borderWidth" || key === "borderColor") {
 			for (const side of SIDES) result[`border${side}${key.slice(6)}`] = item;
+		} else if (key === "textDecoration") {
+			// The shorthand resets the colour, so a later `text-decoration: underline` drops an earlier one.
+			result.textDecoration = item;
+			result.textDecorationColor = decoration(item).color ?? "currentcolor";
+		} else if (key === "listStyle") {
+			// The shorthand resets both longhands, so a later `list-style: inside` brings back `disc`.
+			const parsed = parseListStyle(item);
+			result.listStyleType = parsed.type;
+			result.listStylePosition = parsed.position;
 		} else if (key === "background") result.backgroundColor = item;
 		else result[key] = item;
 	}

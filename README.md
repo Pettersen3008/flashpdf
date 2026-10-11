@@ -51,7 +51,21 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 </table>
 ```
 
-`colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+`colSpan`, `rowSpan`, `vertical-align` on a cell, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+
+## Lists, preformatted text, and inline elements
+
+`ul`, `ol`, and `li` render with browser defaults: a 40px indent, `disc`, `circle`, and `square` markers by depth, and `list-style-type`, `list-style-position`, and `list-style` to change them. `ol` takes `start` and `reversed`, and `li` takes `value`. A marker stays with the first line of its item across pages. `pre` and `white-space: pre | pre-wrap | pre-line | nowrap` keep spaces, tabs, and newlines, and a `pre` line wider than the page rejects. `dl`, `dt`, `dd`, `blockquote`, `address`, `figure`, `figcaption`, `nav`, and `aside` are blocks, and `small`, `sub`, `sup`, `u`, `ins`, `s`, `del`, `mark`, `code`, `kbd`, and `samp` are inline.
+
+```tsx
+<ol start={3}>
+  <li>Payment is due in <b>14 days</b>.</li>
+  <li>Late fees accrue at 1.5%<sup>1</sup>.</li>
+</ol>
+<pre style={{ fontSize: 9, lineHeight: 1.3 }}>{`IBAN  NO93 8601 1117 947\nBIC   DNBANOKK`}</pre>
+```
+
+Vertical margins collapse as in a browser. Tagged mode writes list items as paragraphs without list structure; see [CSS.md](./CSS.md).
 
 ## Images and links
 
@@ -118,7 +132,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array; italic?: Uint8Array; boldItalic?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
@@ -131,11 +145,13 @@ const pdf = await render(<Invoice />, {
 });
 ```
 
-`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
+`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, lists, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
 
 ## Embedded fonts
 
-The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first registered family; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
+The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first entry that is a registered family or a built-in name; `fontWeight: 'bold'` selects its optional bold file and `fontStyle: 'italic'` its optional italic or bold italic file. A family without the italic file for a weight slants the upright face instead, as browsers do.
+
+Three built-in families need no files, each in regular, bold, italic or oblique, and bold italic: Helvetica for `Helvetica`, `Arial`, and `sans-serif`; Times for `Times`, `Times New Roman`, and `serif`; and Courier for `Courier`, `Courier New`, and `monospace`. Helvetica is the default. A name that is neither registered nor built in, such as `Georgia`, is skipped for the next entry, and a list where nothing matches rejects naming it. CSS.md lists every name.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());
@@ -147,11 +163,11 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 
 Each embedded font is subset to the glyphs the document shows (plus the components of composite glyphs) and written as a Type0/CIDFontType2 font with `Identity-H` encoding and a `ToUnicode` map, so copy-paste and text extraction return the original characters. Any character the TTF has a glyph for renders: Latin extended, Greek, Cyrillic, CJK, symbols, currency, and supplementary-plane characters through cmap formats 4 and 12. A character without a glyph rejects naming the character, its code point, and the element.
 
-Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. There is no shaping, kerning, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. Helvetica and Helvetica-Bold have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Regular and bold faces only; italic and variable-face selection, absent families, and a bold request without a bold file reject clearly.
+Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. Text is kerned through the font's GPOS `kern` feature or `kern` table, but there is no shaping, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. The built-in faces have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Variable-face selection, absent families, and a bold request without a bold file reject clearly.
 
 ## PDF/A and e-invoices
 
-`pdfa: '3b'` writes PDF/A-3b: an XMP packet that repeats `metadata`, an sRGB output intent, and a document ID hashed from the file's content, so the same input still gives the same bytes. FlashPDF writes no creation or modification date. PDF/A needs every font embedded, so register one with `fonts` and set `fontFamily` on the root element; text that would fall back to Helvetica rejects. CMYK JPEGs also reject, because the output intent is RGB.
+`pdfa: '3b'` writes PDF/A-3b: an XMP packet that repeats `metadata`, an sRGB output intent, and a document ID hashed from the file's content, so the same input still gives the same bytes. FlashPDF writes no creation or modification date. PDF/A needs every font embedded, so register one with `fonts` and set `fontFamily` on the root element; text in a built-in font, Helvetica, Times, or Courier, rejects. CMYK JPEGs also reject, because the output intent is RGB.
 
 `attachments` embeds files as associated files, listed in the catalog's `/AF` array and in the viewer's attachments panel. Each entry is `{ name: string; data: Uint8Array; mimeType: string; description?: string; relationship: 'Source' | 'Data' | 'Alternative' | 'Supplement' | 'Unspecified' }`. Names must be unique and free of slashes and control characters, and all attachments together are capped at 64 MiB per render. Attachments also work without `pdfa`.
 
@@ -185,7 +201,7 @@ Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common reject
 
 ## Assets
 
-FlashPDF embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
+FlashPDF embeds host-provided regular, bold, italic, and bold italic TTFs, and keeps Helvetica, Times, and Courier built in, with Helvetica as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](./CSS.md).
 

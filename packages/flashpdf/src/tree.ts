@@ -14,8 +14,53 @@ const REACT_PROVIDER = Symbol.for("react.provider");
 type Render = (props: Record<string, unknown>) => unknown;
 type Component = { render: Render; name: string };
 
-export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
-export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
+export const blockTags = [
+	"main",
+	"div",
+	"section",
+	"article",
+	"header",
+	"footer",
+	"ul",
+	"ol",
+	"li",
+	"dl",
+	"dt",
+	"dd",
+	"blockquote",
+	"address",
+	"figure",
+	"figcaption",
+	"nav",
+	"aside",
+] as const;
+export const textTags = [
+	"p",
+	"span",
+	"b",
+	"strong",
+	"em",
+	"i",
+	"cite",
+	"small",
+	"sub",
+	"sup",
+	"u",
+	"ins",
+	"s",
+	"del",
+	"mark",
+	"code",
+	"kbd",
+	"samp",
+	"pre",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+] as const;
 export const tableTags = ["table", "thead", "tbody", "tfoot", "tr", "th", "td"] as const;
 export const tags = [...blockTags, ...textTags, ...tableTags, "a", "img", "hr", "br"] as const;
 export type BlockTag = (typeof blockTags)[number];
@@ -34,18 +79,17 @@ export type ElementNode = {
 	readonly src?: Uint8Array | undefined;
 	readonly alt?: string | undefined;
 	readonly href?: string | undefined;
+	/** `<ol start>`, `<ol reversed>`, and `<li value>`. */
+	readonly start?: number | undefined;
+	readonly reversed?: boolean | undefined;
+	readonly value?: number | undefined;
 };
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
-	em: "italic faces are not supported yet; use <span>",
-	i: "italic faces are not supported yet; use <span>",
 	colgroup: "column widths come from the first row's <th>/<td> width or flex",
 	col: "column widths come from the first row's <th>/<td> width or flex",
 	caption: "captions are not supported; use a <p> before the table",
-	ul: "lists are not supported yet; use one <p> per item",
-	ol: "lists are not supported yet; use one <p> per item",
-	li: "lists are not supported yet; use one <p> per item",
 };
 
 export function label(node: {
@@ -239,6 +283,22 @@ function image(input: Record<string, unknown>, where: string) {
 	return { src, alt };
 }
 
+/** An `ol` `start` or `li` `value`: a 32-bit integer, as a number or an integer string. */
+function ordinal(value: unknown, name: string, where: string): number | undefined {
+	if (value === undefined) return undefined;
+	const number =
+		typeof value === "string" && /^[+-]?\d+$/.test(value.trim()) ? Number(value) : value;
+	if (typeof number !== "number" || !Number.isInteger(number) || Math.abs(number) > 2 ** 31 - 1)
+		throw new Error(`${name} must be an integer${where}`);
+	return number;
+}
+
+function reversed(value: unknown, where: string): boolean | undefined {
+	if (value !== undefined && typeof value !== "boolean")
+		throw new Error(`reversed must be a boolean${where}`);
+	return value;
+}
+
 function isTag(value: unknown): value is Tag {
 	return typeof value === "string" && (tags as readonly string[]).includes(value);
 }
@@ -278,7 +338,16 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
 		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
-	const own = element.type === "img" ? ["src", "alt"] : element.type === "a" ? ["href"] : [];
+	const own =
+		element.type === "img"
+			? ["src", "alt"]
+			: element.type === "a"
+				? ["href"]
+				: element.type === "ol"
+					? ["start", "reversed"]
+					: element.type === "li"
+						? ["value"]
+						: [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
 		throw new Error(`<${element.type}> has no children${where}`);
@@ -303,6 +372,10 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		children: [],
 		...(element.type === "img" ? image(input, where) : {}),
 		...(element.type === "a" ? { href: href(input.href, where) } : {}),
+		...(element.type === "ol"
+			? { start: ordinal(input.start, "start", where), reversed: reversed(input.reversed, where) }
+			: {}),
+		...(element.type === "li" ? { value: ordinal(input.value, "value", where) } : {}),
 	};
 	const self = label(node);
 	return [
