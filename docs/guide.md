@@ -47,7 +47,10 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `height applies only to <img>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
-| `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
+| `href must be an absolute http, https, or mailto URL` | Links cannot be relative. | Use a full URL, or `#id` for an element in this document. |
+| `link to #terms: no element has id="terms"` | The `#id` names no element in the document body. | Add the `id`, or fix the spelling. The match is exact and case sensitive. |
+| `link to #terms: id="terms" is on more than one element` | A destination needs one element. | Give each element its own `id`. |
+| `link to #terms: its element cannot hold a destination` | The id is on an inline `span`, `b`, `strong`, or `a`, a `br`, or a table row. | Move the `id` to the paragraph, a heading, a block, or a table cell. |
 
 ## Recipes
 
@@ -125,6 +128,8 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `Text` | `p`, `span`, `b`, `strong`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span` or `b` inside a `p`. |
 | `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG or JPEG bytes. |
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
+| `id` with `Link src="#id"` | `id` with `a href="#id"`. The link lands on the page where the element does. |
+| `bookmark` | `outline: true` bookmarks `h1` to `h6`. `data-bookmark="Title"` renames one and `data-bookmark={false}` skips it. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
 | `Font.register` | `fonts: [{ family, regular, bold }]` with TTF bytes. Regular and bold only. |
 | `fixed` header or footer | The `header` and `footer` options, one text line each. |

@@ -202,8 +202,11 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 				children: [
 					"Pay at ",
 					jsx("a", { href: "https://example.com/pay", children: "the portal" }),
+					" or ",
+					jsx("a", { href: "#bank", children: "by bank transfer" }),
 				],
 			}),
+			jsx("h2", { id: "bank", style: { fontWeight: "normal" }, children: "Bank transfer" }),
 		],
 	});
 	const note = { name: "delivery-note.csv", data: encode("item,qty\nA,1\n"), mimeType: "text/csv" };
@@ -212,6 +215,7 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 		metadata: { title: "Invoice 42 & Co", author: "Acme" },
 		facturx: { xml, profile: "EN 16931" },
 		attachments: [{ ...note, relationship: "Supplement" }],
+		outline: true,
 	};
 	const pdf = await render(document, options);
 	assert.deepEqual(pdf, await render(document, options));
@@ -247,6 +251,10 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 		/\/Subtype \/text#2Fxml\s+\/Filter \/FlateDecode\s+>>\s+stream\n<\?xml version/,
 	);
 	assert.match(text, /\/Subtype \/Link[^>]*\/F 4/);
+	// Internal links and the outline are plain PDF/A: a GoTo to a named destination and /Title text strings.
+	assert.match(text, /\/S \/GoTo\s+\/D \(bank\)/);
+	assert.match(text, /\/Dests <<\s+\/Names \[\(bank\) \d+ 0 R\]/);
+	assert.match(text, /\/Title \(Bank transfer\)/);
 	const id = (bytes) =>
 		Buffer.from(bytes)
 			.toString("latin1")
@@ -695,6 +703,54 @@ test("given an invoice with a PNG logo on every row and a link, when rendering, 
 		render(jsx("main", { children: jsx("img", { src: new Uint8Array([1, 2, 3]) }) })),
 		/unsupported image format; pass PNG or JPEG bytes on <img> in <main>/,
 	);
+});
+
+test("given links to ids and headings with the outline option, when rendering, then writes GoTo links, a Dests entry on the target's page, and nested bookmarks", async () => {
+	const document = jsxs("main", {
+		children: [
+			jsx("h1", { children: "Invoice 42" }),
+			jsxs("p", { children: ["See the ", jsx("a", { href: "#terms", children: "terms" }), "."] }),
+			jsx("h2", {
+				id: "terms",
+				"data-bookmark": "Terms \u03a9",
+				style: { breakBefore: "page" },
+				children: "Terms",
+			}),
+			jsx("h3", { children: "Late fees" }),
+		],
+	});
+	const pdf = await render(document, { outline: true });
+	assert.deepEqual(pdf, await render(document, { outline: true }));
+	const text = string(pdf);
+	const [, , second] = text.match(/\/Kids \[(\d+) 0 R (\d+) 0 R\]/);
+	assert.match(text, /\/PageMode \/UseOutlines/);
+	assert.match(text, /\/Dests <<\s+\/Names \[\(terms\) \d+ 0 R\]/);
+	assert.match(text, new RegExp(`\\[${second} 0 R /XYZ 36 806 null\\]`));
+	assert.match(text, /\/S \/GoTo\s+\/D \(terms\)/);
+	assert.match(text, /\/Title \(Invoice 42\)/);
+	assert.match(
+		text,
+		/\/Title <FEFF005400650072006D0073002003A9>/,
+		"UTF-16BE, as PDFDocEncoding lacks Ω",
+	);
+	assert.match(text, /\/Type \/Outlines\s+\/First \d+ 0 R\s+\/Last \d+ 0 R\s+\/Count 3/);
+	const holds = (count) =>
+		new RegExp(`/Dest \\d+ 0 R\\s+/First \\d+ 0 R\\s+/Last \\d+ 0 R\\s+/Count ${count}\\b`);
+	assert.match(text, holds(2), "h1 holds h2 and h3");
+	assert.match(text, holds(1), "h2 holds h3");
+	const plain = string(await render(document));
+	assert.doesNotMatch(plain, /\/Outlines|\/PageMode/);
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-navigation.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+	await assert.rejects(
+		render(jsx("a", { href: "#nope", children: "x" })),
+		/link to #nope: no element has id="nope" on <a>/,
+	);
+	await assert.rejects(render(document, { outline: "yes" }), /invalid outline option/);
 });
 
 test("given two stylesheets of equal specificity, when rendering, then the later one wins", async () => {

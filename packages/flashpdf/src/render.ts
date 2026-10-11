@@ -1,7 +1,7 @@
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { number, props } from "./assert.js";
 import { asError, Binary } from "./binary.js";
-import { compile } from "./compile.js";
+import { compile, compileBody } from "./compile.js";
 import { resolveStyles } from "./css.js";
 import type { Element } from "./element.js";
 import { registerFonts } from "./fonts.js";
@@ -25,6 +25,8 @@ export type RenderOptions = {
 	header?: Element | undefined;
 	metadata?: PdfMetadata | undefined;
 	tagged?: boolean | undefined;
+	/** Bookmarks every `h1` to `h6` in document order, nested by level, and opens the outline panel. */
+	outline?: boolean | undefined;
 	pdfa?: "3b" | undefined;
 	attachments?: readonly Attachment[] | undefined;
 	facturx?: FacturX | undefined;
@@ -57,6 +59,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			"header",
 			"metadata",
 			"tagged",
+			"outline",
 			"pdfa",
 			"attachments",
 			"facturx",
@@ -84,6 +87,8 @@ export function createRenderer(loadWasm: LoadWasm) {
 		if (p.tagged !== undefined && typeof p.tagged !== "boolean")
 			throw new Error("invalid tagged option");
 		if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
+		if (p.outline !== undefined && typeof p.outline !== "boolean")
+			throw new Error("invalid outline option");
 		if (
 			p.stylesheets !== undefined &&
 			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
@@ -117,7 +122,12 @@ export function createRenderer(loadWasm: LoadWasm) {
 				);
 				writer.repeatEnd();
 			}
-			compile(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
+			compileBody(
+				resolveStyles(tree, p.stylesheets as readonly string[] | undefined),
+				writer,
+				fonts,
+				p.outline === true,
+			);
 			writer.end();
 			consumed = true;
 			try {

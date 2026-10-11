@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { jsx, jsxs } from "react/jsx-runtime";
 import { test } from "vitest";
 
-import { compile } from "../dist/compile.js";
+import { compile, compileBody } from "../dist/compile.js";
 import { resolveStyles } from "../dist/css.js";
 import { helvetica } from "../dist/style.js";
 import { resolveTree } from "../dist/tree.js";
@@ -21,6 +21,27 @@ async function compiled(element) {
 		},
 	);
 	compile(resolveStyles(await resolveTree(element)), writer, new Map([["Helvetica", helvetica]]));
+	return calls;
+}
+
+/** Like `compiled`, for a document body, where links and the outline need the whole tree. */
+async function compiledBody(element, outline = false) {
+	const calls = [];
+	const writer = new Proxy(
+		{},
+		{
+			get:
+				(_, method) =>
+				(...args) =>
+					calls.push([method, ...args]),
+		},
+	);
+	compileBody(
+		resolveStyles(await resolveTree(element)),
+		writer,
+		new Map([["Helvetica", helvetica]]),
+		outline,
+	);
 	return calls;
 }
 
@@ -267,4 +288,76 @@ test("given a unitless line-height on a block, when a child changes font size, t
 			"left",
 		],
 	]);
+});
+
+test("given a link target and headings with an outline, when compiling the body, then an anchor precedes each target and each bookmarked heading", async () => {
+	const calls = await compiledBody(
+		[
+			jsx("p", { children: jsx("a", { href: "#terms", children: "Terms" }) }),
+			jsxs("section", {
+				id: "terms",
+				children: [
+					jsx("h2", {
+						children: ["Terms ", jsx("b", { children: "and" }), jsx("br", {}), " conditions"],
+					}),
+					jsx("h3", { "data-bookmark": false, children: "Skipped" }),
+					jsx("h3", { "data-bookmark": "Late fees", children: "Fees" }),
+					jsx("h4", { id: "unlinked", children: "   " }),
+				],
+			}),
+		],
+		true,
+	);
+	assert.deepEqual(
+		calls.map(([method, ...args]) => (method === "anchor" ? args : method)),
+		[
+			"paragraph",
+			["terms", 0, ""],
+			["", 2, "Terms and conditions"],
+			"paragraph",
+			"paragraph",
+			["", 3, "Late fees"],
+			"paragraph",
+			"paragraph",
+		],
+	);
+	assert.deepEqual(
+		(await compiledBody(jsx("h1", { children: "Title" }))).map(([method]) => method),
+		["paragraph"],
+		"without the outline option or a link target, no anchor is written",
+	);
+});
+
+test("given a link to an id that is missing, repeated, or on an inline span, when compiling the body, then rejects naming the id and element", async () => {
+	await assert.rejects(
+		compiledBody(jsx("a", { href: "#nope", children: "x" })),
+		/link to #nope: no element has id="nope" on <a>/,
+	);
+	const twice = [
+		jsx("p", { id: "a", children: "1" }),
+		jsx("p", { id: "a", children: "2" }),
+		jsx("a", { href: "#a", children: "x" }),
+	];
+	await assert.rejects(
+		compiledBody(twice),
+		/link to #a: id="a" is on more than one element on <p#a>/,
+	);
+	await compiledBody(twice.slice(0, 2));
+	await assert.rejects(
+		compiledBody([
+			jsx("p", { children: ["see ", jsx("span", { id: "n", children: "this" })] }),
+			jsx("a", { href: "#n", children: "x" }),
+		]),
+		/link to #n: its element cannot hold a destination.* on <span#n> in <p>/,
+	);
+});
+
+test("given more than 10000 bookmarked headings, when compiling the body, then rejects before the engine does", async () => {
+	await assert.rejects(
+		compiledBody(
+			Array.from({ length: 10_001 }, () => jsx("h2", { children: "x" })),
+			true,
+		),
+		/more than 10000 link targets and bookmarks on <h2>/,
+	);
 });
