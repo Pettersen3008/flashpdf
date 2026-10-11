@@ -73,8 +73,17 @@ const _table = (
 		</tbody>
 	</table>
 );
-// @ts-expect-error Spanning cells are not supported yet.
-const _colSpan = <td colSpan={2}>x</td>;
+const _spans = (
+	<table style={{ borderCollapse: "collapse" }}>
+		<tr>
+			<td colSpan={2} rowSpan={1} style={{ verticalAlign: "middle" }}>
+				x
+			</td>
+		</tr>
+	</table>
+);
+// @ts-expect-error Only table cells span columns.
+const _divSpan = <div colSpan={2}>x</div>;
 const _assets = (
 	<main>
 		<a href="https://example.com/">

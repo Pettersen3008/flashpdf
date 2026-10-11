@@ -1,5 +1,5 @@
 use crate::win_ansi::valid;
-use crate::{Fraction, ImageSize, Percent, Rgb, TextAlign};
+use crate::{Fraction, ImageSize, Percent, Rgb, TextAlign, VerticalAlign};
 
 use super::ProtocolError;
 
@@ -69,12 +69,43 @@ impl<'a> Cursor<'a> {
         std::str::from_utf8(self.take(length)?).map_err(|_| ProtocolError::InvalidUtf8)
     }
 
-    pub(super) fn columns(&mut self) -> Result<Vec<crate::ColumnWidth>, ProtocolError> {
+    pub(super) fn columns(
+        &mut self,
+    ) -> Result<Vec<(crate::ColumnWidth, crate::Slot)>, ProtocolError> {
         let count = usize::from(self.u16()?);
         if count == 0 || count > crate::command::MAX_COLUMNS {
             return Err(ProtocolError::InvalidColumnCount);
         }
-        (0..count).map(|_| self.column()).collect()
+        (0..count)
+            .map(|_| Ok((self.column()?, self.slot()?)))
+            .collect()
+    }
+
+    /// Bits 0-1 align a cell top, middle, or bottom, and bit 2 means a u16 row
+    /// span of 2 or more follows; 8 joins the cell to the left, and 16 marks a
+    /// column a cell from an earlier row covers.
+    fn slot(&mut self) -> Result<crate::Slot, ProtocolError> {
+        let flags = self.take(1)?[0];
+        let align = [
+            VerticalAlign::Top,
+            VerticalAlign::Middle,
+            VerticalAlign::Bottom,
+        ];
+        Ok(match flags {
+            0..=2 => crate::Slot::Cell {
+                rows: 1,
+                align: align[usize::from(flags)],
+            },
+            4..=6 => crate::Slot::Cell {
+                rows: Some(self.u16()?)
+                    .filter(|rows| *rows > 1)
+                    .ok_or(ProtocolError::InvalidValue("row span"))?,
+                align: align[usize::from(flags & 3)],
+            },
+            8 => crate::Slot::Join,
+            16 => crate::Slot::Covered,
+            _ => return Err(ProtocolError::InvalidValue("cell slot")),
+        })
     }
 
     pub(super) fn column(&mut self) -> Result<crate::ColumnWidth, ProtocolError> {

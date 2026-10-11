@@ -34,14 +34,16 @@ export type ElementNode = {
 	readonly src?: Uint8Array | undefined;
 	readonly alt?: string | undefined;
 	readonly href?: string | undefined;
+	readonly colSpan?: number | undefined;
+	readonly rowSpan?: number | undefined;
 };
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
 	em: "italic faces are not supported yet; use <span>",
 	i: "italic faces are not supported yet; use <span>",
-	colgroup: "column widths come from the first row's <th>/<td> width or flex",
-	col: "column widths come from the first row's <th>/<td> width or flex",
+	colgroup: "each column's width comes from its first <th>/<td> without colSpan",
+	col: "each column's width comes from its first <th>/<td> without colSpan",
 	caption: "captions are not supported; use a <p> before the table",
 	ul: "lists are not supported yet; use one <p> per item",
 	ol: "lists are not supported yet; use one <p> per item",
@@ -239,6 +241,14 @@ function image(input: Record<string, unknown>, where: string) {
 	return { src, alt };
 }
 
+/** 256 columns is the protocol's row limit; 65535 rows fit its u16 row span. */
+function span(value: unknown, name: string, max: number, where: string) {
+	if (value === undefined || value === null) return undefined;
+	if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > max)
+		throw new Error(`${name} must be an integer from 1 to ${max}${where}`);
+	return value as number;
+}
+
 function isTag(value: unknown): value is Tag {
 	return typeof value === "string" && (tags as readonly string[]).includes(value);
 }
@@ -275,10 +285,16 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		);
 	}
 	const where = ` on <${element.type}>${inside}`;
-	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
-		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
+	const cell = element.type === "td" || element.type === "th";
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
-	const own = element.type === "img" ? ["src", "alt"] : element.type === "a" ? ["href"] : [];
+	const own =
+		element.type === "img"
+			? ["src", "alt"]
+			: element.type === "a"
+				? ["href"]
+				: cell
+					? ["colSpan", "rowSpan"]
+					: [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
 		throw new Error(`<${element.type}> has no children${where}`);
@@ -303,6 +319,12 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		children: [],
 		...(element.type === "img" ? image(input, where) : {}),
 		...(element.type === "a" ? { href: href(input.href, where) } : {}),
+		...(cell
+			? {
+					colSpan: span(input.colSpan, "colSpan", 256, where),
+					rowSpan: span(input.rowSpan, "rowSpan", 65535, where),
+				}
+			: {}),
 	};
 	const self = label(node);
 	return [

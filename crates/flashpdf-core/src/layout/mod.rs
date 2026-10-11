@@ -4,15 +4,19 @@ mod text;
 
 use std::collections::BTreeMap;
 
+use output::Marks;
 pub(crate) use output::{Decoration, LayoutBuffer, PositionedImage, Segment};
 pub(crate) use row::table_width;
 
-use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Stack, Table};
+use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Table};
 use crate::font::FontBook;
 use crate::geometry::LayoutArea;
 use crate::image::Image;
 use crate::layout::output::{PositionedBox, PositionedLine};
-use crate::{BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun};
+use crate::{
+    BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun,
+    VerticalAlign,
+};
 
 /// CSS reference pixels are 96 per inch; PDF points are 72.
 const PT_PER_PX: f32 = 0.75;
@@ -31,6 +35,7 @@ pub(crate) enum LayoutError {
     InvalidRuns,
     UnknownImage,
     ImageTooWide,
+    UnclosedRowSpan,
 }
 
 impl From<LayoutError> for RenderError {
@@ -47,7 +52,8 @@ impl From<LayoutError> for RenderError {
             | LayoutError::InvalidColumnWidth
             | LayoutError::ColumnsOverflow
             | LayoutError::InvalidRuns
-            | LayoutError::UnknownImage => Self::InvalidLayout,
+            | LayoutError::UnknownImage
+            | LayoutError::UnclosedRowSpan => Self::InvalidLayout,
         }
     }
 }
@@ -75,8 +81,10 @@ impl<'a> LayoutEngine<'a> {
             Element::Paragraph(paragraph) => self.layout_paragraph(paragraph, area, output),
             Element::Box(node) => self.layout_box(node, area, output),
             Element::Spacer(spacer) => Ok(spacer.height),
-            Element::Stack(stack) => self.layout_stack(stack, area, output),
-            Element::Row(row) => self.layout_row(row, area, output),
+            Element::Stack(stack) => self.layout_rows(&stack.children, stack.gap, area, output),
+            Element::Row(_) => {
+                self.layout_rows(std::slice::from_ref(element), Pt::ZERO, area, output)
+            }
             Element::Table(table) => self.layout_table(table, area, output),
             Element::Image(image) => self.layout_image(image, area, output),
         }
@@ -276,20 +284,32 @@ impl<'a> LayoutEngine<'a> {
         Ok(style.margin.top + box_height + style.margin.bottom)
     }
 
-    fn layout_stack(
+    /// Lays out block children top to bottom. Rows among them share row spans,
+    /// and each span must close by the last child.
+    fn layout_rows(
         &self,
-        stack: &Stack<'_>,
+        children: &[Element<'_>],
+        gap: Pt,
         area: LayoutArea,
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
+        let mut spans = Vec::new();
         let mut height = Pt::ZERO;
-        for (index, child) in stack.children.iter().enumerate() {
+        for (index, child) in children.iter().enumerate() {
             if index != 0 {
-                height += stack.gap;
+                height += gap;
             }
-            height += self.layout(child, area.translated(Pt::ZERO, height), output)?;
+            let area = area.translated(Pt::ZERO, height);
+            height += match child {
+                Element::Row(row) => self.layout_row(row, area, output, &mut spans)?,
+                _ => self.layout(child, area, output)?,
+            };
         }
-        Ok(height)
+        if spans.is_empty() {
+            Ok(height)
+        } else {
+            Err(LayoutError::UnclosedRowSpan)
+        }
     }
 
     fn layout_row(
@@ -297,34 +317,69 @@ impl<'a> LayoutEngine<'a> {
         row: &Row<'_>,
         area: LayoutArea,
         output: &mut LayoutBuffer,
+        spans: &mut Vec<PlacedCell>,
     ) -> Result<Pt, LayoutError> {
-        let widths =
-            row::resolve_column_widths(row.cells.iter().map(|cell| cell.width), area.width)?;
-        let mut offset = Pt::ZERO;
+        let widths = row::resolve_column_widths(row.columns.iter().copied(), area.width)?;
+        let sum = |widths: &[Pt]| widths.iter().fold(Pt::ZERO, |sum, width| sum + *width);
+        for span in spans.iter_mut() {
+            span.rows -= 1;
+        }
         let mut height = Pt::ZERO;
         let mut placed = Vec::with_capacity(row.cells.len());
-        for (cell, width) in row.cells.iter().zip(widths) {
-            let index = output.boxes.len();
+        for cell in &row.cells {
+            let start = output.marks();
             let cell_height = self.layout(
                 &cell.content,
-                area.translated(offset, Pt::ZERO).with_width(width),
+                area.translated(sum(&widths[..cell.column]), Pt::ZERO)
+                    .with_width(sum(&widths[cell.column..cell.column + cell.span])),
                 output,
             )?;
-            placed.push((index, cell_height));
-            if cell_height > height {
-                height = cell_height;
+            let laid = PlacedCell {
+                top: area.origin.y,
+                height: cell_height,
+                rows: cell.rows.saturating_sub(1),
+                align: cell.align,
+                painted: matches!(&cell.content, Element::Box(node) if painted(&node.style)),
+                start,
+                end: output.marks(),
+            };
+            if laid.rows > 0 {
+                spans.push(laid);
+            } else {
+                if cell_height > height {
+                    height = cell_height;
+                }
+                placed.push(laid);
             }
-            offset += width;
+        }
+        // A span's last row grows to fit what its content needs below the rows above.
+        for span in spans.iter().filter(|span| span.rows == 0) {
+            let rest = span.top + span.height - area.origin.y;
+            if rest > height {
+                height = rest;
+            }
         }
         // Cells stretch to the row (`align-items: stretch`): a painted cell box
-        // pushed its rectangle first, so growing it tiles the row's backgrounds and borders.
-        for (cell, (index, cell_height)) in row.cells.iter().zip(placed) {
-            if let Element::Box(node) = &cell.content {
-                if painted(&node.style) {
-                    output.boxes[index].height += height - cell_height;
-                }
+        // pushed its rectangle first, so growing it tiles the row's backgrounds and
+        // borders. Content then moves down by its share of the free space.
+        for cell in placed
+            .iter()
+            .chain(spans.iter().filter(|span| span.rows == 0))
+        {
+            let space = (area.origin.y - cell.top) + height - cell.height;
+            if cell.painted {
+                output.boxes[cell.start.boxes].height += space;
             }
+            let shift = match cell.align {
+                VerticalAlign::Top => continue,
+                VerticalAlign::Middle => Pt(space.get() / 2.0),
+                VerticalAlign::Bottom => space,
+            };
+            let mut from = cell.start;
+            from.boxes += usize::from(cell.painted);
+            output.shift(from, cell.end, shift);
         }
+        spans.retain(|span| span.rows > 0);
         Ok(height)
     }
 
@@ -344,6 +399,17 @@ impl<'a> LayoutEngine<'a> {
         }
         Ok(height)
     }
+}
+
+/// A cell laid out before its row height is known; `rows` counts the rows a span still covers.
+struct PlacedCell {
+    top: Pt,
+    height: Pt,
+    rows: u16,
+    align: VerticalAlign,
+    painted: bool,
+    start: Marks,
+    end: Marks,
 }
 
 fn painted(style: &BoxStyle) -> bool {

@@ -76,7 +76,7 @@ pub struct Decoder {
 enum Frame {
     Stack,
     Box,
-    Row { columns: usize, cells: usize },
+    Row { cells: usize, done: usize },
     Table { head: Option<usize> },
 }
 
@@ -232,14 +232,15 @@ impl Decoder {
                 self.close(OwnedCommand::StackEnd)
             }
             Opcode::RowStart => {
-                let columns = cursor.columns()?;
+                let (columns, slots): (Vec<_>, Vec<_>) = cursor.columns()?.into_iter().unzip();
                 cursor.done()?;
+                let cells = slots
+                    .iter()
+                    .filter(|slot| matches!(slot, crate::Slot::Cell { .. }))
+                    .count();
                 self.open(
-                    Frame::Row {
-                        columns: columns.len(),
-                        cells: 0,
-                    },
-                    OwnedCommand::RowStart(columns),
+                    Frame::Row { cells, done: 0 },
+                    OwnedCommand::RowStart(columns, slots),
                 )
             }
             Opcode::RowEnd => {
@@ -588,7 +589,10 @@ impl Decoder {
                         .map(|link| link.len() + size_of::<String>())
                         .sum::<usize>()
             }
-            OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
+            OwnedCommand::RowStart(columns, slots) => {
+                columns.len() * size_of::<crate::ColumnWidth>()
+                    + slots.len() * size_of::<crate::Slot>()
+            }
             OwnedCommand::Image(_, _, _, link, alt) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
@@ -646,7 +650,7 @@ impl Decoder {
             (OwnedCommand::StackEnd, Frame::Stack)
             | (OwnedCommand::BoxEnd, Frame::Box)
             | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
-            (OwnedCommand::RowEnd, Frame::Row { columns, cells }) if columns == cells => {}
+            (OwnedCommand::RowEnd, Frame::Row { cells, done }) if cells == done => {}
             (OwnedCommand::RowEnd, Frame::Row { .. }) => {
                 return Err(ProtocolError::RowCellCountMismatch)
             }
@@ -656,9 +660,9 @@ impl Decoder {
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {
-        if let Some(Frame::Row { columns, cells }) = self.frames.last_mut() {
-            *cells += 1;
-            if *cells > *columns {
+        if let Some(Frame::Row { cells, done }) = self.frames.last_mut() {
+            *done += 1;
+            if *done > *cells {
                 return Err(ProtocolError::RowCellCountMismatch);
             }
         }

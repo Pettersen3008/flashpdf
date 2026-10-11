@@ -32,10 +32,20 @@ fn text(value: &[u8]) -> Vec<u8> {
 }
 
 fn columns(values: &[(u8, f32)]) -> Vec<u8> {
+    let plain: Vec<_> = values
+        .iter()
+        .map(|(kind, value)| (*kind, *value, &[0][..]))
+        .collect();
+    slotted(&plain)
+}
+
+/// Columns with their slot bytes: the flags, then a u16 row span when bit 2 is set.
+fn slotted(values: &[(u8, f32, &[u8])]) -> Vec<u8> {
     let mut bytes = (values.len() as u16).to_le_bytes().to_vec();
-    for (kind, value) in values {
+    for (kind, value, slot) in values {
         bytes.push(*kind);
         bytes.extend(value.to_le_bytes());
+        bytes.extend(*slot);
     }
     bytes
 }
@@ -99,7 +109,7 @@ fn box_start() -> Vec<u8> {
 }
 
 /// Every opcode the JSX lowering emits, on a 120x60 page whose 40pt of body
-/// forces the stream across four pages.
+/// forces the stream across five pages.
 fn representative() -> Vec<u8> {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
     bytes.extend(record(13, &[1]));
@@ -121,6 +131,23 @@ fn representative() -> Vec<u8> {
         bytes.extend(record(6, &[]));
     }
     bytes.extend(record(11, &[]));
+    // A middle-aligned cell two columns wide and two rows tall beside a bottom-aligned one.
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    let span: &[u8] = &[5, 2, 0];
+    bytes.extend(record(
+        5,
+        &slotted(&[(1, 1.0, span), (1, 1.0, &[8]), (1, 1.0, &[2])]),
+    ));
+    bytes.extend(plain(b"span"));
+    bytes.extend(plain(b"x"));
+    bytes.extend(record(6, &[]));
+    bytes.extend(record(
+        5,
+        &slotted(&[(1, 1.0, &[16]), (1, 1.0, &[16]), (1, 1.0, &[0])]),
+    ));
+    bytes.extend(plain(b"y"));
+    bytes.extend(record(6, &[]));
+    bytes.extend(record(4, &[]));
     bytes.extend(record(2, &5.0_f32.to_le_bytes()));
     bytes.extend(record(3, &0.0_f32.to_le_bytes()));
     bytes.extend(plain(b"Stacked"));
@@ -260,17 +287,18 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     let expected = decode(&bytes).unwrap();
     assert!(expected.starts_with(b"%PDF-"));
     let pdf = lopdf::Document::load_mem(&expected).unwrap();
-    assert_eq!(pdf.get_pages().len(), 4);
+    assert_eq!(pdf.get_pages().len(), 5);
     assert_eq!(
         pdf.extract_text(&[1]).unwrap().trim(),
         "Before\nBoxed\nrow\n1\n4"
     );
     assert_eq!(
         pdf.extract_text(&[2]).unwrap().trim(),
-        "head\nbody\nStacked"
+        "head\nbody\nspan\nx\ny"
     );
-    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Styled");
-    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
+    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Stacked\nStyled");
+    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "");
+    assert_eq!(pdf.extract_text(&[5]).unwrap().trim(), "After");
     for split in 0..=bytes.len() {
         let mut decoder = decoder();
         decoder.push(&bytes[..split]).unwrap();
@@ -443,6 +471,38 @@ fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
     oversized.extend(plain("word ".repeat(100).as_bytes()));
     oversized.extend(record(4, &[]));
     assert_eq!(push_error(&oversized), "PageOverflow");
+}
+
+#[test]
+fn given_bad_cell_slots_when_decoding_then_rejects() {
+    let row = |slots: &[(u8, f32, &[u8])], cells: usize| {
+        let mut bytes = record(5, &slotted(slots));
+        for _ in 0..cells {
+            bytes.extend(plain(b"x"));
+        }
+        bytes.extend(record(6, &[]));
+        bytes
+    };
+    let span: &[u8] = &[4, 2, 0];
+    for (body, error) in [
+        (row(&[(1, 1.0, &[3])], 1), "invalid cell slot"),
+        (row(&[(1, 1.0, &[4, 1, 0])], 1), "invalid row span"),
+        (row(&[(1, 1.0, &[8])], 0), "InvalidLayout"),
+        (row(&[(1, 1.0, &[16]), (1, 1.0, &[8])], 0), "InvalidLayout"),
+        (
+            [
+                record(3, &0.0_f32.to_le_bytes()),
+                row(&[(1, 1.0, span)], 1),
+                record(4, &[]),
+            ]
+            .concat(),
+            "InvalidLayout",
+        ),
+    ] {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        bytes.extend(body);
+        assert_eq!(push_error(&bytes), error);
+    }
 }
 
 #[test]

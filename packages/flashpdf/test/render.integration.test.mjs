@@ -622,11 +622,82 @@ test("given a table that spans two pages, when rendering, then the header row re
 		render(jsx("main", { children: jsx("tr", { children: jsx("td", { children: "x" }) }) })),
 		/<tr> belongs in a <table> on <tr> in <main>/,
 	);
+});
+
+test("given rows joined by rowSpan across a page end, when rendering, then they move to the next page together", async () => {
+	const pages = async (lead) => {
+		const pair = (index) => [
+			jsxs("tr", {
+				children: [
+					jsx("td", { rowSpan: 2, style: { verticalAlign: "middle" }, children: `Pair ${index}` }),
+					jsx("td", { children: `A${index}` }),
+				],
+			}),
+			jsx("tr", { children: jsx("td", { children: `B${index}` }) }),
+		];
+		const rows = [
+			...Array.from({ length: lead }, () =>
+				jsxs("tr", { children: [jsx("td", { children: "lead" }), jsx("td", { children: "-" })] }),
+			),
+			...Array.from({ length: 40 }, (_, index) => pair(index)).flat(),
+		];
+		const path = new URL(`../../../dist/table-row-span-${lead}.pdf`, import.meta.url);
+		writeFileSync(path, await render(jsx("table", { children: jsx("tbody", { children: rows }) })));
+		const parsed = spawnSync(
+			"cargo",
+			[
+				"run",
+				"--locked",
+				"-q",
+				"-p",
+				"flashpdf-core",
+				"--example",
+				"validate_pdf",
+				"--",
+				path.pathname,
+				"2",
+			],
+			{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+		);
+		assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+		return parsed.stdout.split("\f").map((page) => page.trim().split("\n"));
+	};
+	// One lead row shifts every pair by a row, so one of the two layouts would split a pair.
+	for (const lead of [0, 1]) {
+		const text = await pages(lead);
+		assert.equal(text.length, 2);
+		for (let index = 0; index < 40; index++)
+			assert.ok(
+				text.some((page) => page.includes(`A${index}`) && page.includes(`B${index}`)),
+				`pair ${index} split with ${lead} lead rows`,
+			);
+	}
+});
+
+test("given a table row or rowSpan rows taller than the page, when rendering, then rejects naming the first row", async () => {
+	const tall = Array.from({ length: 80 }, () => jsx("p", { children: "line" }));
 	await assert.rejects(
 		render(
-			jsx("table", { children: jsx("tr", { children: jsx("td", { colSpan: 2, children: "x" }) }) }),
+			jsx("table", {
+				children: jsx("tbody", {
+					children: jsx("tr", { className: "tall", children: jsx("td", { children: tall }) }),
+				}),
+			}),
 		),
-		/colSpan and rowSpan are not supported yet; use one cell per column on <td> in <tr> > <table>/,
+		/^Error: a table row is taller than the page beside its repeated header and footer; split its content on <tr\.tall> in <tbody> > <table>$/,
+	);
+	await assert.rejects(
+		render(
+			jsx("table", {
+				children: [
+					jsxs("tr", {
+						children: [jsx("td", { rowSpan: 2, children: tall }), jsx("td", { children: "a" })],
+					}),
+					jsx("tr", { children: jsx("td", { children: "b" }) }),
+				],
+			}),
+		),
+		/^Error: rows that rowSpan joins are taller than the page beside the repeated header and footer; shorten the spanning cell or split the rows on <tr> in <table>$/,
 	);
 });
 

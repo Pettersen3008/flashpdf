@@ -45,6 +45,11 @@ export type Style = {
 	breakBefore?: "auto" | "page";
 	breakAfter?: "auto" | "page";
 	breakInside?: "auto" | "avoid";
+	/** Table cells and rows only; `baseline` rejects. */
+	verticalAlign?: "top" | "middle" | "bottom";
+	borderCollapse?: "collapse" | "separate";
+	/** Only 0 is supported: cells tile their row. */
+	borderSpacing?: 0 | "0" | Length | `${Length} ${Length}`;
 	[customProperty: `--${string}`]: string | number | undefined;
 };
 
@@ -70,6 +75,11 @@ export type BlockProps = CommonProps & { children?: PdfNode | undefined };
 export type VoidProps = CommonProps & { children?: never };
 /** `src` is the PNG or JPEG file bytes; `alt` is stored for accessibility tagging. */
 export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined };
+/** `colSpan` is 1 to 256 and `rowSpan` 1 to 65535, within the cell's row group. */
+export type CellProps = BlockProps & {
+	colSpan?: number | undefined;
+	rowSpan?: number | undefined;
+};
 /** `href` must be an absolute `http:`, `https:`, or `mailto:` URL. */
 export type LinkProps = BlockProps & { href: string };
-export type PdfProps = BlockProps | VoidProps | ImageProps | LinkProps;
+export type PdfProps = BlockProps | VoidProps | ImageProps | LinkProps | CellProps;

@@ -20,6 +20,7 @@
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
 - Content streams set `rg` and `Tf` only when the page's fill colour or font changes, not again for every line and table cell, and print colours with three decimals instead of float noise such as `0.13333334`. The 10,000-row invoice's uncompressed content shrinks from 3.25 MB to 1.96 MB and the PDF from 288 KB to 265 KB.
 - The binary protocol is version 9: a `TableStart`'s footer rows follow its header rows, before the body rows. The JavaScript and WASM halves ship together, so this affects no public API.
+- The binary protocol is version 11: each `RowStart` column carries a slot byte that starts a cell with its vertical alignment and optional row span, joins the cell to its left, or marks a column a row span covers. The JavaScript and WASM halves ship together, so this affects no public API.
 ### Fixed
 
 - A table's body rows stream: the engine lays out and places each row as it arrives and keeps only the header, footer, and current row. Before, the whole table buffered, so 20,000 padded rows (30,000 plain) failed with `block exceeds 16 MiB`, and 10,000 rows grew WASM memory to 29 MB. 50,000 rows now render in 16 MB. A table inside a box with padding, a border, a background, or horizontal margins, a flex row, or a `break-inside: avoid` group still buffers whole.
@@ -39,6 +40,9 @@
 - `inherit` and `initial` on every supported property, and `currentcolor` as the element's own `color`.
 - `text-decoration-line`, with the values `text-decoration` takes, so Tailwind's `underline` and `line-through` work.
 - `rem` for `width` and image `height`, as minified Tailwind emits for `w-32`.
+- `colSpan` and `rowSpan` on `td` and `th`. A spanning cell takes the summed widths of its columns, and each column takes its width from its first cell without `colSpan`, so an invoice's "Subtotal" can span the description columns. Rows that a `rowSpan` joins stay in one row group and move between pages together; the last row grows when the spanning cell needs more height.
+- `vertical-align: top | middle | bottom` on `td` and `th`, and on `tr` and row groups for their cells. `baseline` rejects.
+- `border-collapse: collapse` draws one line between neighbouring cells: the wider border wins, and on a tie a cell's beats its row's. `border-collapse: separate` and `border-spacing: 0` describe what tables already draw; other spacing rejects.
 
 ### Fixed
 

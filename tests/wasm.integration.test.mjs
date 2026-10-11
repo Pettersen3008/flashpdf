@@ -68,7 +68,18 @@ function text(value, size = 10) {
 
 function row(left, right) {
 	return join(
-		record(5, join(u16(2), Uint8Array.of(0), f32(50), Uint8Array.of(1), f32(1))),
+		record(
+			5,
+			join(
+				u16(2),
+				Uint8Array.of(0),
+				f32(50),
+				Uint8Array.of(0),
+				Uint8Array.of(1),
+				f32(1),
+				Uint8Array.of(0),
+			),
+		),
 		text(left),
 		text(right),
 		record(6),

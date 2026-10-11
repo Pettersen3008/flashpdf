@@ -30,7 +30,7 @@ The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX templa
 
 ## Tables
 
-A `<table>` splits between rows and repeats its `<thead>` on every page. Column widths come from the first row's cells, cells stretch to the row height, and `th` is bold by default.
+A `<table>` splits between rows and repeats its `<thead>` on every page. Each column takes its width from its first cell without `colSpan`, cells stretch to the row height, and `th` is bold by default. `colSpan` and `rowSpan` span cells, `vertical-align: top | middle | bottom` places a cell's content, and `border-collapse: collapse` draws one line between neighbouring cells.
 
 ```tsx
 <table>
@@ -51,7 +51,7 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 </table>
 ```
 
-`colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+Rows that a `rowSpan` joins move between pages together, and a `rowSpan` stays inside its `thead`, `tbody`, or `tfoot`. `vertical-align: baseline`, `border-spacing` other than 0, and `<colgroup>` reject with a reason; see [CSS.md](./CSS.md).
 
 ## Images and links
 

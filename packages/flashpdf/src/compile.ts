@@ -3,7 +3,7 @@ import type { StyledElement } from "./css/cascade.js";
 import { inherited } from "./css/properties.js";
 import { glyphError } from "./fonts.js";
 import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
-import type { ProtocolWriter, Column, Run } from "./protocol.js";
+import type { ProtocolWriter, Column, Run, Slot } from "./protocol.js";
 import {
 	boxStyle,
 	color,
@@ -13,6 +13,7 @@ import {
 	helvetica,
 	lineHeight,
 	point,
+	spacing,
 	type Box,
 	type FontSlots,
 	type LineHeight,
@@ -32,8 +33,10 @@ type TextState = {
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
 };
+/** A cell's collapsed borders, and its row's background when rowSpan joins the row to others. */
+type CellPaint = Partial<Pick<Box, "border" | "borderColor" | "background">>;
 /** `cell` is set only for the direct children of a table row. */
-type Context = TextState & { inRow: boolean; cell?: boolean };
+type Context = TextState & { inRow: boolean; cell?: CellPaint };
 type Fonts = ReadonlyMap<string, FontSlots>;
 
 const ROOT: Context = {
@@ -50,6 +53,8 @@ const ROOT: Context = {
 };
 
 const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
+const VERTICAL_ALIGN = "vertical-align applies only to <td>, <th>, <tr>, and row groups";
+const TABLE_PARTS = new Set<string>(["td", "th", "tr", "thead", "tbody", "tfoot"]);
 
 /** CSS collapsible whitespace only; U+00A0 is content. */
 function blank(text: string) {
@@ -142,6 +147,7 @@ function inlineRuns(node: StyledNode, context: Context, fonts: Fonts): Run[] | u
 	try {
 		const style = node.style;
 		rowOnly(style, context.inRow);
+		if (style.verticalAlign !== undefined) throw new Error(VERTICAL_ALIGN);
 		if (
 			boxStyle(style, context.size) ||
 			style.breakBefore === "page" ||
@@ -256,6 +262,17 @@ function streamMargin(box: Box | undefined, context: Context, style: NormalizedS
 	);
 }
 
+function cellBox(box: Box | undefined, cell: CellPaint | undefined): Box | undefined {
+	if (!cell?.border && !cell?.background) return box;
+	const base = box ?? {
+		margin: [0, 0, 0, 0],
+		padding: [0, 0, 0, 0],
+		border: [0, 0, 0, 0],
+		borderColor: [BLACK, BLACK, BLACK, BLACK],
+	};
+	return { ...base, ...cell, background: base.background ?? cell.background };
+}
+
 function column(value: StyledNode): Column {
 	if (value.kind === "text") return { kind: 1, value: 1 };
 	const { flex, width } = value.style;
@@ -283,6 +300,8 @@ function element(
 	const style = node.style;
 	if (style.height !== undefined && node.tag !== "img")
 		throw new Error("height applies only to <img> (block height comes from content)");
+	if (style.verticalAlign !== undefined && !TABLE_PARTS.has(node.tag))
+		throw new Error(VERTICAL_ALIGN);
 	switch (node.tag) {
 		case "div":
 		case "main":
@@ -297,7 +316,7 @@ function element(
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
-			const paint = boxStyle(style, next.size);
+			const paint = cellBox(boxStyle(style, next.size), context.cell);
 			const streamed = streamMargin(paint, context, style);
 			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
 			box(writer, streamed ? undefined : paint, () => {
@@ -403,10 +422,27 @@ function element(
 }
 
 type RowGroup = { group?: StyledElement; rows: StyledElement[] };
+/** A `td` or `th` and the grid area it covers; `row` counts from the table's first row. */
+type GridCell = { node: StyledElement; row: number; column: number; columns: number; rows: number };
+type GridRow = {
+	node: StyledElement;
+	state: Context;
+	paint: Box | undefined;
+	cells: GridCell[];
+	slots: Slot[];
+	/** A rowSpan from an earlier row reaches this one. */
+	joined: boolean;
+};
+type GridGroup = { group?: StyledElement | undefined; rows: GridRow[] };
+type Edge = { width: number; color: [number, number, number] };
+
+const BLACK: [number, number, number] = [0, 0, 0];
+const ALIGN = { top: 0, middle: 1, bottom: 2 } as const;
 /** Rows and row groups sit inside the table, where `pageBreak` rejects both as nested. */
 const BREAKS = ["breakBefore", "breakAfter"] as const;
 
-/** `thead` groups first, then `tbody` and bare `tr` in source order, then `tfoot`, as browsers paint them. */
+/** `thead` groups first, then `tbody` and bare `tr` in source order, then `tfoot`, as browsers
+ *  paint them. Adjacent bare rows form one group, as HTML's implied `tbody` does. */
 function rowGroups(node: StyledElement): {
 	header: RowGroup[];
 	body: RowGroup[];
@@ -419,7 +455,9 @@ function rowGroups(node: StyledElement): {
 	for (const child of node.children) {
 		if (child.kind === "text") throw new Error(`${accepts}, not text`);
 		if (child.tag === "tr") {
-			body.push({ rows: [child] });
+			const last = body.at(-1);
+			if (last && !last.group) last.rows.push(child);
+			else body.push({ rows: [child] });
 			continue;
 		}
 		if (child.tag !== "thead" && child.tag !== "tbody" && child.tag !== "tfoot")
@@ -435,6 +473,68 @@ function rowGroups(node: StyledElement): {
 		});
 	}
 	return { header, body, footer };
+}
+
+function edge(box: Box | undefined, side: number): Edge {
+	return box
+		? { width: box.border[side]!, color: box.borderColor[side]! }
+		: { width: 0, color: BLACK };
+}
+
+/** The wider border wins; on a tie the earlier candidate does. */
+function widest(edges: Edge[]): Edge {
+	return edges.reduce((best, next) => (next.width > best.width ? next : best));
+}
+
+/** CSS 2.1 collapsed borders: each edge takes the widest border of the cells and rows that
+ *  meet there, a cell's beating its row's on a tie and the upper or left one beating the other.
+ *  A cell draws half of each shared edge and all of an outer one, so each line draws once. */
+function collapse(rows: GridRow[], width: number, boxes: ReadonlyMap<GridCell, Box | undefined>) {
+	const at = rows.map((): GridCell[] => []);
+	for (const row of rows)
+		for (const cell of row.cells)
+			for (let r = cell.row; r < cell.row + cell.rows; r++)
+				for (let c = cell.column; c < cell.column + cell.columns; c++) at[r]![c] = cell;
+	const near = (r: number, c: number) => boxes.get(at[r]![c]!);
+	const tr = (r: number) => rows[r]!.paint;
+	const paints = new Map<GridCell, CellPaint>();
+	for (const row of rows)
+		for (const cell of row.cells) {
+			const own = boxes.get(cell);
+			const { row: top, column: left } = cell;
+			const bottom = top + cell.rows;
+			const right = left + cell.columns;
+			const across = Array.from({ length: cell.columns }, (_, index) => left + index);
+			const down = Array.from({ length: cell.rows }, (_, index) => top + index);
+			const shared = [top > 0, right < width, bottom < rows.length, left > 0];
+			// Each side lists every segment's candidates in tie order.
+			const sides = [
+				across.map((c) =>
+					shared[0]
+						? [edge(near(top - 1, c), 2), edge(own, 0), edge(tr(top - 1), 2), edge(tr(top), 0)]
+						: [edge(own, 0), edge(tr(top), 0)],
+				),
+				down.map((r) =>
+					shared[1] ? [edge(own, 1), edge(near(r, right), 3)] : [edge(own, 1), edge(tr(r), 1)],
+				),
+				across.map((c) =>
+					shared[2]
+						? [edge(own, 2), edge(near(bottom, c), 0), edge(tr(bottom - 1), 2), edge(tr(bottom), 0)]
+						: [edge(own, 2), edge(tr(bottom - 1), 2)],
+				),
+				down.map((r) =>
+					shared[3] ? [edge(near(r, left - 1), 1), edge(own, 3)] : [edge(own, 3), edge(tr(r), 3)],
+				),
+			];
+			const winners = sides.map((segments) => widest(segments.map(widest)));
+			paints.set(cell, {
+				border: winners.map((item, side) =>
+					shared[side] ? item.width / 2 : item.width,
+				) as Box["border"],
+				borderColor: winners.map((item) => item.color) as Box["borderColor"],
+			});
+		}
+	return paints;
 }
 
 function table(
@@ -458,53 +558,18 @@ function table(
 			[...paint.padding, ...paint.border].some(Boolean))
 	)
 		throw new Error("<table> accepts only vertical margins; style its cells or a wrapping <div>");
-	const { header, body, footer } = rowGroups(node);
-	const rows = [...header, ...body, ...footer].flatMap((group) => group.rows);
-	const first = rows[0];
-	if (!first) throw new Error("<table> has no rows");
-	const cells = (row: StyledElement) =>
-		row.children.map((cell) => {
-			if (cell.kind === "text" || (cell.tag !== "td" && cell.tag !== "th"))
-				throw locate(new Error("<tr> accepts only <td> and <th>"), row.where);
-			return cell;
-		});
-	const columns = cells(first).map(column);
-	for (const row of rows) {
-		const count = cells(row).length;
-		if (count !== columns.length)
-			throw locate(
-				new Error(`<tr> has ${count} cells but the table has ${columns.length} columns`),
-				row.where,
-			);
-	}
-	// A parent flex row already consumed `width` as this table's track.
-	const width: Column = context.inRow ? { kind: 1, value: 1 } : column(node);
-	if (paint?.margin[0]) writer.spacer(paint.margin[0]);
+	const collapsed = style.borderCollapse === "collapse";
+	if (!collapsed && style.borderSpacing !== undefined && spacing(style.borderSpacing))
+		throw new Error(
+			"border-spacing is not implemented: cells tile their row; use cell padding, or border-collapse: collapse for single rules",
+		);
 	const inner = { ...next, inRow: false };
-	/** Element path of each table child, indexed as the renderer reports an overflowing row. */
-	const wheres: string[] = [];
-	const row = (tr: StyledElement, state: Context) => {
-		try {
-			rowOnly(tr.style, false);
-			for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
-			const own = inherit(tr.style, state, fonts);
-			box(writer, boxStyle(tr.style, own.size), () => {
-				writer.rowStart(columns);
-				compile(
-					tr.children,
-					writer,
-					fonts,
-					{ ...own, inRow: true, cell: true },
-					depth + 2,
-					pageTokens,
-				);
-				writer.rowEnd();
-			});
-		} catch (error) {
-			throw locate(error, tr.where);
-		}
-	};
-	const group = ({ group, rows }: RowGroup, repeated: boolean) => {
+	const { header, body, footer } = rowGroups(node);
+
+	// Places each cell in the next column that no rowSpan from an earlier row covers, as HTML does.
+	let width = 0;
+	const rows: GridRow[] = [];
+	const place = ({ group, rows: trs }: RowGroup): GridGroup => {
 		let state = inner;
 		if (group)
 			try {
@@ -516,40 +581,190 @@ function table(
 			} catch (error) {
 				throw locate(error, group.where);
 			}
+		let covered: number[] = [];
+		let reach = 0;
+		const placed = trs.map((tr, index) => {
+			try {
+				rowOnly(tr.style, false);
+				for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
+				const own = { ...inherit(tr.style, state, fonts), inRow: false };
+				const row: GridRow = {
+					node: tr,
+					state: own,
+					paint: boxStyle(tr.style, own.size),
+					cells: [],
+					slots: [],
+					joined: index < reach,
+				};
+				const skip = () => {
+					while (covered[row.slots.length]) row.slots.push("covered");
+				};
+				for (const cell of tr.children) {
+					if (cell.kind === "text" || (cell.tag !== "td" && cell.tag !== "th"))
+						throw new Error("<tr> accepts only <td> and <th>");
+					skip();
+					const column = row.slots.length;
+					const columns = cell.colSpan ?? 1;
+					const span = cell.rowSpan ?? 1;
+					if (index + span > trs.length)
+						throw locate(
+							new Error(
+								`rowSpan ${span} runs past the last row of its ${group ? `<${group.tag}>` : "row group"}; rows joined by rowSpan stay in one row group`,
+							),
+							cell.where,
+						);
+					if (columns > 1 && (cell.style.width !== undefined || cell.style.flex !== undefined))
+						throw locate(
+							new Error(
+								"width and flex size one column; set them on a cell without colSpan in that column",
+							),
+							cell.where,
+						);
+					const align =
+						ALIGN[
+							cell.style.verticalAlign ??
+								tr.style.verticalAlign ??
+								group?.style.verticalAlign ??
+								"top"
+						];
+					for (let c = column; c < column + columns; c++) {
+						if (covered[c])
+							throw locate(
+								new Error("colSpan runs into a cell that rowSpan brings down from an earlier row"),
+								cell.where,
+							);
+						covered[c] = span;
+						row.slots.push(c === column ? { align, rows: span } : "join");
+					}
+					row.cells.push({ node: cell, row: rows.length, column, columns, rows: span });
+					reach = Math.max(reach, index + span);
+				}
+				skip();
+				if (!row.slots.length) throw new Error("<tr> has no cells");
+				width ||= row.slots.length;
+				if (row.slots.length !== width)
+					throw new Error(`<tr> has ${row.slots.length} cells but the table has ${width} columns`);
+				covered = covered.map((count) => count - 1);
+				rows.push(row);
+				return row;
+			} catch (error) {
+				throw locate(error, tr.where);
+			}
+		});
+		return { group, rows: placed };
+	};
+	const [heads, bodies, feet] = [header, body, footer].map((groups) => groups.map(place));
+	if (!rows.length) throw new Error("<table> has no rows");
+	const cells = rows.flatMap((row) => row.cells);
+	// Each column takes its width from its first cell without colSpan.
+	const columns = Array.from({ length: width }, (_, index): Column => {
+		const cell = cells.find((item) => item.column === index && item.columns === 1);
+		return cell ? column(cell.node) : { kind: 1, value: 1 };
+	});
+	const paints = collapsed
+		? collapse(
+				rows,
+				width,
+				new Map(
+					rows.flatMap((row) =>
+						row.cells.map((cell) => {
+							try {
+								const size = inherit(cell.node.style, row.state, fonts).size;
+								return [cell, boxStyle(cell.node.style, size)] as const;
+							} catch (error) {
+								throw locate(error, cell.node.where);
+							}
+						}),
+					),
+				),
+			)
+		: undefined;
+	// A parent flex row already consumed `width` as this table's track.
+	const track: Column = context.inRow ? { kind: 1, value: 1 } : column(node);
+	if (paint?.margin[0]) writer.spacer(paint.margin[0]);
+	/** Element path of each table child, indexed as the renderer reports an overflowing row. */
+	const wheres: { where: string; joined: boolean }[] = [];
+	const row = (item: GridRow, joined: boolean) => {
+		try {
+			// Collapsed borders belong to the cells.
+			const own =
+				collapsed && item.paint
+					? { ...item.paint, border: [0, 0, 0, 0] as Box["border"] }
+					: item.paint;
+			const shaped = own && [...own.margin, ...own.padding, ...own.border].some(Boolean);
+			if (joined && shaped)
+				throw new Error(
+					"a <tr> that rowSpan joins to other rows takes only a background; style its cells",
+				);
+			// Joined rows lay out as one block, so each row's background paints in its own cells.
+			box(writer, joined || !(shaped || own?.background) ? undefined : own, () => {
+				writer.rowStart(columns, item.slots);
+				for (const cell of item.cells)
+					compile(
+						[cell.node],
+						writer,
+						fonts,
+						{
+							...item.state,
+							inRow: true,
+							cell: { ...paints?.get(cell), ...(joined && { background: own?.background }) },
+						},
+						depth + 2,
+						pageTokens,
+					);
+				writer.rowEnd();
+			});
+		} catch (error) {
+			throw locate(error, item.node.where);
+		}
+	};
+	const group = ({ group, rows }: GridGroup, repeated: boolean) => {
 		// Header and footer rows always share a page, so `break-inside: avoid` only groups body rows.
-		if (group?.style.breakInside === "avoid" && !repeated) {
+		const avoid = group?.style.breakInside === "avoid" && !repeated;
+		// Each path goes in first: the engine rejects an overflowing child the moment it closes.
+		if (avoid) {
+			wheres.push({ where: group!.where, joined: false });
 			writer.stackStart(0);
-			for (const tr of rows) row(tr, state);
-			writer.stackEnd();
-			wheres.push(group.where);
-			return;
 		}
-		for (const tr of rows) {
-			row(tr, state);
-			wheres.push(tr.where);
+		for (let start = 0; start < rows.length;) {
+			let end = start + 1;
+			while (rows[end]?.joined) end++;
+			// Rows that rowSpan joins move between pages together, like break-inside: avoid.
+			const joined = end - start > 1;
+			if (!avoid) wheres.push({ where: rows[start]!.node.where, joined });
+			if (joined) writer.stackStart(0);
+			for (const item of rows.slice(start, end)) row(item, joined);
+			if (joined) writer.stackEnd();
+			start = end;
 		}
+		if (avoid) writer.stackEnd();
 	};
 	try {
 		if (style.breakInside === "avoid") writer.stackStart(0);
-		const count = (groups: RowGroup[]) =>
-			groups.reduce((total, { rows }) => total + rows.length, 0);
-		writer.tableStart(count(header), count(footer), width);
+		const count = (groups: GridGroup[]) =>
+			groups.reduce((total, { rows }) => total + rows.filter((item) => !item.joined).length, 0);
+		writer.tableStart(count(heads!), count(feet!), track);
 		// Footer rows precede the body so the engine can reserve them and place each body row on arrival.
-		for (const item of header) group(item, true);
-		for (const item of footer) group(item, true);
-		for (const item of body) group(item, false);
+		for (const item of heads!) group(item, true);
+		for (const item of feet!) group(item, true);
+		for (const item of bodies!) group(item, false);
 		writer.tableEnd();
 		if (style.breakInside === "avoid") writer.stackEnd();
 	} catch (error) {
 		if (!(error instanceof Error)) throw error;
-		const overflow = /^TableRowOverflow\((\d+)\)$/.exec(error.message);
-		if (overflow)
+		// A row that overflows as it closes inside `row()` already carries its path.
+		const overflow = /^TableRowOverflow\((\d+)\)/.exec(error.message);
+		if (overflow) {
+			const child = wheres[Number(overflow[1])];
 			throw locate(
 				new Error(
-					"a table row is taller than the page beside its repeated header and footer; split its content",
+					child?.joined
+						? "rows that rowSpan joins are taller than the page beside the repeated header and footer; shorten the spanning cell or split the rows"
+						: "a table row is taller than the page beside its repeated header and footer; split its content",
 				),
-				wheres[Number(overflow[1])] ?? node.where,
+				child?.where ?? node.where,
 			);
+		}
 		if (error.message === "PageOverflow")
 			throw locate(
 				new Error(
