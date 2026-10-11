@@ -12,6 +12,8 @@ const INITIAL: Record<string, unknown> = {
 	textAlign: "left",
 	textDecoration: "none",
 	lineHeight: "normal",
+	orphans: 2,
+	widows: 2,
 	backgroundColor: "transparent",
 	...Object.fromEntries(
 		SIDES.flatMap((side) => [

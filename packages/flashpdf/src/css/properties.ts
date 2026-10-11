@@ -50,6 +50,8 @@ const properties = {
 	verticalAlign: { css: "vertical-align" },
 	borderCollapse: { css: "border-collapse", inherited: true },
 	borderSpacing: { css: "border-spacing", inherited: true },
+	orphans: { inherited: true },
+	widows: { inherited: true },
 	minWidth: {
 		css: "min-width",
 		unsupported: "only width on a flex row child is implemented",

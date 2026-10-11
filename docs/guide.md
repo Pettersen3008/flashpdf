@@ -1,6 +1,6 @@
 # FlashPDF guide
 
-Setup for bundlers and browsers, fixes for common rejections, three recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
+Setup for bundlers and browsers, fixes for common rejections, four recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
 
 ## Bundlers and runtimes
 
@@ -48,6 +48,9 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into a `header`, `footer`, `firstPageHeader`, or `firstPageFooter` option. |
 | `PageOverflow: with footer, the header and footer take more than half the page` | The body keeps at least half the page between the margins. | Shorten the header or footer, or move the tall part into the body. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
+| `breakBefore: left is not supported (pages have no sides; use page)` | `left`, `right`, `recto`, and `verso` pick a page side, and pages have none. | Use `page`. |
+| `invalid orphans: 0 (use a whole number of lines from 1)` | `orphans` and `widows` count lines. | Use 1 to break wherever the page ends. |
+| `nested break-before is not implemented` | Flex rows, table rows, and `break-inside: avoid` groups never break inside. | Put the break on the flex row, the table, or the group. |
 
 ## Recipes
 
@@ -97,7 +100,25 @@ const tax = Math.round(subtotal * 0.25);
 </table>
 ```
 
-Add amounts as integer cents and round once. `breakInside: 'avoid'` on the second `tbody` keeps the three totals rows on one page.
+Add amounts as integer cents and round once. `breakInside: 'avoid'` keeps the three rows on one page, and `breakBefore: 'avoid'` keeps them with the last item rows, so the totals never start a page alone.
+
+### Page breaks
+
+Pages break as in CSS: between blocks, between table rows, and between the lines of a paragraph, keeping at least two lines on each side (`orphans` and `widows`). A box with a border or background that crosses the page end splits there, drawing its top edge on the first page and its bottom edge on the last.
+
+```tsx
+<section style={{ breakBefore: 'page' }}>        {/* start on a new page */}
+  <h2>Payment terms</h2>                          {/* stays with the next lines */}
+  <p style={{ orphans: 3, widows: 3 }}>…</p>      {/* three lines on each side of a break */}
+  <div style={{ breakInside: 'avoid', border: '1pt solid #d0d5dd', padding: 8 }}>
+    Bank details, kept on one page
+  </div>
+</section>
+```
+
+Headings `h1` to `h6` default to `breakAfter: 'avoid'`, so a heading moves to the next page when the first two lines of its paragraph do not fit below it. That leaves space at the bottom of the page on purpose; set `breakAfter: 'auto'` on the heading to fill it instead. `breakAfter: 'avoid'` on a `tr` keeps it with the next row, under the repeated header.
+
+When avoid rules leave no break point on a page, FlashPDF breaks anyway rather than lose content, first ignoring `orphans` and `widows`, then the avoid rules. It holds back at most one page of content for these decisions, so a run of avoided breaks taller than a page breaks where the page ends. A `breakInside: 'avoid'` box taller than a page rejects with `PageOverflow`.
 
 ### Page X of Y footer and a first-page letterhead
 
@@ -156,6 +177,7 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `fixed` header or footer | The `header` and `footer` options, which take any element tree. `firstPageHeader` and `firstPageFooter` cover a different first page. |
 | `render={({ pageNumber, totalPages }) => …}` | `<PageNumber />` and `<TotalPages />` anywhere inside a header or footer option. |
 | `wrap={false}` | `breakInside: 'avoid'`. |
+| `orphans`, `widows`, `minPresenceAhead` | The `orphans` and `widows` CSS properties, 2 by default, and `breakAfter: 'avoid'` to keep an element with what follows. |
 | `renderToBuffer`, `renderToStream`, `pdf().toBlob()` | `await render(…)` returns a `Uint8Array`. Wrap it in a `Blob` yourself. |
 | `PDFViewer`, `PDFDownloadLink` | None. FlashPDF ships no viewer or download helper. |
 

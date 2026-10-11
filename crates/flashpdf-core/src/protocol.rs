@@ -25,19 +25,17 @@ use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun};
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
-/// An open Stack, Row or nested Table buffers its commands until it closes, and so
-/// does a Box until it proves taller than a page; a Table outside them buffers its
-/// header and footer rows, then one body row at a time.
+/// An open Stack, Row or nested Table, and a Box inside one, buffers its commands
+/// until it closes; a Table outside them buffers its header and footer rows, then
+/// one body row at a time.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
-/// A held Box is measured each time its buffer doubles past this size.
-const MEASURE_BYTES: usize = 64 * 1024;
 /// Total bytes of registered fonts per render.
 const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 /// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 30;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 12;
+const VERSION: u16 = 18;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -56,8 +54,6 @@ pub struct Decoder {
     renderer: Option<crate::Renderer>,
     block: Vec<OwnedCommand>,
     block_bytes: usize,
-    /// `block_bytes` when the held box was last measured.
-    measured: usize,
     frames: Vec<Frame>,
     ended: bool,
     fonts: Vec<crate::EmbeddedFont>,
@@ -264,14 +260,25 @@ impl Decoder {
             }
             Opcode::PageBreak => {
                 cursor.done()?;
-                if !self.frames.is_empty() || self.furniture.is_some() {
+                if !self.placing() || self.furniture.is_some() {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 self.body_started = true;
                 self.ensure_renderer()?.page_break();
                 Ok(())
             }
-            // The next top-level block is the header or footer, for every page or the first.
+            Opcode::Avoid => {
+                cursor.done()?;
+                // Inside a held block every break is already avoided.
+                if self.placing()
+                    || matches!(self.frames.last(), Some(Frame::Table { head: Some(0) }))
+                {
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.avoid();
+                    }
+                }
+                Ok(())
+            }
             Opcode::Footer | Opcode::Header => {
                 let first = match cursor.take(1)?[0] {
                     0 => false,
@@ -385,6 +392,10 @@ impl Decoder {
             }
             Opcode::Paragraph => {
                 let align = cursor.align()?;
+                let keep = [cursor.u16()?, cursor.u16()?];
+                if keep.contains(&0) {
+                    return Err(ProtocolError::InvalidValue("orphans or widows"));
+                }
                 let links: Vec<String> = (0..cursor.u16()?)
                     .map(|_| cursor.uri().map(str::to_owned))
                     .collect::<Result<_, _>>()?;
@@ -431,7 +442,7 @@ impl Decoder {
                     });
                 }
                 cursor.done()?;
-                self.feed(OwnedCommand::Paragraph(align, text, runs, links))
+                self.feed(OwnedCommand::Paragraph(align, keep, text, runs, links))
             }
             Opcode::Image => {
                 let slot = cursor.u16()?;
@@ -574,7 +585,7 @@ impl Decoder {
 
     fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let payload = match &command {
-            OwnedCommand::Paragraph(_, text, runs, links) => {
+            OwnedCommand::Paragraph(_, _, text, runs, links) => {
                 text.len()
                     + runs.len() * size_of::<TextRun>()
                     + links
@@ -599,8 +610,7 @@ impl Decoder {
         Ok(())
     }
 
-    /// Routes a decoded layout command. A held box that starts streaming replays
-    /// its buffered commands through here.
+    /// Routes a decoded layout command.
     fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = match &command {
             OwnedCommand::StackStart(_) => Frame::Stack,
@@ -637,55 +647,7 @@ impl Decoder {
         if self.placing() {
             return self.flush_block(crate::Renderer::push_owned);
         }
-        if matches!(self.frames.last(), Some(Frame::Table { head: Some(_) })) {
-            return self.stream_table();
-        }
-        self.measure()
-    }
-
-    /// Starts streaming a held box once it is atomic and taller than a page, so a
-    /// long box buffers about a page instead of its whole content.
-    fn measure(&mut self) -> Result<(), ProtocolError> {
-        if self.block_bytes < MEASURE_BYTES.max(self.measured * 2) {
-            return Ok(());
-        }
-        let start = self
-            .frames
-            .iter()
-            .take_while(|frame| matches!(frame, Frame::Box(true)))
-            .count();
-        let held = &self.frames[start..];
-        // A partial Row or Stack cannot be closed early, so the box waits for it to end.
-        if !matches!(held.first(), Some(Frame::Box(false)))
-            || held
-                .iter()
-                .any(|frame| matches!(frame, Frame::Stack | Frame::Row { .. }))
-        {
-            return Ok(());
-        }
-        self.measured = self.block_bytes;
-        let mut block = std::mem::take(&mut self.block);
-        let length = block.len();
-        block.extend(held.iter().rev().map(|frame| match frame {
-            Frame::Box(_) => OwnedCommand::BoxEnd,
-            _ => OwnedCommand::TableEnd,
-        }));
-        let renderer = self.ensure_renderer()?;
-        let overflows = renderer.overflows(&block);
-        block.truncate(length);
-        if !overflows {
-            self.block = block;
-            return Ok(());
-        }
-        let mut commands = block.into_iter();
-        if let Some(OwnedCommand::BoxStart(style)) = commands.next() {
-            renderer.open_box(style)?;
-        }
-        self.frames.truncate(start);
-        self.frames.push(Frame::Box(true));
-        self.block_bytes = 0;
-        self.measured = 0;
-        commands.try_for_each(|command| self.feed(command))
+        self.stream_table()
     }
 
     /// Runs after a streaming table's `TableStart` and after each of its children:
@@ -709,7 +671,12 @@ impl Decoder {
         if self.frames.len() >= MAX_LAYOUT_DEPTH {
             return Err(ProtocolError::NestingTooDeep);
         }
-        self.push_command(command)?;
+        match (frame, command) {
+            (Frame::Box(true), OwnedCommand::BoxStart(style)) => {
+                self.ensure_renderer()?.open_box(style)?
+            }
+            (_, command) => self.push_command(command)?,
+        }
         self.frames.push(frame);
         Ok(())
     }
@@ -761,7 +728,6 @@ impl Decoder {
         self.block = block;
         self.block.clear();
         self.block_bytes = 0;
-        self.measured = 0;
         result
     }
 

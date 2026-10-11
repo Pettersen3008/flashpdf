@@ -38,6 +38,7 @@ const opcode = {
 	boxEnd: 18,
 	pdfa: 20,
 	attachment: 21,
+	avoid: 22,
 	end: 255,
 } as const;
 
@@ -82,7 +83,7 @@ export class ProtocolWriter {
 		});
 	}
 
-	paragraph(runs: readonly Run[], align: string) {
+	paragraph(runs: readonly Run[], align: string, orphans: number, widows: number) {
 		const alignment = align === "center" ? 1 : align === "right" ? 2 : 0;
 		const links: string[] = [];
 		for (const run of runs)
@@ -91,6 +92,8 @@ export class ProtocolWriter {
 		try {
 			this.binary.record(opcode.paragraph, () => {
 				this.binary.u8(alignment);
+				this.binary.u16(orphans);
+				this.binary.u16(widows);
 				this.binary.u16(links.length);
 				for (const link of links) this.binary.text(link);
 				this.binary.u16(runs.length);
@@ -210,6 +213,11 @@ export class ProtocolWriter {
 	pageBreak() {
 		if (this.repeating) throw new Error(`${this.repeating} cannot break the page`);
 		this.binary.record(opcode.pageBreak);
+	}
+
+	/** Avoids a page break here; a header or footer line has no breaks. */
+	avoid() {
+		if (!this.repeating) this.binary.record(opcode.avoid);
 	}
 
 	/** The engine takes the next top-level block, this stack, as the header or footer. */

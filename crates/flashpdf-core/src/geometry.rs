@@ -118,10 +118,6 @@ impl PageCursor {
         Self { y: page.top() }
     }
 
-    pub(crate) fn fits(&self, height: Pt, page: PageLayout) -> bool {
-        height <= self.remaining(page)
-    }
-
     pub(crate) fn remaining(&self, page: PageLayout) -> Pt {
         self.y - page.bottom()
     }

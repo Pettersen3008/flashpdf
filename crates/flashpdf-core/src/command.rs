@@ -18,6 +18,8 @@ pub enum Command<'a> {
     /// `runs` slice `text` consecutively and must cover it exactly on char boundaries.
     Paragraph {
         align: TextAlign,
+        orphans: u16,
+        widows: u16,
         text: &'a str,
         runs: &'a [TextRun],
         /// URIs the runs' `decoration.link` index into.
@@ -47,6 +49,8 @@ pub enum Command<'a> {
     },
     TableEnd,
     PageBreak,
+    /// Avoids a page break at this point, between the blocks around it.
+    Avoid,
     /// A registered image as an atomic block box; `height` follows the aspect ratio when absent.
     Image {
         slot: u16,
@@ -79,7 +83,7 @@ pub enum Slot {
 /// The protocol's decoded form owns data across input chunks.
 #[derive(Clone)]
 pub(crate) enum OwnedCommand {
-    Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>),
+    Paragraph(TextAlign, [u16; 2], String, Vec<TextRun>, Vec<String>),
     BoxStart(BoxStyle),
     BoxEnd,
     Spacer(Pt),
@@ -95,8 +99,10 @@ pub(crate) enum OwnedCommand {
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Paragraph(align, text, runs, links) => Command::Paragraph {
+            Self::Paragraph(align, [orphans, widows], text, runs, links) => Command::Paragraph {
                 align: *align,
+                orphans: *orphans,
+                widows: *widows,
                 text,
                 runs,
                 links,
@@ -187,18 +193,21 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_block(&mut self) -> Result<Block<'a>, CommandParseError> {
-        if self.peek() == Some(Command::PageBreak) {
-            self.index += 1;
-            Ok(Block::PageBreak)
-        } else {
-            Ok(Block::Element(self.parse_element(0)?))
-        }
+        let block = match self.peek() {
+            Some(Command::PageBreak) => Block::PageBreak,
+            Some(Command::Avoid) => Block::Avoid,
+            _ => return Ok(Block::Element(self.parse_element(0)?)),
+        };
+        self.index += 1;
+        Ok(block)
     }
 
     fn parse_element(&mut self, depth: usize) -> Result<Element<'a>, CommandParseError> {
         match self.next()? {
             Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
                 align: style.align,
+                orphans: 2,
+                widows: 2,
                 text,
                 runs: vec![TextRun {
                     len: text.len(),
@@ -213,11 +222,15 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             })),
             Command::Paragraph {
                 align,
+                orphans,
+                widows,
                 text,
                 runs,
                 links,
             } => Ok(Element::Paragraph(Paragraph {
                 align,
+                orphans,
+                widows,
                 text,
                 runs: runs.to_vec(),
                 links,
@@ -305,7 +318,8 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             | Command::StackEnd
             | Command::RowEnd
             | Command::TableEnd
-            | Command::PageBreak => Err(CommandParseError::UnexpectedCommand),
+            | Command::PageBreak
+            | Command::Avoid => Err(CommandParseError::UnexpectedCommand),
         }
     }
 

@@ -42,9 +42,13 @@ export type Style = {
 	textAlign?: "left" | "center" | "right";
 	textDecoration?: "none" | "underline" | "line-through" | "underline line-through";
 	color?: string;
-	breakBefore?: "auto" | "page";
-	breakAfter?: "auto" | "page";
-	breakInside?: "auto" | "avoid";
+	breakBefore?: "auto" | "page" | "avoid" | "avoid-page";
+	breakAfter?: "auto" | "page" | "avoid" | "avoid-page";
+	breakInside?: "auto" | "avoid" | "avoid-page";
+	/** Lines of a paragraph a page break leaves before it; 2 by default. */
+	orphans?: number;
+	/** Lines of a paragraph a page break carries after it; 2 by default. */
+	widows?: number;
 	/** Table cells and rows only; `baseline` rejects. */
 	verticalAlign?: "top" | "middle" | "bottom";
 	borderCollapse?: "collapse" | "separate";

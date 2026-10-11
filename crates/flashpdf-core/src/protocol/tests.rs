@@ -1,4 +1,4 @@
-use super::{Decoder, HEADER_LEN, MAGIC, MAX_BLOCK_BYTES, MAX_FONT_BYTES, MEASURE_BYTES, VERSION};
+use super::{Decoder, HEADER_LEN, MAGIC, MAX_BLOCK_BYTES, MAX_FONT_BYTES, VERSION};
 use crate::OwnedCommand;
 
 fn header(version: u16, width: f32, height: f32, margin: f32) -> Vec<u8> {
@@ -66,7 +66,8 @@ type LinkedRun<'a> = (u8, f32, [u8; 3], u8, Option<u16>, &'a [u8]);
 
 /// `links` is the URI table the runs' link indices point into.
 fn linked_paragraph(align: u8, links: &[&[u8]], runs: &[LinkedRun<'_>]) -> Vec<u8> {
-    let mut payload = vec![align];
+    // One orphan and one widow, so lines break wherever the page ends.
+    let mut payload = vec![align, 1, 0, 1, 0];
     payload.extend((links.len() as u16).to_le_bytes());
     for link in links {
         payload.extend(text(link));
@@ -117,6 +118,7 @@ fn representative() -> Vec<u8> {
     bytes.extend(paragraph(0, &[(0, 1.0, [0, 0, 0], 0, b"\x1f")]));
     bytes.extend(record(4, &[]));
     bytes.extend(plain(b"Before"));
+    bytes.extend(record(22, &[]));
     bytes.extend(box_start());
     bytes.extend(plain(b"Boxed"));
     bytes.extend(record(18, &[]));
@@ -352,13 +354,19 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&unsupported), "UnsupportedCharacter('🙂')");
 
     let mut bad_length = header(VERSION, 120.0, 60.0, 10.0);
-    let mut payload = vec![0, 0, 0, 1, 0, 0];
+    let mut payload = vec![0, 1, 0, 1, 0, 0, 0, 1, 0, 0];
     payload.extend(10.0_f32.to_le_bytes());
     payload.extend([0, 0, 0, 0]);
     payload.extend(4_u32.to_le_bytes());
     payload.push(b'x');
     bad_length.extend(record(9, &payload));
     assert_eq!(push_error(&bad_length), "truncated record");
+
+    let mut no_widows = header(VERSION, 120.0, 60.0, 10.0);
+    let mut zero = plain(b"x");
+    zero[8] = 0;
+    no_widows.extend(zero);
+    assert_eq!(push_error(&no_widows), "invalid orphans or widows");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
     bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 32, b"x")]));
@@ -793,7 +801,7 @@ fn given_a_painted_box_around_a_table_over_the_block_cap_when_decoding_then_buff
     decoder.push(&record(10, &table_start(1))).unwrap();
     for _ in 0..=rows {
         decoder.push(&row).unwrap();
-        assert!(decoder.block_bytes < 2 * MEASURE_BYTES);
+        assert!(decoder.block_bytes < 1024);
     }
     decoder.push(&record(11, &[])).unwrap();
     decoder.push(&record(18, &[])).unwrap();

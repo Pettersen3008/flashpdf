@@ -41,7 +41,7 @@ test("given text with an inline bold child, when compiling, then emits one parag
 	const calls = await compiled(
 		jsxs("p", { children: ["Hello ", jsx("b", { children: "World" })] }),
 	);
-	assert.deepEqual(calls, [["paragraph", [run(0, "Hello "), run(1, "World")], "left"]]);
+	assert.deepEqual(calls, [["paragraph", [run(0, "Hello "), run(1, "World")], "left", 2, 2]]);
 });
 
 test("given a br between text, when compiling, then flags a hard break on the preceding run", async () => {
@@ -53,6 +53,8 @@ test("given a br between text, when compiling, then flags a hard break on the pr
 			"paragraph",
 			[run(0, "one", { break: true }), run(0, "", { break: true }), run(0, "two")],
 			"left",
+			2,
+			2,
 		],
 	]);
 });
@@ -103,6 +105,8 @@ test("given a link inside a paragraph, when compiling, then its runs carry the h
 				run(0, " old", { lineThrough: true }),
 			],
 			"left",
+			2,
+			2,
 		],
 	]);
 });
@@ -145,7 +149,7 @@ test("given a table with thead and tbody, when compiling, then emits the contain
 		["rowStart", columns, [top, top]],
 		...texts.flatMap((text) => [
 			["stackStart", 0],
-			["paragraph", [run(font, text)], "left"],
+			["paragraph", [run(font, text)], "left", 2, 2],
 			["stackEnd"],
 		]),
 		["rowEnd"],
@@ -363,6 +367,21 @@ test("given an hr with break-before: page, when compiling, then breaks the page 
 	);
 });
 
+test("given orphans and widows on a block, when compiling, then its paragraphs inherit them", async () => {
+	const calls = await compiled(
+		jsx("div", { style: { orphans: 3, widows: "1" }, children: jsx("p", { children: "x" }) }),
+	);
+	assert.deepEqual(calls, [["paragraph", [run(0, "x")], "left", 3, 1]]);
+});
+
+test("given break-inside: avoid on a paragraph, when compiling, then it is one kept-together group", async () => {
+	const calls = await compiled(jsx("p", { style: { breakInside: "avoid-page" }, children: "x" }));
+	assert.deepEqual(
+		calls.map(([method]) => method),
+		["stackStart", "paragraph", "stackEnd"],
+	);
+});
+
 test("given width on an hr or padding on a br, when compiling, then rejects instead of dropping it", async () => {
 	await assert.rejects(
 		compiled(jsx("hr", { style: { width: "50%" } })),
@@ -381,7 +400,11 @@ test("given a flex row with a 12pt gap, when compiling, then a fixed 12pt empty 
 			children: [jsx("div", { children: "a" }), jsx("div", { children: "b" })],
 		}),
 	);
-	const cell = (text) => [["stackStart", 0], ["paragraph", [run(0, text)], "left"], ["stackEnd"]];
+	const cell = (text) => [
+		["stackStart", 0],
+		["paragraph", [run(0, text)], "left", 2, 2],
+		["stackEnd"],
+	];
 	assert.deepEqual(calls, [
 		[
 			"rowStart",
@@ -422,11 +445,11 @@ test("given whitespace-only text between flex items and column children, when co
 				{ kind: 1, value: 1 },
 			],
 		],
-		["paragraph", [run(0, "a")], "left"],
-		["paragraph", [run(0, "b")], "left"],
+		["paragraph", [run(0, "a")], "left", 2, 2],
+		["paragraph", [run(0, "b")], "left", 2, 2],
 		["rowEnd"],
 		["spacer", 10],
-		["paragraph", [run(0, "c "), run(1, "d")], "left"],
+		["paragraph", [run(0, "c "), run(1, "d")], "left", 2, 2],
 	]);
 });
 
@@ -442,6 +465,8 @@ test("given a unitless line-height on a block, when a child changes font size, t
 			"paragraph",
 			[run(0, "a", { lineHeight: 18 }), run(0, "b", { size: 20, lineHeight: 30 })],
 			"left",
+			2,
+			2,
 		],
 	]);
 });
