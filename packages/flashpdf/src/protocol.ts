@@ -50,7 +50,7 @@ export class ProtocolWriter {
 		private readonly assets: { add_image(bytes: Uint8Array): number },
 	) {}
 
-	header(width: number, height: number, margin: number) {
+	header(width: number, height: number, margin: readonly number[]) {
 		this.binary.header(width, height, margin);
 	}
 

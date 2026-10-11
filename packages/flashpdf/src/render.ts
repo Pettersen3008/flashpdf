@@ -1,10 +1,11 @@
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
-import { number, props } from "./assert.js";
+import { props } from "./assert.js";
 import { asError, Binary } from "./binary.js";
 import { compile } from "./compile.js";
 import { resolveStyles } from "./css.js";
-import type { Element } from "./element.js";
+import type { Edges, Element, Length } from "./element.js";
 import { registerFonts } from "./fonts.js";
+import { pageSetup } from "./page.js";
 import { ProtocolWriter } from "./protocol.js";
 import { pageOverflow, resolveTree } from "./tree.js";
 
@@ -17,8 +18,19 @@ export type PdfMetadata = {
 	language?: string | undefined;
 };
 export type RenderOptions = {
-	pageFormat?: "A4" | "Letter" | undefined;
-	margin?: number | undefined;
+	/** A named size, or a custom size where a number is points. */
+	pageFormat?:
+		| "A3"
+		| "A4"
+		| "A5"
+		| "Letter"
+		| "Legal"
+		| { width: Length; height: Length }
+		| undefined;
+	/** Puts the longer side of the page size across (landscape) or down (portrait). */
+	orientation?: "portrait" | "landscape" | undefined;
+	/** One to four lengths in CSS shorthand order, or each side. */
+	margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length } | undefined;
 	stylesheets?: readonly string[] | undefined;
 	fonts?: readonly EmbeddedFont[] | undefined;
 	footer?: Element | undefined;
@@ -50,6 +62,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 	): Promise<Uint8Array> {
 		const p = props(options ?? {}, [
 			"pageFormat",
+			"orientation",
 			"margin",
 			"stylesheets",
 			"fonts",
@@ -61,12 +74,17 @@ export function createRenderer(loadWasm: LoadWasm) {
 			"attachments",
 			"facturx",
 		]);
-		const format = p.pageFormat === undefined ? "A4" : p.pageFormat;
-		if (format !== "A4" && format !== "Letter") throw new Error("invalid page format");
-		const margin = number(p.margin === undefined ? 36 : p.margin);
-		const width = format === "A4" ? 595 : 612;
-		const height = format === "A4" ? 842 : 792;
-		if (margin * 2 >= Math.min(width, height)) throw new Error("invalid margin");
+		if (
+			p.stylesheets !== undefined &&
+			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
+		)
+			throw new Error("invalid stylesheets");
+		const page = pageSetup(
+			p.pageFormat,
+			p.orientation,
+			p.margin,
+			p.stylesheets as readonly string[] | undefined,
+		);
 		const metadata =
 			p.metadata === undefined
 				? {}
@@ -84,11 +102,6 @@ export function createRenderer(loadWasm: LoadWasm) {
 		if (p.tagged !== undefined && typeof p.tagged !== "boolean")
 			throw new Error("invalid tagged option");
 		if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
-		if (
-			p.stylesheets !== undefined &&
-			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
-		)
-			throw new Error("invalid stylesheets");
 		// Options are checked before user components run; fonts need the engine to parse.
 		const tree = await resolveTree(document);
 		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
@@ -98,7 +111,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 		try {
 			const fonts = registerFonts(renderer, p.fonts);
 			const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
-			writer.header(width, height, margin);
+			writer.header(page.width, page.height, page.margin);
 			writer.metadata(metadata, p.tagged === true);
 			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 			for (const position of ["header", "footer"] as const) {

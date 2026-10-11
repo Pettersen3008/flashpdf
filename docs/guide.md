@@ -118,8 +118,8 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | react-pdf | FlashPDF |
 | --- | --- |
 | `Document` | No wrapper. Pass the root element, or an array of roots, to `render`. `metadata` sets title, author, subject, keywords, and language. |
-| `Page size="A4"` | `pageFormat: 'A4'` or `'Letter'`. One size for the whole document. |
-| `Page style={{ padding }}` | `margin`, in points, on all four sides. |
+| `Page size="A4" orientation="landscape"` | `pageFormat: 'A4'` (also A3, A5, Letter, Legal, or `{ width, height }`) and `orientation: 'landscape'`, or `@page { size: A4 landscape }`. One size for the whole document. |
+| `Page style={{ padding }}` | `margin`: one to four lengths, such as `'20mm 15mm'`, or `{ top, right, bottom, left }`, or `@page { margin }`. |
 | A second `Page`, or `break` | `breakBefore: 'page'` on a direct child of the root. |
 | `View` | `div`, `section`, `article`, `header`, `footer`, or `main`. |
 | `Text` | `p`, `span`, `b`, `strong`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span` or `b` inside a `p`. |
@@ -136,7 +136,7 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 Three differences cause most surprises:
 
 - A `View` stacks its children in a flex column. A FlashPDF `div` is a block, which also stacks them. For a row, set `display: 'flex'`. FlashPDF follows CSS here, so a flex box is a row unless you set `flexDirection: 'column'`.
-- Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `em`, and `rem`.
+- Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `mm`, `cm`, `in`, `pc`, `Q`, `em`, and `rem`.
 - `justifyContent`, `alignItems`, `flexWrap`, and `position` reject. Use `flex`, `width`, `gap`, and `textAlign`.
 
 `Svg`, `Canvas`, `Note`, italic text, and lists have no equivalent.

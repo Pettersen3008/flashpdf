@@ -11,14 +11,14 @@ fn given_valid_commands_when_rendered_then_pdf_is_valid_and_deterministic() {
         Page::new(
             Pt::new(72.0).unwrap(),
             Pt::new(72.0).unwrap(),
-            Pt::new(36.0).unwrap()
+            Edges::all(Pt::new(36.0).unwrap())
         ),
         Err(RenderError::InvalidPage)
     );
     let narrow_page = Page::new(
         Pt::new(72.0).unwrap(),
         Pt::new(100.0).unwrap(),
-        Pt::new(10.0).unwrap(),
+        Edges::all(Pt::new(10.0).unwrap()),
     )
     .unwrap();
     assert_eq!(
@@ -174,7 +174,7 @@ fn given_mutated_fonts_when_parsing_and_rendering_then_never_panics() {
 }
 
 fn page() -> Page {
-    Page::new(Pt(120.0), Pt(60.0), Pt(10.0)).unwrap()
+    Page::new(Pt(120.0), Pt(60.0), Edges::all(Pt(10.0))).unwrap()
 }
 
 fn text(text: &str) -> Command<'_> {
@@ -309,6 +309,46 @@ fn run(len: usize, bold: bool, size: f32, hard_break: bool) -> TextRun {
         color: Rgb::BLACK,
         hard_break,
         decoration: Default::default(),
+    }
+}
+
+#[test]
+fn given_four_different_page_margins_and_a_header_and_footer_when_rendered_then_each_line_sits_inside_its_margins(
+) {
+    let margin = Edges {
+        top: Pt(5.0),
+        right: Pt(10.0),
+        bottom: Pt(15.0),
+        left: Pt(20.0),
+    };
+    let mut renderer = super::Renderer::new(Page::new(Pt(120.0), Pt(80.0), margin).unwrap());
+    let right = TextStyle {
+        align: TextAlign::Right,
+        ..TextStyle::plain(Pt(10.0))
+    };
+    renderer
+        .set_header("H".into(), TextStyle::plain(Pt(10.0)))
+        .unwrap();
+    renderer.set_footer("F".into(), right).unwrap();
+    renderer.push(&[text("body")]).unwrap();
+    let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
+    let starts: Vec<(f32, f32)> = content(&pdf)
+        .lines()
+        .filter_map(|line| line.strip_suffix(" Td")?.split_once(' '))
+        .map(|(x, y)| (x.parse().unwrap(), y.parse().unwrap()))
+        .collect();
+    // 10pt Helvetica rises 7.18pt in a 9.25pt line, and "F" is 6.11pt wide.
+    let expected = [
+        (20.0, 80.0 - 5.0 - 9.25 - 7.18),
+        (20.0, 80.0 - 5.0 - 7.18),
+        (120.0 - 10.0 - 6.11, 15.0 + 9.25 - 7.18),
+    ];
+    assert_eq!(starts.len(), 3, "{starts:?}");
+    for ((x, y), (left, baseline)) in starts.iter().zip(expected) {
+        assert!(
+            (x - left).abs() < 0.01 && (y - baseline).abs() < 0.01,
+            "{starts:?}"
+        );
     }
 }
 

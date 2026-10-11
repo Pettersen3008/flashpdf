@@ -14,17 +14,28 @@ export function edgeValues(value: unknown, name: "margin" | "padding"): unknown[
 				: values;
 }
 
+/** Points per unit. CSS fixes 1in = 2.54cm = 25.4mm = 101.6Q = 96px = 72pt = 6pc; rem is the 12pt root size. */
+const POINTS: Record<string, number> = {
+	pt: 1,
+	px: 0.75,
+	pc: 12,
+	in: 72,
+	cm: 72 / 2.54,
+	mm: 72 / 25.4,
+	Q: 72 / 101.6,
+	rem: 12,
+};
+
 export function point(value: unknown, parent = 12, positive = false): number {
 	if (typeof value === "number") return number(value, positive);
 	if (value === "0") return 0;
 	if (typeof value !== "string") throw new Error(`invalid length: ${String(value)}`);
-	const match = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|em|rem)$/.exec(value.trim());
+	const match = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|pc|in|cm|mm|Q|em|rem)$/.exec(value.trim());
 	if (!match) throw new Error(`invalid length: ${value}`);
-	const scale = match[2] === "px" ? 0.75 : match[2] === "em" ? parent : match[2] === "rem" ? 12 : 1;
-	return number(Number(match[1]) * scale, positive);
+	return number(Number(match[1]) * (match[2] === "em" ? parent : POINTS[match[2]!]!), positive);
 }
 
-const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|%)$/;
+const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|pc|in|cm|mm|Q|%)$/;
 /** A `width` or img `height`: points (kind 1) or percent of the container width (kind 2). */
 export function dimension(
 	value: unknown,
@@ -35,7 +46,7 @@ export function dimension(
 		typeof value === "number"
 			? value
 			: match
-				? Number(match[1]) * (match[2] === "px" ? 0.75 : 1)
+				? Number(match[1]) * (match[2] === "%" ? 1 : POINTS[match[2]!]!)
 				: NaN;
 	// The engine takes f32, so a long digit string must not round to Infinity.
 	if (!(amount > 0) || !Number.isFinite(Math.fround(amount)))
