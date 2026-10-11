@@ -2,15 +2,15 @@ BT
 0.13333334 0.13333334 0.13333334 rg
 /F2 22 Tf
 36 790.204 Td
-(Acme Supply Co.) Tj
+[(Acme Suppl) 15 (y Co.)] TJ
 ET
 BT
 0.4 0.4392157 0.52156866 rg
 /F1 10 Tf
 36 778.47 Td
-(Invoice ) Tj
+[(In) 20 (v) 25 (oice )] TJ
 /F2 10 Tf
-34.46 0 Td
+34.01 0 Td
 (#2026-0042) Tj
 ET
 BT

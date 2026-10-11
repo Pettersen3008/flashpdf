@@ -1,5 +1,6 @@
 mod cmap;
 mod helvetica;
+mod kern;
 mod subset;
 mod truetype;
 
@@ -99,6 +100,17 @@ impl Font {
                 out.extend(gid.to_be_bytes());
                 Ok(font.advance(gid))
             }
+        }
+    }
+
+    /// Pair kerning in 1/1000 em between two codes from `encode_into`.
+    pub(crate) fn kern(&self, left: &[u8], right: &[u8]) -> i16 {
+        match self {
+            Self::Helvetica { bold, .. } => helvetica::kern(*bold, left[0], right[0]),
+            Self::Embedded(font) => font.kern(
+                u16::from_be_bytes([left[0], left[1]]),
+                u16::from_be_bytes([right[0], right[1]]),
+            ),
         }
     }
 

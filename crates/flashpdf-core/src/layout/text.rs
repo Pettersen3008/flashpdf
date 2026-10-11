@@ -56,6 +56,8 @@ struct Piece {
     start: usize,
     end: usize,
     width: Pt,
+    /// Kerning against the previous piece's last glyph, which places this piece.
+    lead: Pt,
 }
 
 /// The collapsed space before the pending word: its run, encoded bytes and width.
@@ -83,6 +85,8 @@ pub(crate) struct ParagraphLayouter<'a> {
     pieces: Vec<Piece>,
     /// Gaps inside the pending word, with their widths.
     gaps: Vec<(Gap, Pt)>,
+    /// The pending word's last glyph: its run and code, for kerning.
+    previous: Option<(usize, Range<usize>)>,
     space: Option<Space>,
 }
 
@@ -134,6 +138,7 @@ impl<'a> ParagraphLayouter<'a> {
             has_word: false,
             pieces: Vec::new(),
             gaps: Vec::new(),
+            previous: None,
             space: None,
         };
         let mut rest = paragraph.text;
@@ -188,6 +193,12 @@ impl<'a> ParagraphLayouter<'a> {
             }
             let start = output.text.len();
             let mut width = self.runs[index].encode(character, &mut output.text)?;
+            let lead = if character.is_whitespace() {
+                self.previous = None;
+                Pt::ZERO
+            } else {
+                self.kern(index, start..output.text.len(), output)
+            };
             // CSS word spacing widens a no-break space too.
             if character == '\u{a0}' {
                 if let Some((gap, extra)) = self.runs[index].word_gap(output.text.len()) {
@@ -200,7 +211,11 @@ impl<'a> ParagraphLayouter<'a> {
                 start,
                 end: start,
                 width: Pt::ZERO,
+                lead,
             });
+            if slot.start != start {
+                slot.width += lead;
+            }
             slot.end = output.text.len();
             slot.width += width;
             if ideograph {
@@ -212,9 +227,42 @@ impl<'a> ParagraphLayouter<'a> {
         Ok(())
     }
 
+    /// The kerning before the glyph at `code`, after the word's previous glyph
+    /// in the same font and size. A space, a CJK character, or a hard break
+    /// ends the word, so a line break never falls inside a kerned pair.
+    fn kern(&mut self, run: usize, code: Range<usize>, output: &LayoutBuffer) -> Pt {
+        let Some((last, previous)) = self.previous.replace((run, code.clone())) else {
+            return Pt::ZERO;
+        };
+        let (before, metrics) = (&self.runs[last], &self.runs[run]);
+        if before.id != metrics.id
+            || before.size != metrics.size
+            || !(before.typography.kerning && metrics.typography.kerning)
+        {
+            return Pt::ZERO;
+        }
+        let amount = f32::from(
+            metrics
+                .font
+                .kern(&output.text[previous], &output.text[code.clone()]),
+        );
+        if amount == 0.0 {
+            return Pt::ZERO;
+        }
+        let width = Pt(amount * metrics.size.get() / 1000.0);
+        let gap = Gap {
+            at: code.start as u32,
+            amount,
+            stretch: false,
+        };
+        self.gaps.push((gap, width));
+        width
+    }
+
     /// Places the pending word: after its space when that fits, else on a new
     /// line, else glyph by glyph when it is wider than the column.
     fn word(&mut self, output: &mut LayoutBuffer) -> Result<(), LayoutError> {
+        self.previous = None;
         if self.pieces.is_empty() {
             return Ok(());
         }
@@ -222,7 +270,7 @@ impl<'a> ParagraphLayouter<'a> {
         let mut pending = std::mem::take(&mut self.gaps);
         let width = pieces
             .iter()
-            .fold(Pt::ZERO, |total, piece| total + piece.width);
+            .fold(Pt::ZERO, |total, piece| total + piece.lead + piece.width);
         let space = self.space.take();
         if width > self.area.width {
             if self.has_word {
@@ -262,6 +310,7 @@ impl<'a> ParagraphLayouter<'a> {
                 self.append(space.run, space.text, space.width, output);
             }
             for piece in &pieces {
+                self.used += piece.lead;
                 self.append(piece.run, piece.start..piece.end, piece.width, output);
             }
             output.gaps.extend(pending.drain(..).map(|(gap, _)| gap));

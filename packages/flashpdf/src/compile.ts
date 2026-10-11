@@ -13,6 +13,7 @@ import {
 	face,
 	font,
 	helvetica,
+	kerning,
 	lineHeight,
 	point,
 	spacing,
@@ -32,6 +33,7 @@ type TextState = {
 	family: FontSlots;
 	bold: boolean;
 	italic: boolean;
+	kerning: boolean;
 	underline: boolean;
 	lineThrough: boolean;
 	/** Undefined is the text colour. */
@@ -54,6 +56,7 @@ const ROOT: Context = {
 	family: helvetica,
 	bold: false,
 	italic: false,
+	kerning: true,
 	underline: false,
 	lineThrough: false,
 	decorationColor: undefined,
@@ -111,6 +114,7 @@ function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): Text
 		family: selected.family,
 		bold: selected.weight,
 		italic: selected.italic,
+		kerning: style.fontKerning === undefined ? current.kerning : kerning(style.fontKerning),
 		underline: decorated.underline,
 		lineThrough: decorated.lineThrough,
 		decorationColor:
@@ -149,6 +153,7 @@ function run(state: TextState, text: string, hardBreak = false): Run {
 		link: state.link,
 		letterSpacing: state.letterSpacing,
 		wordSpacing: state.wordSpacing,
+		kerning: state.kerning,
 		transform: state.transform,
 	};
 }
@@ -169,6 +174,7 @@ function push(runs: Run[], next: Run) {
 		last.oblique === next.oblique &&
 		last.letterSpacing === next.letterSpacing &&
 		last.wordSpacing === next.wordSpacing &&
+		last.kerning === next.kerning &&
 		last.transform === next.transform &&
 		last.color.every((channel, index) => channel === next.color[index])
 	) {

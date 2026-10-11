@@ -40,6 +40,8 @@ export type Style = {
 	lineHeight?: number | "normal" | `${number}` | `${number}%` | Length;
 	fontFamily?: string;
 	fontWeight?: number | "normal" | "bold";
+	/** `auto` and `normal` kern letter pairs within a word. */
+	fontKerning?: "auto" | "normal" | "none";
 	/** `oblique` uses the italic face too; a family without one is slanted. */
 	fontStyle?: "normal" | "italic" | "oblique";
 	/** Added after every character; negative values tighten. */

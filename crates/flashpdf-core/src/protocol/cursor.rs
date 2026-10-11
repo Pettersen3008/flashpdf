@@ -55,7 +55,8 @@ impl<'a> Cursor<'a> {
         })
     }
 
-    /// Run flag bit 5 slants the face, 6 and 7 mean an f32 letter and word spacing follow.
+    /// Run flag bit 5 slants the face, 6 and 7 mean an f32 letter and word spacing follow,
+    /// and 9 turns kerning off.
     pub(super) fn typography(&mut self, flags: u16) -> Result<Typography, ProtocolError> {
         let mut spacing = |bit: u16, name: &'static str| {
             if flags & bit == 0 {
@@ -73,6 +74,7 @@ impl<'a> Cursor<'a> {
             letter_spacing: spacing(64, "letter spacing")?,
             word_spacing: spacing(128, "word spacing")?,
             oblique: flags & 32 != 0,
+            kerning: flags & 512 == 0,
         })
     }
 

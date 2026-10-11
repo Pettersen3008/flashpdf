@@ -13,6 +13,12 @@ export { decoration, decorationColor } from "./style/decoration.js";
 export { bold, face, font, helvetica } from "./style/font.js";
 export { dimension, lineHeight, point, spacing, type LineHeight } from "./style/length.js";
 
+export function kerning(value: unknown): boolean {
+	if (value !== "auto" && value !== "normal" && value !== "none")
+		throw new Error(`invalid fontKerning: ${String(value)} (use auto, normal, or none)`);
+	return value !== "none";
+}
+
 const TRANSFORMS = new Set(["none", "uppercase", "lowercase", "capitalize"]);
 export type Transform = "none" | "uppercase" | "lowercase" | "capitalize";
 export function transform(value: unknown): Transform {
@@ -62,6 +68,7 @@ export function style(value: unknown): NormalizedStyle {
 	if (result.fontSize !== undefined) point(result.fontSize, 12, true);
 	if (result.fontWeight !== undefined) bold(result.fontWeight);
 	if (result.fontStyle !== undefined) italic(result.fontStyle);
+	if (result.fontKerning !== undefined) kerning(result.fontKerning);
 	if (result.letterSpacing !== undefined) spacing(result.letterSpacing, 12, "letterSpacing");
 	if (result.wordSpacing !== undefined) spacing(result.wordSpacing, 12, "wordSpacing");
 	if (result.textTransform !== undefined) transform(result.textTransform);

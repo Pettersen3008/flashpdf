@@ -53,12 +53,13 @@
 - `text-align: justify`. Wrapped lines stretch their spaces to the full width; the last line and a line ending in `<br>` stay left-aligned.
 - `text-transform: uppercase | lowercase | capitalize | none`, with locale-independent case mapping.
 - `text-decoration-color`, and a colour in the `text-decoration` shorthand.
+- Kerning, on by default, with `font-kerning: auto | normal | none`. Helvetica uses Adobe's AFM pairs; embedded fonts use GPOS pair adjustment under the `kern` feature, or the `kern` table. Line breaking measures kerned widths.
 
 ### Changed
 
 - Link annotations carry the print flag, which PDF/A requires.
 - Underlines and line-throughs use the font's metrics: Helvetica's AFM underline position and thickness, or an embedded font's `post` and `OS/2` values. They were 1/14 em thick at fixed offsets before.
-- The binary protocol is version 8: run flags are a u16 with slant, letter spacing, word spacing, and decoration colour, headers and footers carry the same typography flags, alignment 3 is justify, and embedded font slots start at 4 after the four Helvetica faces. The JavaScript and WASM halves ship together, so this affects no public API.
+- The binary protocol is version 8: run flags are a u16 with slant, letter spacing, word spacing, decoration colour, and kerning off, headers and footers carry the same typography flags, alignment 3 is justify, and embedded font slots start at 4 after the four Helvetica faces. The JavaScript and WASM halves ship together, so this affects no public API.
 
 ## 0.4.0 - 2026-10-02
 

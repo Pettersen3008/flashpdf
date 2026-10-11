@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use pdf_writer::Rect;
 
+use super::kern::Kerning;
 use super::{cmap, subset, Stroke};
 
 pub(super) const INVALID: &str = "invalid TrueType font";
@@ -22,6 +24,9 @@ pub(crate) struct EmbeddedFont {
     pub(crate) stem_v: f32,
     pub(crate) underline: Stroke,
     pub(crate) strikeout: Stroke,
+    kerning: Kerning,
+    /// 1000 over units per em.
+    scale: f32,
 }
 
 impl EmbeddedFont {
@@ -107,6 +112,7 @@ impl EmbeddedFont {
             offset: 262.0,
             thickness: 50.0,
         });
+        let kerning = Kerning::parse(&bytes);
         let name = ttf_table(&bytes, b"name")
             .ok()
             .and_then(postscript_name)
@@ -126,6 +132,8 @@ impl EmbeddedFont {
             stem_v: (50.0 + (f32::from(weight) / 65.0).powi(2)).round(),
             underline,
             strikeout,
+            kerning,
+            scale,
         })
     }
 
@@ -135,6 +143,12 @@ impl EmbeddedFont {
 
     pub(crate) fn advance(&self, gid: u16) -> u16 {
         self.advances.get(usize::from(gid)).copied().unwrap_or(0)
+    }
+
+    /// Pair kerning in 1/1000 em, rounded like the advances.
+    pub(crate) fn kern(&self, left: u16, right: u16) -> i16 {
+        let units = self.kerning.get(&self.bytes, left, right);
+        (units as f32 * self.scale).round().clamp(-1000.0, 1000.0) as i16
     }
 
     /// Lowest code point per used glyph, for `/ToUnicode`.
@@ -227,6 +241,11 @@ pub(super) fn be_u32(bytes: &[u8], offset: usize) -> Result<u32, String> {
 }
 
 pub(super) fn ttf_table<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Result<&'a [u8], String> {
+    Ok(&bytes[table_range(bytes, wanted)?])
+}
+
+/// Where a table sits in the file, checked to lie inside it.
+pub(super) fn table_range(bytes: &[u8], wanted: &[u8; 4]) -> Result<Range<usize>, String> {
     let count = usize::from(be_u16(bytes, 4)?);
     for index in 0..count {
         let record = 12 + index * 16;
@@ -235,9 +254,11 @@ pub(super) fn ttf_table<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Result<&'a [u8
         }
         let start = usize::try_from(be_u32(bytes, record + 8)?).map_err(|_| INVALID)?;
         let length = usize::try_from(be_u32(bytes, record + 12)?).map_err(|_| INVALID)?;
-        return bytes
-            .get(start..start.checked_add(length).ok_or(INVALID)?)
-            .ok_or_else(|| INVALID.into());
+        let range = start..start.checked_add(length).ok_or(INVALID)?;
+        return match bytes.get(range.clone()) {
+            Some(_) => Ok(range),
+            None => Err(INVALID.into()),
+        };
     }
     Err(INVALID.into())
 }

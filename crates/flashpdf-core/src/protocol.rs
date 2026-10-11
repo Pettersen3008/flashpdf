@@ -265,7 +265,7 @@ impl Decoder {
                 let font = self.font(cursor.take(1)?[0])?;
                 // Only the run flags for slant and spacing; a header has no breaks, decoration, or links.
                 let flags = cursor.u16()?;
-                if flags & !0xe0 != 0 {
+                if flags & !0x2e0 != 0 {
                     return Err(ProtocolError::InvalidValue("header flags"));
                 }
                 let typography = cursor.typography(flags)?;
@@ -399,9 +399,9 @@ impl Decoder {
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
                     // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-                    // 4 an f32 line height follows, 5 to 7 typography, 8 a decoration colour follows.
+                    // 4 an f32 line height follows, 5 to 7 and 9 typography, 8 a decoration colour follows.
                     let flags = cursor.u16()?;
-                    if flags > 0x1ff {
+                    if flags > 0x3ff {
                         return Err(ProtocolError::InvalidValue("run flags"));
                     }
                     let link = if flags & 8 != 0 {

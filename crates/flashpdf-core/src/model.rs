@@ -199,6 +199,8 @@ pub struct Typography {
     pub word_spacing: f32,
     /// Slants the upright face, for italic text in a family without an italic face.
     pub oblique: bool,
+    /// CSS `font-kerning`: `auto` and `normal` kern pairs within a word.
+    pub kerning: bool,
 }
 
 impl Typography {
@@ -206,6 +208,7 @@ impl Typography {
         letter_spacing: 0.0,
         word_spacing: 0.0,
         oblique: false,
+        kerning: true,
     };
 }
 

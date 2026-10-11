@@ -22,13 +22,19 @@ export type Run = {
 	oblique: boolean;
 	letterSpacing: number;
 	wordSpacing: number;
+	kerning: boolean;
 	/** Applied by the compiler before writing; not part of the protocol. */
 	transform: Transform;
 };
 
-/** Run flag bits 5 to 7: slant, then an f32 letter and word spacing follow. */
+/** Run flag bits 5 to 7: slant, then an f32 letter and word spacing follow; bit 9: no kerning. */
 function typography(run: Run): number {
-	return (run.oblique ? 32 : 0) | (run.letterSpacing ? 64 : 0) | (run.wordSpacing ? 128 : 0);
+	return (
+		(run.oblique ? 32 : 0) |
+		(run.letterSpacing ? 64 : 0) |
+		(run.wordSpacing ? 128 : 0) |
+		(run.kerning ? 0 : 512)
+	);
 }
 
 const opcode = {
@@ -128,7 +134,7 @@ export class ProtocolWriter {
 					this.binary.f32(run.size);
 					for (const channel of run.color) this.binary.u8(channel);
 					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-					// 4 an f32 line height follows, 5 to 7 typography, 8 a decoration colour follows.
+					// 4 an f32 line height follows, 5 to 7 and 9 typography, 8 a decoration colour follows.
 					this.binary.u16(
 						(run.break ? 1 : 0) |
 							(run.underline ? 2 : 0) |

@@ -40,6 +40,7 @@ const properties = {
 	fontFamily: { css: "font-family", inherited: true },
 	fontWeight: { css: "font-weight", inherited: true },
 	fontStyle: { css: "font-style", inherited: true },
+	fontKerning: { css: "font-kerning", inherited: true },
 	textAlign: { css: "text-align", inherited: true },
 	textTransform: { css: "text-transform", inherited: true },
 	// CSS propagates decoration to descendants rather than inheriting it; the effect is the same here.

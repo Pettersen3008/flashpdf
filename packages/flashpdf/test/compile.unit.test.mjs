@@ -38,6 +38,7 @@ const run = (font, text, extra = {}) => ({
 	oblique: false,
 	letterSpacing: 0,
 	wordSpacing: 0,
+	kerning: true,
 	transform: "none",
 	...extra,
 });

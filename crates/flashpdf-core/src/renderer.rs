@@ -451,7 +451,7 @@ fn splittable(element: &Element<'_>) -> bool {
     }
 }
 
-/// The line's show string, word-spacing gaps, and width. Spaces stay as written.
+/// The line's show string, kerning and word-spacing gaps, and width. Spaces stay as written.
 fn footer_line(
     text: &str,
     page_number: &str,
@@ -462,16 +462,35 @@ fn footer_line(
     let Typography {
         letter_spacing,
         word_spacing,
+        kerning,
         ..
     } = style.typography;
     let mut bytes = Vec::new();
     let mut gaps = Vec::new();
-    let mut width = 0_u32;
+    let mut width = 0_i32;
     let mut glyphs = 0_u32;
+    let mut spaces = 0_u32;
+    let mut previous: Option<std::ops::Range<usize>> = None;
     let mut push = |character: char| -> Result<(), RenderError> {
-        width += u32::from(font.encode_into(character, &mut bytes)?);
+        let start = bytes.len();
+        width += i32::from(font.encode_into(character, &mut bytes)?);
         glyphs += 1;
+        let code = start..bytes.len();
+        if character.is_whitespace() {
+            previous = None;
+        } else if let Some(last) = previous.replace(code.clone()).filter(|_| kerning) {
+            let amount = font.kern(&bytes[last], &bytes[code]);
+            if amount != 0 {
+                width += i32::from(amount);
+                gaps.push(Gap {
+                    at: start as u32,
+                    amount: f32::from(amount),
+                    stretch: false,
+                });
+            }
+        }
         if word_spacing != 0.0 && matches!(character, ' ' | '\u{a0}') {
+            spaces += 1;
             gaps.push(Gap {
                 at: bytes.len() as u32,
                 amount: word_spacing * 1000.0 / style.size.get(),
@@ -489,6 +508,6 @@ fn footer_line(
     }
     let width = width as f32 * style.size.get() / 1000.0
         + glyphs as f32 * letter_spacing
-        + gaps.len() as f32 * word_spacing;
+        + spaces as f32 * word_spacing;
     Ok((bytes, gaps, Pt(width)))
 }

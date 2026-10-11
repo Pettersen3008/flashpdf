@@ -66,11 +66,8 @@ fn given_valid_commands_when_rendered_then_pdf_is_valid_and_deterministic() {
     assert_eq!(pages.len(), 2);
     assert_eq!(pages[&1], (4, 0));
     assert_eq!(pages[&2], (6, 0));
-    assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
-        "First \u{20ac}\nAfter spacer"
-    );
-    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "Second page");
+    assert_eq!(page_text(&pdf, 1), "First \u{20ac}\nAfter spacer");
+    assert_eq!(page_text(&pdf, 2), "Second page");
     assert!(String::from_utf8(pdf.get_page_content((4, 0)))
         .unwrap()
         .contains("36 795.948 Td"));
@@ -184,6 +181,13 @@ fn text(text: &str) -> Command<'_> {
     }
 }
 
+/// A page's text, without the space lopdf's extractor adds after each `TJ` array.
+pub(crate) fn page_text(pdf: &lopdf::Document, page: u32) -> String {
+    let text = pdf.extract_text(&[page]).unwrap();
+    let lines: Vec<&str> = text.trim().lines().map(str::trim_end).collect();
+    lines.join("\n")
+}
+
 fn parsed(commands: &[Command<'_>]) -> lopdf::Document {
     lopdf::Document::load_mem(&super::render(page(), commands).unwrap()).unwrap()
 }
@@ -233,8 +237,8 @@ fn given_overflow_when_placing_block_then_moves_whole_block_to_next_page() {
         Command::StackEnd,
     ]);
     assert_eq!(pdf.get_pages().len(), 2);
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "first");
-    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "a\nb");
+    assert_eq!(page_text(&pdf, 1), "first");
+    assert_eq!(page_text(&pdf, 2), "a\nb");
 }
 
 #[test]
@@ -274,11 +278,8 @@ fn given_a_three_hundred_line_paragraph_when_rendered_then_streams_across_pages_
         assert!(ys.iter().all(|y| *y > 12.0));
     }
     assert_eq!(total, 302);
-    assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
-        "first\nWWWWW001\nWWWWW002\nWWWWW003"
-    );
-    assert!(pdf.extract_text(&[76]).unwrap().trim().ends_with("last"));
+    assert_eq!(page_text(&pdf, 1), "first\nWWWWW001\nWWWWW002\nWWWWW003");
+    assert!(page_text(&pdf, 76).ends_with("last"));
 }
 
 #[test]
@@ -286,12 +287,12 @@ fn given_a_word_wider_than_the_column_when_wrapping_then_breaks_it_at_the_last_f
     // "i" is 2.22pt, "W" 9.44pt; the run fits 100pt only when split by glyph.
     let pdf = parsed(&[text(&format!("ab {}WW cd", "i".repeat(50)))]);
     assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
+        page_text(&pdf, 1),
         format!("ab\n{}\n{}WW cd", "i".repeat(45), "i".repeat(5))
     );
     let pdf = parsed(&[text(&"W".repeat(25))]);
     assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
+        page_text(&pdf, 1),
         format!("{}\n{}\n{}", "W".repeat(10), "W".repeat(10), "W".repeat(5))
     );
 }
@@ -329,7 +330,7 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
         text: "WWWWW WWWWWW",
         runs: &runs,
     }]);
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "WWWWW\nWWWWWW");
+    assert_eq!(page_text(&pdf, 1), "WWWWW\nWWWWWW");
     let content = content(&pdf);
     let objects: Vec<&str> = content.split("ET").collect();
     assert_eq!(objects.len(), 3, "{content}");
@@ -348,7 +349,7 @@ fn given_a_hard_break_when_laying_out_then_starts_a_new_line_without_a_space() {
         text: "a b",
         runs: &runs,
     }]);
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "a\nb");
+    assert_eq!(page_text(&pdf, 1), "a\nb");
     assert_eq!(baselines(&pdf, (4, 0)), [42.82, 33.57]);
 }
 
@@ -472,10 +473,7 @@ fn given_columns_when_wrapped_then_pdf_has_measured_positions_and_deterministic_
     assert_eq!(bytes, super::render(page(), &commands).unwrap());
     let pdf = lopdf::Document::load_mem(&bytes).unwrap();
     assert_eq!(pdf.get_pages().len(), 1);
-    assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
-        "aa\naa\nbb\nbb\nlast\nafter"
-    );
+    assert_eq!(page_text(&pdf, 1), "aa\naa\nbb\nbb\nlast\nafter");
     let content = String::from_utf8(pdf.get_page_content((4, 0))).unwrap();
     for position in [
         "10 42.82 Td",
@@ -559,9 +557,8 @@ fn given_a_table_with_two_header_rows_and_sixty_body_rows_when_rendered_then_rep
     assert_eq!(pdf.get_pages().len(), 30);
     let mut body = Vec::new();
     for page in 1..=30 {
-        let page_text = pdf.extract_text(&[page]).unwrap();
+        let page_text = page_text(&pdf, page);
         let rest = page_text
-            .trim()
             .strip_prefix("H1a\nH1b\nH1c\nH2a\nH2b\nH2c\n")
             .unwrap_or_else(|| panic!("page {page} lacks the header: {page_text}"));
         body.extend(rest.lines().map(str::to_owned));
@@ -623,10 +620,7 @@ fn given_a_table_row_taller_than_the_page_with_its_header_when_rendered_then_rej
     commands.remove(7);
     let pdf = parsed(&commands);
     assert_eq!(pdf.get_pages().len(), 1);
-    assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
-        "header\nline\nline\nline"
-    );
+    assert_eq!(page_text(&pdf, 1), "header\nline\nline\nline");
 }
 
 #[test]
@@ -781,7 +775,7 @@ fn given_abel_and_text_outside_winansi_when_rendered_then_emits_a_subset_type0_f
     let bytes = abel_text(text).unwrap();
     assert_eq!(bytes, abel_text(text).unwrap());
     let pdf = lopdf::Document::load_mem(&bytes).unwrap();
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), text);
+    assert_eq!(page_text(&pdf, 1), text);
     let page = *pdf.get_pages().values().next().unwrap();
     let font = &pdf.get_page_fonts(page).unwrap()[b"F5".as_slice()];
     assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
@@ -858,8 +852,8 @@ fn given_a_15pt_line_height_on_three_lines_when_rendered_then_the_third_line_mov
         runs: &runs,
     }]);
     assert_eq!(pdf.get_pages().len(), 2);
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "a\nb");
-    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "c");
+    assert_eq!(page_text(&pdf, 1), "a\nb");
+    assert_eq!(page_text(&pdf, 2), "c");
 }
 
 #[test]
@@ -890,7 +884,7 @@ fn given_a_table_with_a_footer_row_when_it_spans_pages_then_the_footer_follows_t
     assert_eq!(pdf.get_pages().len(), 3);
     for (page, rows) in (1..=3).zip(cells.chunks(2)) {
         let expected = format!("H\n{}\nF", rows.join("\n"));
-        assert_eq!(pdf.extract_text(&[page]).unwrap().trim(), expected);
+        assert_eq!(page_text(&pdf, page), expected);
     }
 }
 
@@ -1035,7 +1029,7 @@ fn given_letter_spacing_when_wrapping_then_measures_it_after_every_glyph_and_pai
         text: "WWWWWWWWWW",
         style,
     }]);
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "WWWWWWWWW\nW");
+    assert_eq!(page_text(&pdf, 1), "WWWWWWWWW\nW");
     assert_eq!(operands(&pdf, "Tc"), [[1.0], [0.0], [1.0], [0.0]]);
 }
 
@@ -1128,4 +1122,45 @@ fn given_an_underlined_struck_run_with_a_decoration_colour_when_painted_then_str
         );
     }
     assert_eq!(operands(&pdf, "rg").last().unwrap(), &[1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn given_ava_in_helvetica_when_laid_out_then_kerns_each_pair_by_its_afm_value_unless_kerning_is_off(
+) {
+    let render = |kerning| {
+        let style = TextStyle {
+            align: TextAlign::Right,
+            typography: super::Typography {
+                kerning,
+                ..super::Typography::NORMAL
+            },
+            ..TextStyle::plain(Pt(10.0))
+        };
+        parsed(&[Command::Text { text: "AVA", style }])
+    };
+    let (kerned, plain) = (render(true), render(false));
+    // KPX A V -70 and V A -80 tighten the right-aligned word by 1.5pt at 10pt.
+    assert_eq!(operands(&kerned, "TJ"), [[70.0, 80.0]]);
+    assert!(operands(&plain, "TJ").is_empty());
+    let x = |pdf: &lopdf::Document| operands(pdf, "Td")[0][0];
+    assert!((x(&kerned) - x(&plain) - 1.5).abs() < 0.001);
+}
+
+#[test]
+fn given_a_word_split_across_two_colours_when_laid_out_then_its_pair_still_kerns() {
+    let runs = [
+        TextRun {
+            color: Rgb { r: 255, g: 0, b: 0 },
+            ..run(1, false, 10.0, false)
+        },
+        run(1, false, 10.0, false),
+    ];
+    let pdf = parsed(&[Command::Paragraph {
+        links: &[],
+        align: TextAlign::Left,
+        text: "AV",
+        runs: &runs,
+    }]);
+    // The V segment starts at A's 6.67pt advance less the 0.7pt kern.
+    assert!((operands(&pdf, "Td")[1][0] - 5.97).abs() < 0.001);
 }

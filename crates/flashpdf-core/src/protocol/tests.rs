@@ -151,11 +151,8 @@ fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
     bytes.extend(record(255, &[]));
 
     let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "First\nPage 1 of 2");
-    assert_eq!(
-        pdf.extract_text(&[2]).unwrap().trim(),
-        "Second\nPage 2 of 2"
-    );
+    assert_eq!(crate::tests::page_text(&pdf, 1), "First\nPage 1 of 2");
+    assert_eq!(crate::tests::page_text(&pdf, 2), "Second\nPage 2 of 2");
 }
 
 #[test]
@@ -171,7 +168,7 @@ fn given_a_paragraph_with_bold_and_break_runs_when_decoding_then_paints_one_line
     ));
     bytes.extend(record(255, &[]));
     let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
-    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "Hello World\nagain");
+    assert_eq!(crate::tests::page_text(&pdf, 1), "Hello World\nagain");
     let page = *pdf.get_pages().values().next().unwrap();
     let content = String::from_utf8(pdf.get_page_content(page)).unwrap();
     let objects: Vec<&str> = content.split("ET").collect();
@@ -248,16 +245,10 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     assert!(expected.starts_with(b"%PDF-"));
     let pdf = lopdf::Document::load_mem(&expected).unwrap();
     assert_eq!(pdf.get_pages().len(), 4);
-    assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
-        "Before\nBoxed\nrow\n1"
-    );
-    assert_eq!(
-        pdf.extract_text(&[2]).unwrap().trim(),
-        "head\nbody\nStacked"
-    );
-    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Styled");
-    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
+    assert_eq!(crate::tests::page_text(&pdf, 1), "Before\nBoxed\nrow\n1");
+    assert_eq!(crate::tests::page_text(&pdf, 2), "head\nbody\nStacked");
+    assert_eq!(crate::tests::page_text(&pdf, 3), "Styled");
+    assert_eq!(crate::tests::page_text(&pdf, 4), "After");
     for split in 0..=bytes.len() {
         let mut decoder = decoder();
         decoder.push(&bytes[..split]).unwrap();
@@ -320,7 +311,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&bad_length), "truncated record");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
-    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 512, b"x")]));
+    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 1024, b"x")]));
     assert_eq!(push_error(&bad_flags), "invalid run flags");
 
     let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);
