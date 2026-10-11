@@ -27,8 +27,7 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 24.21.0
-          registry-url: https://npm.pkg.github.com
-          scope: '@pettersen3008'
+          registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - name: Check release tag
         env:
@@ -81,7 +80,7 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/${{ steps.pack.outputs.tarball }}
-      - run: npm publish "$RUNNER_TEMP/$TARBALL" --access public
+      - run: npm publish "$RUNNER_TEMP/$TARBALL" --access public --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL: ${{ steps.pack.outputs.tarball }}

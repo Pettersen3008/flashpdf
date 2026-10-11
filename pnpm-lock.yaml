@@ -237,15 +237,15 @@ importers:
       '@fontsource-variable/geist':
         specifier: ^5.3.0
         version: 5.3.0
-      '@pettersen3008/flashpdf':
-        specifier: workspace:*
-        version: link:../flashpdf
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
       cn:
         specifier: ^0.4.0
         version: 0.4.0
+      flashpdf:
+        specifier: workspace:*
+        version: link:../flashpdf
       lucide-react:
         specifier: ^1.51.0
         version: 1.51.0(@types/react@19.3.0)(react@19.3.0)

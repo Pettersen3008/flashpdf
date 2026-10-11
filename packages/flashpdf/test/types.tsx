@@ -1,11 +1,4 @@
-import {
-	Barcode,
-	PageNumber,
-	QRCode,
-	render,
-	TotalPages,
-	type EmbeddedFont,
-} from "@pettersen3008/flashpdf";
+import { Barcode, PageNumber, QRCode, render, TotalPages, type EmbeddedFont } from "flashpdf";
 
 const invoice = (
 	<main className="invoice" style={{ padding: "18pt", backgroundColor: "#fff" }}>
@@ -136,4 +129,4 @@ void render(_outline, { outline: true });
 const _bookmarkTrue = <h2 data-bookmark={true}>Terms</h2>;
 // @ts-expect-error The outline option is a boolean.
 void render(_outline, { outline: "yes" });
-void import("@pettersen3008/flashpdf/jsx-runtime");
+void import("flashpdf/jsx-runtime");

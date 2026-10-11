@@ -52,7 +52,7 @@ test("given a spread before key, when TypeScript compiles the JSX, then its crea
 			"--jsx",
 			"react-jsx",
 			"--jsxImportSource",
-			"@pettersen3008/flashpdf",
+			"flashpdf",
 			"--noCheck",
 			"--module",
 			"esnext",

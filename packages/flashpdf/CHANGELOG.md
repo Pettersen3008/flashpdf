@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- Publish as `flashpdf` on npm. Replace `@pettersen3008/flashpdf` in imports, `jsxImportSource`, and dependency declarations; no GitHub Packages token or registry override is needed. Existing releases under the old name remain available.
+
+
 ### Added
 
 - Inline `<svg>` for logos, icons, and charts: `g`, `rect` with `rx`/`ry`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, and `path` with the full `d` grammar, arcs included. Elements take `transform`, the fill and stroke presentation attributes or a `style` object, opacity, and `currentColor`. The drawing lays out like `img`, honours `viewBox` and `preserveAspectRatio`, clips to its box, and in tagged mode becomes a figure described by `aria-label` or `<title>`. Text, gradients, patterns, filters, masks, `clipPath`, `use`, `image`, `foreignObject`, CSS inside the drawing, and unknown attributes reject with a reason.
@@ -207,7 +212,7 @@
 
 ### Changed
 
-- FlashPDF owns its JSX runtime and no longer requires React. Use `jsxImportSource: "@pettersen3008/flashpdf"` or the per-file pragma; React-created host-element trees remain supported.
+- FlashPDF owns its JSX runtime and no longer requires React. Use `jsxImportSource: "flashpdf"` or the per-file pragma; React-created host-element trees remain supported.
 
 ## 0.1.0 - 2026-09-16
 
@@ -224,7 +229,7 @@
 ### Changed
 
 - Helvetica and Helvetica-Bold remain the fallback. Embedded-font text keeps the WinAnsi subset and rejects shaping, fallback lists, and faces beyond regular/bold.
-- The WASM now ships inside the package at `wasm/`, so an installed `@pettersen3008/flashpdf` resolves its own module. Only the optimized build is published.
+- The WASM now ships inside the package at `wasm/`, so an installed `flashpdf` resolves its own module. Only the optimized build is published.
 - Unsupported CSS names the reason it cannot be honoured, and at-rule and selector errors carry a source position.
 - Rule order now runs across the whole `stylesheets` array, so a later sheet wins a tie at equal specificity.
 - Text layout uses each font's ascent and descent, bold Helvetica widths, percentage flex-row columns, transparent paint, and ordered shorthand expansion.

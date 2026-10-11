@@ -5,8 +5,8 @@ Render invoices and reports from native JSX and a static CSS subset. A Rust layo
 ## Quickstart
 
 ```tsx
-/** @jsxImportSource @pettersen3008/flashpdf */
-import { render } from '@pettersen3008/flashpdf';
+/** @jsxImportSource flashpdf */
+import { render } from 'flashpdf';
 
 function Invoice({ total }: { total: string }) {
   return (
@@ -88,7 +88,7 @@ PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and base
 `QRCode` and `Barcode` draw vector symbols through `svg`, so they stay sharp at any size and need no image library.
 
 ```tsx
-import { Barcode, QRCode } from '@pettersen3008/flashpdf';
+import { Barcode, QRCode } from 'flashpdf';
 
 <QRCode value="https://example.com/pay/42" alt="Pay invoice 42" style={{ width: 90 }} />
 <Barcode value="INV-2026-0042" moduleWidth={1} height={36} />
@@ -98,22 +98,15 @@ import { Barcode, QRCode } from '@pettersen3008/flashpdf';
 
 ## Install
 
-Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
-
-```ini
-@pettersen3008:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-Then install:
+Install from npm without a registry configuration or authentication:
 
 ```sh
-npm install @pettersen3008/flashpdf
-pnpm add @pettersen3008/flashpdf
-bun add @pettersen3008/flashpdf
+npm install flashpdf
+pnpm add flashpdf
+bun add flashpdf
 ```
 
-FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImportSource: "@pettersen3008/flashpdf"` to a template-only `tsconfig`, or use the file pragma above in an app that also uses React. FlashPDF also accepts ordinary React host-element trees. It resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
+FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImportSource: "flashpdf"` to a template-only `tsconfig`, or use the file pragma above in an app that also uses React. FlashPDF also accepts ordinary React host-element trees. It resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
 
 `render` returns a `Uint8Array`. FlashPDF ships no viewer, download, or upload helper, so you own what happens next:
 
@@ -127,7 +120,7 @@ Compile stylesheets with the consuming app's build tool and pass the resulting s
 
 ```tsx
 import css from './invoice.css?inline';
-import { render } from '@pettersen3008/flashpdf';
+import { render } from 'flashpdf';
 
 const pdf = await render(<main className="invoice">…</main>, { stylesheets: [css] });
 ```
@@ -152,7 +145,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 `RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; outline?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
-import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
+import { PageNumber, TotalPages } from 'flashpdf';
 
 const pdf = await render(<Invoice />, {
   header: <header style={{ fontSize: '9pt' }}>Acme invoice</header>,
@@ -210,7 +203,7 @@ FlashPDF only checks that `xml` is UTF-8 text that starts with `<` and ends with
 | Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
 | Vercel Edge | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
 
-Every target runs the same decoder. `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+Every target runs the same decoder. `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
 
 Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common rejections, recipes, and a react-pdf migration map live in the [guide](./docs/guide.md).
 
@@ -227,7 +220,7 @@ Supported CSS, the intentional v1 limits, and the reason behind each rejection l
 
 ## Working on FlashPDF
 
-Requirements: Node 22.12+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools (`mutool`) are optional locally, each enabling a check in `tests/e2e.mjs`, and CI requires all three. The package itself runs on Node 20.19+.
+Requirements: Node 22.18 or 24.11+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools (`mutool`) are optional locally, each enabling a check in `tests/e2e.mjs`, and CI requires all three. The package itself runs on Node 20.19+.
 
 pnpm 10 cannot switch itself to pnpm 12, and Corepack 0.34 cannot launch it, so install the pinned version directly.
 
@@ -240,9 +233,9 @@ sh verify.sh
 
 That formats, lints, and tests the Rust workspace, formats and lints the TypeScript, rebuilds and size-gates the WASM, typechecks, runs the CSS build-step examples, runs the Vitest unit and integration projects, and finally runs the packed-package E2E test in Node, AWS Lambda packaging, Bun, Wrangler, and Chromium.
 
-Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. Every library renders the same fixture: A4 page, 36pt margins, 10pt body text, a 24pt heading, and a 70pt right-aligned amount column, so the comparison is fair even though each library uses its native authoring API. It reports median and p95 cold start and warm render, peak RSS, package size (`installBytes` adds every transitive runtime dependency, deduped by real path), and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts.
+Run the isolated renderer comparison with `pnpm --filter flashpdf bench`. Every library renders the same fixture: A4 page, 36pt margins, 10pt body text, a 24pt heading, and a 70pt right-aligned amount column, so the comparison is fair even though each library uses its native authoring API. It reports median and p95 cold start and warm render, peak RSS, package size (`installBytes` adds every transitive runtime dependency, deduped by real path), and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts.
 
-To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version and against a `## <version>` heading in `packages/flashpdf/CHANGELOG.md`, reruns `verify.sh`, attests build provenance for the packed tarball, and publishes that tarball to GitHub Packages with `GITHUB_TOKEN`.
+To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version and against a `## <version>` heading in `packages/flashpdf/CHANGELOG.md`, reruns `verify.sh`, attests build provenance for the packed tarball, and publishes that tarball to npm with provenance using `NPM_TOKEN` or npm trusted publishing.
 
 `tests/golden/css-invoice.txt` pins the PDF content stream of the CSS invoice: every draw position, colour, font, and page break. Regenerate it with `UPDATE_GOLDEN=1` and review the diff.
 

@@ -4,7 +4,7 @@
 		"rootDir": ".",
 		"outDir": "../dist-examples",
 		"jsx": "react-jsx",
-		"jsxImportSource": "@pettersen3008/flashpdf"
+		"jsxImportSource": "flashpdf"
 	},
 	"include": ["*.tsx", "*.d.ts"]
 }

@@ -14,7 +14,7 @@ The browser entry loads the WASM with `new URL('../wasm/flashpdf_wasm_bg.wasm', 
 
 ```js
 // next.config.mjs
-export default { serverExternalPackages: ['@pettersen3008/flashpdf'] };
+export default { serverExternalPackages: ['flashpdf'] };
 ```
 
 The option is harmless under Turbopack, so you can set it everywhere. The `edge` runtime is untested.
@@ -145,7 +145,7 @@ Add amounts as integer cents and round once. `breakInside: 'avoid'` keeps the th
 ### Page X of Y footer
 
 ```tsx
-import { PageNumber, TotalPages, render } from '@pettersen3008/flashpdf';
+import { PageNumber, TotalPages, render } from 'flashpdf';
 
 const pdf = await render(<Invoice />, {
   footer: (
@@ -163,7 +163,7 @@ A header or footer is one styled text line that repeats on every page and reserv
 European banking apps read a SEPA credit transfer from an EPC QR code, also called GiroCode. The payload is plain text with one field per line, as the EPC069-12 guideline defines it:
 
 ```tsx
-import { QRCode } from '@pettersen3008/flashpdf';
+import { QRCode } from 'flashpdf';
 
 const epc = [
   'BCD', // service tag
@@ -188,7 +188,7 @@ The guideline asks for error correction level M and at most 331 bytes. FlashPDF 
 The Swiss QR code holds the payment part of a QR-bill. Lines end with LF or CR LF, and the fields follow the Swiss Implementation Guidelines:
 
 ```tsx
-import { QRCode } from '@pettersen3008/flashpdf';
+import { QRCode } from 'flashpdf';
 
 const swiss = [
   'SPC', '0200', '1', // QR type, version, UTF-8

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const libraries = ["flashpdf", "pdfkit", "react-pdf", "takumi"];
 const fixtures = ["invoice", "report"];
 const packageNames = {
-	flashpdf: "@pettersen3008/flashpdf",
+	flashpdf: "flashpdf",
 	pdfkit: "pdfkit",
 	"react-pdf": "@react-pdf/renderer",
 	takumi: "takumi-pdf",

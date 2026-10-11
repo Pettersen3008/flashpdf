@@ -59,8 +59,8 @@ try {
 	const font = readFileSync(join(repo, "packages/flashpdf/test/fixtures/Abel-Regular.ttf"));
 	writeFileSync(
 		join(work, "invoice.mjs"),
-		`import { jsx, jsxs } from "@pettersen3008/flashpdf/jsx-runtime";
-import { render, stylesheet } from "@pettersen3008/flashpdf";
+		`import { jsx, jsxs } from "flashpdf/jsx-runtime";
+import { render, stylesheet } from "flashpdf";
 
 const bytes = (base64) => Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
 const logo = bytes("${logo.toString("base64")}");
@@ -174,11 +174,7 @@ export default {
 			await worker.dispose();
 		}
 
-		const resolved = [
-			"@pettersen3008/flashpdf",
-			"@pettersen3008/flashpdf/package.json",
-			"@pettersen3008/flashpdf/jsx-runtime",
-		];
+		const resolved = ["flashpdf", "flashpdf/package.json", "flashpdf/jsx-runtime"];
 		for (const entry of resolved)
 			run(process.execPath, [
 				"--input-type=module",
@@ -190,7 +186,7 @@ export default {
 		cpSync(join(repo, "packages/flashpdf/examples"), types, { recursive: true });
 		writeFileSync(
 			join(types, "consumer.tsx"),
-			`import { render, stylesheet, type EmbeddedFont, type RenderOptions } from "@pettersen3008/flashpdf";
+			`import { render, stylesheet, type EmbeddedFont, type RenderOptions } from "flashpdf";
 
 const options: RenderOptions = { pageFormat: "A4", margin: 36 };
 const font: EmbeddedFont = { family: "Invoice", regular: new Uint8Array(), bold: new Uint8Array() };
@@ -213,7 +209,7 @@ export function invoice(total: string) {
 					target: "es2022",
 					moduleResolution: "bundler",
 					jsx: "react-jsx",
-					jsxImportSource: "@pettersen3008/flashpdf",
+					jsxImportSource: "flashpdf",
 				},
 				include: ["consumer.tsx", "native-invoice.tsx"],
 			}),

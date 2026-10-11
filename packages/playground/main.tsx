@@ -1,6 +1,6 @@
-import * as flashpdf from "@pettersen3008/flashpdf";
-import type { Element, EmbeddedFont, RenderOptions } from "@pettersen3008/flashpdf";
-import * as jsxRuntime from "@pettersen3008/flashpdf/jsx-runtime";
+import * as flashpdf from "flashpdf";
+import type { Element, EmbeddedFont, RenderOptions } from "flashpdf";
+import * as jsxRuntime from "flashpdf/jsx-runtime";
 import { Download, ExternalLink, FileText, Link2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -102,7 +102,7 @@ function compile(source: string) {
 	const body = transform(source, {
 		transforms: ["typescript", "jsx"],
 		jsxRuntime: "automatic",
-		jsxImportSource: "@pettersen3008/flashpdf",
+		jsxImportSource: "flashpdf",
 		production: true,
 		filePath: "template.tsx",
 	})
@@ -113,7 +113,7 @@ function compile(source: string) {
 		.replace(/^export default /m, "const __default = ")
 		.replace(/^export (?=(?:const|let|var|function|class|async) )/gm, "");
 	if (/^import\b/m.test(body)) {
-		throw new Error('Only imports from "@pettersen3008/flashpdf" are available in the playground.');
+		throw new Error('Only imports from "flashpdf" are available in the playground.');
 	}
 	return new AsyncFunction("__flashpdf", `"use strict";\n${body}\nreturn __default;`);
 }

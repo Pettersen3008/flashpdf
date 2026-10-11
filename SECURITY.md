@@ -12,7 +12,7 @@ submitting.
 
 ## Support window
 
-Security fixes target the latest `@pettersen3008/flashpdf` release on GitHub
+Security fixes target the latest `flashpdf` release on GitHub
 Packages and the latest `main` commit. Older releases receive no fixes.
 
 ## Untrusted input

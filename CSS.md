@@ -63,7 +63,7 @@ A link to `#id` is a `GoTo` action to a destination at the top of the target's f
 Compile CSS in the consuming app's build step, then pass the resulting string to `render`. CSS Modules and minification belong to that build step. `stylesheet` validates the final CSS against FlashPDF's supported subset.
 
 ```ts
-import { render } from '@pettersen3008/flashpdf';
+import { render } from 'flashpdf';
 
 const css = '.invoice { padding: 18pt; background: #fff }';
 const pdf = await render(<main className="invoice">Invoice</main>, {
@@ -71,7 +71,7 @@ const pdf = await render(<main className="invoice">Invoice</main>, {
 });
 ```
 
-The CSS may come from CSS Modules or any tool that emits static CSS. Runnable build-step examples cover [Tailwind](./packages/flashpdf/examples/css-integrations/tailwind.mjs), [StyleX](./packages/flashpdf/examples/css-integrations/stylex.mjs), and [styled-components](./packages/flashpdf/examples/css-integrations/styled-components.mjs). Run all three with `pnpm --filter @pettersen3008/flashpdf examples:css`.
+The CSS may come from CSS Modules or any tool that emits static CSS. Runnable build-step examples cover [Tailwind](./packages/flashpdf/examples/css-integrations/tailwind.mjs), [StyleX](./packages/flashpdf/examples/css-integrations/stylex.mjs), and [styled-components](./packages/flashpdf/examples/css-integrations/styled-components.mjs). Run all three with `pnpm --filter flashpdf examples:css`.
 
 Tailwind's example imports `tailwindcss/theme.css` with `theme(inline)`, so colour and spacing utilities carry their values instead of `var()` references to a `:root` rule in `@layer theme`, which FlashPDF skips, and `tailwindcss/utilities.css` with `source(none)`, so it builds only the listed utilities, unlayered. It renders an invoice from that build; the Tailwind v4 section of the [guide](./docs/guide.md#tailwind-v4) lists the utilities that render and the ones that reject. StyleX passes Babel metadata through `processStylexRules`. styled-components' server output also contains hydration metadata with unsupported attribute selectors and `content`; its example selects the generated component rule before calling `render`. FlashPDF adds no runtime adapter for any of them.
 

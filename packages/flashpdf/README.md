@@ -7,8 +7,8 @@ Build it from a clone with the commands in the repository [README](https://githu
 ## Quickstart
 
 ```tsx
-/** @jsxImportSource @pettersen3008/flashpdf */
-import { render } from '@pettersen3008/flashpdf';
+/** @jsxImportSource flashpdf */
+import { render } from 'flashpdf';
 
 function Invoice({ total }: { total: string }) {
   return (
@@ -66,20 +66,13 @@ PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and base
 
 ## Install
 
-Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
-
-```ini
-@pettersen3008:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-Then install:
+Install from npm without a registry configuration or authentication:
 
 ```sh
-npm install @pettersen3008/flashpdf
+npm install flashpdf
 ```
 
-FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImportSource: "@pettersen3008/flashpdf"` to a template-only `tsconfig`, or use the file pragma above in an app that also uses React. FlashPDF also accepts ordinary React host-element trees. It resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
+FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImportSource: "flashpdf"` to a template-only `tsconfig`, or use the file pragma above in an app that also uses React. FlashPDF also accepts ordinary React host-element trees. It resolves pure function components and fragments without mounting a DOM. Effects, browser layout, and hook state do not belong in a static PDF template.
 
 `render` returns a `Uint8Array`. FlashPDF ships no viewer, download, or upload helper, so you own what happens next:
 
@@ -93,7 +86,7 @@ Compile stylesheets with the consuming app's build tool and pass the resulting s
 
 ```tsx
 import css from './invoice.css?inline';
-import { render } from '@pettersen3008/flashpdf';
+import { render } from 'flashpdf';
 
 const pdf = await render(<main className="invoice">…</main>, { stylesheets: [css] });
 ```
@@ -116,7 +109,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 `RenderOptions` accepts page format, margin, stylesheets, embedded fonts, a one-line repeating `header` and `footer`, `metadata`, and `tagged`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. Tagged mode requires a language and writes paragraph-line and figure tags with image `alt` text; it is not PDF/UA conformant.
 
 ```tsx
-import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
+import { PageNumber, TotalPages } from 'flashpdf';
 
 const pdf = await render(<Invoice />, {
   header: <header style={{ fontSize: '9pt' }}>Acme invoice</header>,
@@ -151,7 +144,7 @@ Embedded TrueType files are subset to used glyphs and support Unicode through cm
 | Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
 | Vercel Edge | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
 
-Every target runs the same decoder. The repository's `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+Every target runs the same decoder. The repository's `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
 
 Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common rejections, recipes, and a react-pdf migration map live in the [guide](https://github.com/pettersen3008/flashpdf/blob/main/docs/guide.md).
 
