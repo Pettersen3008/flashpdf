@@ -33,7 +33,11 @@ void render(invoice, {
 			Page <PageNumber /> of <TotalPages />
 		</footer>
 	),
+	firstPageHeader: [<h1 key="name">Acme</h1>, <p key="address">Storgata 1</p>],
+	firstPageFooter: null,
 });
+// @ts-expect-error Only the first-page variants take null.
+void render(invoice, { header: null });
 // @ts-expect-error A PDF document starts with one or more React elements.
 void render("bare text");
 // @ts-expect-error FlashPDF only accepts its documented intrinsic elements.

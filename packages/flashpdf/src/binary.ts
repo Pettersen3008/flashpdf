@@ -57,7 +57,7 @@ export class Binary {
 	/** `margin` is top, right, bottom, left. */
 	header(width: number, height: number, margin: readonly number[]) {
 		for (const byte of [70, 80, 68, 70]) this.u8(byte);
-		this.u16(8);
+		this.u16(12);
 		this.f32(width);
 		this.f32(height);
 		for (const side of margin) this.f32(side);

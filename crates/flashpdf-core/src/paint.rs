@@ -239,25 +239,6 @@ impl<'a> PdfPainter<'a> {
         }
     }
 
-    pub(crate) fn paint_line(
-        &mut self,
-        text: &[u8],
-        style: crate::TextStyle,
-        origin: Point,
-        available_width: Pt,
-        text_width: Pt,
-    ) {
-        self.content.begin_text();
-        self.set_fill(style.color);
-        let mut buffer = [0_u8; 4];
-        self.content
-            .set_font(Name(font_name(style.font, &mut buffer)), style.size.get());
-        let x = aligned(origin.x, style.align, available_width, text_width);
-        self.content.next_line(x.get(), origin.y.get());
-        self.content.show(Str(text));
-        self.content.end_text();
-    }
-
     fn set_fill(&mut self, color: Rgb) {
         let [r, g, b] = color.normalized();
         self.content.set_fill_rgb(r, g, b);

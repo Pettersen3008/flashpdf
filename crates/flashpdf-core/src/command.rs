@@ -61,6 +61,7 @@ pub enum ColumnWidth {
 }
 
 /// The protocol's decoded form owns data across input chunks.
+#[derive(Clone)]
 pub(crate) enum OwnedCommand {
     Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>),
     BoxStart(BoxStyle),

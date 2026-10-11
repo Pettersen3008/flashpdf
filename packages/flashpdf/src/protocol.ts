@@ -40,8 +40,8 @@ const opcode = {
 } as const;
 
 export class ProtocolWriter {
-	private repeating: "header" | "footer" | undefined;
-	private repeatWritten = false;
+	/** The render option whose header or footer block is being written. */
+	private repeating: string | undefined;
 	/** Slot per registered byte array, so a logo reused on every row embeds once. */
 	private readonly images = new Map<Uint8Array, number>();
 
@@ -82,22 +82,6 @@ export class ProtocolWriter {
 
 	paragraph(runs: readonly Run[], align: string) {
 		const alignment = align === "center" ? 1 : align === "right" ? 2 : 0;
-		if (this.repeating) {
-			const [only] = runs;
-			if (this.repeatWritten || runs.length !== 1 || only!.break)
-				throw new Error(`${this.repeating} must be a single text line`);
-			if (only!.underline || only!.lineThrough || only!.link !== undefined)
-				throw new Error(`${this.repeating} text cannot be underlined or linked`);
-			this.repeatWritten = true;
-			this.binary.record(opcode[this.repeating], () => {
-				this.binary.f32(only!.size);
-				this.binary.u8(alignment);
-				for (const channel of only!.color) this.binary.u8(channel);
-				this.binary.u8(only!.font);
-				this.binary.text(only!.text);
-			});
-			return;
-		}
 		const links: string[] = [];
 		for (const run of runs)
 			if (run.link !== undefined && !links.includes(run.link)) links.push(run.link);
@@ -140,7 +124,6 @@ export class ProtocolWriter {
 		alt: string,
 		link: string | undefined,
 	) {
-		this.body();
 		let slot = this.images.get(src);
 		if (slot === undefined) {
 			try {
@@ -171,22 +154,18 @@ export class ProtocolWriter {
 	}
 
 	spacer(height: number) {
-		this.body();
 		this.binary.record(opcode.spacer, () => this.binary.f32(height));
 	}
 
 	stackStart(gap: number) {
-		this.body();
 		this.binary.record(opcode.stackStart, () => this.binary.f32(gap));
 	}
 
 	stackEnd() {
-		this.body();
 		this.binary.record(opcode.stackEnd);
 	}
 
 	rowStart(columns: readonly Column[]) {
-		this.body();
 		this.binary.record(opcode.rowStart, () => {
 			this.binary.u16(columns.length);
 			for (const column of columns) {
@@ -197,13 +176,11 @@ export class ProtocolWriter {
 	}
 
 	rowEnd() {
-		this.body();
 		this.binary.record(opcode.rowEnd);
 	}
 
 	/** The first `headerRows` children repeat on every page the table continues on. */
 	tableStart(headerRows: number, footerRows: number, width: Column) {
-		this.body();
 		if (headerRows > 0xffff) throw new Error("too many header rows");
 		if (footerRows > 0xffff) throw new Error("too many footer rows");
 		this.binary.record(opcode.tableStart, () => {
@@ -215,27 +192,27 @@ export class ProtocolWriter {
 	}
 
 	tableEnd() {
-		this.body();
 		this.binary.record(opcode.tableEnd);
 	}
 
 	pageBreak() {
-		this.body();
+		if (this.repeating) throw new Error(`${this.repeating} cannot break the page`);
 		this.binary.record(opcode.pageBreak);
 	}
 
-	repeatStart(position: "header" | "footer") {
-		this.repeating = position;
-		this.repeatWritten = false;
+	/** The engine takes the next top-level block, this stack, as the header or footer. */
+	repeatStart(position: "header" | "footer", first: boolean, option: string) {
+		this.binary.record(opcode[position], () => this.binary.u8(first ? 1 : 0));
+		this.stackStart(0);
+		this.repeating = option;
 	}
 
 	repeatEnd() {
-		if (!this.repeatWritten) throw new Error(`${this.repeating} must be a single text line`);
 		this.repeating = undefined;
+		this.stackEnd();
 	}
 
 	boxStart(box: Box) {
-		this.body();
 		this.binary.record(opcode.boxStart, () => {
 			for (const edge of [...box.margin, ...box.padding, ...box.border]) this.binary.f32(edge);
 			if (box.background) {
@@ -247,15 +224,10 @@ export class ProtocolWriter {
 	}
 
 	boxEnd() {
-		this.body();
 		this.binary.record(opcode.boxEnd);
 	}
 
 	end() {
 		this.binary.record(opcode.end);
-	}
-
-	private body() {
-		if (this.repeating) throw new Error(`${this.repeating} must be a single text line`);
 	}
 }

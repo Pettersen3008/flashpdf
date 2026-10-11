@@ -312,6 +312,21 @@ fn run(len: usize, bold: bool, size: f32, hard_break: bool) -> TextRun {
     }
 }
 
+/// A one-paragraph header or footer block.
+fn line(text: &str, style: TextStyle) -> Vec<crate::OwnedCommand> {
+    let run = TextRun {
+        font: style.font,
+        color: style.color,
+        ..run(text.len(), false, style.size.get(), false)
+    };
+    vec![crate::OwnedCommand::Paragraph(
+        style.align,
+        text.into(),
+        vec![run],
+        Vec::new(),
+    )]
+}
+
 #[test]
 fn given_four_different_page_margins_and_a_header_and_footer_when_rendered_then_each_line_sits_inside_its_margins(
 ) {
@@ -327,9 +342,11 @@ fn given_four_different_page_margins_and_a_header_and_footer_when_rendered_then_
         ..TextStyle::plain(Pt(10.0))
     };
     renderer
-        .set_header("H".into(), TextStyle::plain(Pt(10.0)))
+        .set_furniture(false, false, line("H", TextStyle::plain(Pt(10.0))))
         .unwrap();
-    renderer.set_footer("F".into(), right).unwrap();
+    renderer
+        .set_furniture(true, false, line("F", right))
+        .unwrap();
     renderer.push(&[text("body")]).unwrap();
     let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
     let starts: Vec<(f32, f32)> = content(&pdf)
@@ -932,7 +949,7 @@ fn given_a_header_and_a_line_taller_than_the_page_when_rendered_then_rejects_wit
     std::thread::spawn(move || {
         let mut renderer = super::Renderer::new(page());
         renderer
-            .set_header("Header".into(), TextStyle::plain(Pt(10.0)))
+            .set_furniture(false, false, line("Header", TextStyle::plain(Pt(10.0))))
             .unwrap();
         let runs = [TextRun {
             line_height: Some(Pt(100.0)),
@@ -956,8 +973,10 @@ fn given_a_header_and_footer_when_a_stack_or_table_row_is_taller_than_the_body_b
 ) {
     let render = |commands: &[Command<'_>]| {
         let mut renderer = super::Renderer::new(page());
-        for set in [super::Renderer::set_header, super::Renderer::set_footer] {
-            set(&mut renderer, "x".into(), TextStyle::plain(Pt(10.0))).unwrap();
+        for footer in [false, true] {
+            renderer
+                .set_furniture(footer, false, line("x", TextStyle::plain(Pt(10.0))))
+                .unwrap();
         }
         renderer.push(commands)?;
         renderer.finish()
@@ -1006,8 +1025,58 @@ fn given_a_long_footer_and_many_page_breaks_when_finishing_then_rejects_past_the
     let mut renderer = super::Renderer::new(Page::A4);
     // 60,000 glyphs at 0.01pt fit the line, so every page paints about 60 KB of footer.
     renderer
-        .set_footer("x".repeat(60_000), TextStyle::plain(Pt(0.01)))
+        .set_furniture(
+            true,
+            false,
+            line(&"x".repeat(60_000), TextStyle::plain(Pt(0.01))),
+        )
         .unwrap();
     renderer.push(&vec![Command::PageBreak; 300]).unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::DocumentTooLarge));
+}
+
+#[test]
+fn given_a_two_line_first_page_header_and_a_numbered_header_when_rendering_then_each_page_paints_and_reserves_its_own(
+) {
+    let mut renderer = super::Renderer::new(page());
+    let plain = TextStyle::plain(Pt(10.0));
+    renderer
+        .set_furniture(false, false, line("Later \u{1e}", plain))
+        .unwrap();
+    let runs = vec![run(5, false, 10.0, true), run(4, false, 10.0, false)];
+    let first = crate::OwnedCommand::Paragraph(TextAlign::Left, "Firstpage".into(), runs, vec![]);
+    renderer.set_furniture(false, true, vec![first]).unwrap();
+    renderer.push(&["a", "b", "c", "d", "e"].map(text)).unwrap();
+    let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
+    // 40pt of body keeps 21.5pt under the 18.5pt first header and 30.75pt under the later one.
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "a\nb\nFirst\npage");
+    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "c\nd\ne\nLater 2");
+}
+
+#[test]
+fn given_a_header_and_first_page_footer_over_half_the_page_between_margins_when_set_then_rejects_with_page_overflow(
+) {
+    let mut renderer = super::Renderer::new(page());
+    renderer
+        .set_furniture(false, false, line("x", TextStyle::plain(Pt(10.0))))
+        .unwrap();
+    // 9.25pt plus 11.1pt passes half of the 40pt between the margins.
+    assert_eq!(
+        renderer.set_furniture(true, true, line("x", TextStyle::plain(Pt(12.0)))),
+        Err(RenderError::PageOverflow)
+    );
+}
+
+#[test]
+fn given_a_page_number_whose_real_width_pulls_a_larger_word_up_a_line_when_finishing_then_rejects_with_page_overflow(
+) {
+    let page = Page::new(Pt(100.0), Pt(200.0), Edges::all(Pt(5.0))).unwrap();
+    let mut renderer = super::Renderer::new(page);
+    // In 90pt, ten 10pt digits push the first 40pt "M" to a second line; "1" lets it
+    // stay and pushes the second one down, so two 37pt lines replace 9.25pt and 37pt.
+    let runs = vec![run(1, false, 10.0, false), run(4, false, 40.0, false)];
+    let footer = crate::OwnedCommand::Paragraph(TextAlign::Left, "\u{1e} M M".into(), runs, vec![]);
+    renderer.set_furniture(true, false, vec![footer]).unwrap();
+    renderer.push(&[text("body")]).unwrap();
+    assert_eq!(renderer.finish().err(), Some(RenderError::PageOverflow));
 }
