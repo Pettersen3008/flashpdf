@@ -119,7 +119,7 @@ export function nativeInvoice(invoice: Invoice, options?: Pick<RenderOptions, "f
 				</tbody>
 			</table>
 
-			{/* A decorated box is atomic, so the totals block never splits. */}
+			{/* break-inside: avoid keeps the totals block on one page. */}
 			<div
 				style={{
 					breakInside: "avoid",

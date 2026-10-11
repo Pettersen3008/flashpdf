@@ -4,14 +4,14 @@ mod text;
 
 use std::collections::BTreeMap;
 
-pub(crate) use output::{Decoration, LayoutBuffer, PositionedImage, Segment};
+pub(crate) use output::{Decoration, LayoutBuffer, PositionedBox, PositionedImage, Segment};
 pub(crate) use row::table_width;
 
 use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Stack, Table};
 use crate::font::FontBook;
 use crate::geometry::LayoutArea;
 use crate::image::Image;
-use crate::layout::output::{PositionedBox, PositionedLine};
+use crate::layout::output::PositionedLine;
 use crate::{BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun};
 
 /// CSS reference pixels are 96 per inch; PDF points are 72.
@@ -346,6 +346,6 @@ impl<'a> LayoutEngine<'a> {
     }
 }
 
-fn painted(style: &BoxStyle) -> bool {
+pub(crate) fn painted(style: &BoxStyle) -> bool {
     style.background.is_some() || style.border.iter().any(|edge| *edge > Pt::ZERO)
 }

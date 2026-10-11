@@ -412,34 +412,63 @@ fn given_a_single_line_taller_than_the_page_when_streaming_then_rejects() {
     );
 }
 
-#[test]
-fn given_a_bordered_box_taller_than_the_page_when_placed_then_rejects() {
-    let style = super::BoxStyle {
+fn bordered() -> super::BoxStyle {
+    super::BoxStyle {
         margin: Edges::all(Pt(0.0)),
         padding: Edges::all(Pt(0.0)),
         border: Edges::all(Pt(1.0)),
-        background: None,
+        background: Some(Rgb {
+            r: 238,
+            g: 238,
+            b: 238,
+        }),
         border_color: Edges::all(Rgb::BLACK),
-    };
+    }
+}
+
+#[test]
+fn given_a_bordered_box_taller_than_the_page_when_placed_then_splits_with_its_top_edge_first_and_bottom_edge_last(
+) {
     let long = "word ".repeat(40);
-    assert_eq!(
-        super::render(
-            page(),
-            &[Command::BoxStart { style }, text(&long), Command::BoxEnd]
-        ),
-        Err(RenderError::PageOverflow)
-    );
-    let plain = super::BoxStyle {
-        border: Edges::all(Pt(0.0)),
-        margin: Edges::all(Pt(2.0)),
-        ..style
-    };
     let pdf = parsed(&[
-        Command::BoxStart { style: plain },
+        Command::BoxStart { style: bordered() },
         text(&long),
         Command::BoxEnd,
     ]);
-    assert_eq!(pdf.get_pages().len(), 3);
+    let pages = pdf.get_pages();
+    assert_eq!(pages.len(), 3);
+    // Each page's fill spans the 100pt body width; only the first and last carry a 1pt horizontal edge.
+    let edges: Vec<usize> = pages
+        .values()
+        .map(|id| {
+            let content = String::from_utf8(pdf.get_page_content(*id)).unwrap();
+            assert!(content.contains(" 100 "), "{content}");
+            content.matches(" 100 1 re").count()
+        })
+        .collect();
+    assert_eq!(edges, [1, 0, 1]);
+    assert!(String::from_utf8(pdf.get_page_content(pages[&1]))
+        .unwrap()
+        .contains("10 49 100 1 re"));
+    let text: String = (1..=3)
+        .map(|page| pdf.extract_text(&[page]).unwrap())
+        .collect();
+    assert_eq!(text.matches("word").count(), 40);
+}
+
+#[test]
+fn given_a_bordered_box_that_fits_a_page_when_it_crosses_the_page_end_then_moves_whole() {
+    let pdf = parsed(&[
+        text("first"),
+        text("second"),
+        text("third"),
+        Command::BoxStart { style: bordered() },
+        text("a"),
+        text("b"),
+        Command::BoxEnd,
+    ]);
+    assert_eq!(pdf.get_pages().len(), 2);
+    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "a\nb");
 }
 
 #[test]

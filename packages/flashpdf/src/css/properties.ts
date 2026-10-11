@@ -8,7 +8,8 @@ export type RejectedProperty =
 	| "verticalAlign"
 	| "objectFit"
 	| "borderCollapse"
-	| "borderSpacing";
+	| "borderSpacing"
+	| "boxDecorationBreak";
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
 type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: string };
 const properties = {
@@ -78,6 +79,11 @@ const properties = {
 	borderSpacing: {
 		css: "border-spacing",
 		unsupported: "cells tile their row; use cell padding",
+	},
+	boxDecorationBreak: {
+		css: "box-decoration-break",
+		unsupported:
+			"a split box draws its top edge on the first page and its bottom edge on the last, as slice does; clone is not implemented",
 	},
 } as const satisfies Record<StyleProperty | RejectedProperty, PropertyDefinition>;
 
