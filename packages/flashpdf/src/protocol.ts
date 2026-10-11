@@ -150,6 +150,8 @@ export class ProtocolWriter {
 		if (slot === undefined) {
 			if (this.imageBytes + src.byteLength > MAX_IMAGE_BYTES)
 				throw new Error("images exceed 64 MiB per render");
+			// The engine checks a new image against the records before it (PDF/A rejects CMYK).
+			this.binary.flush();
 			try {
 				slot = this.assets.add_image(src);
 			} catch (error) {
@@ -263,6 +265,7 @@ export class ProtocolWriter {
 
 	end() {
 		this.binary.record(opcode.end);
+		this.binary.flush();
 	}
 
 	private body() {

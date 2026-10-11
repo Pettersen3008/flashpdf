@@ -48,6 +48,7 @@ const FACTURX: [(&str, &str, AssociationKind); 6] = [
 #[derive(Default)]
 pub struct Decoder {
     pending: Vec<u8>,
+    records: usize,
     page: Option<crate::Page>,
     renderer: Option<crate::Renderer>,
     block: Vec<OwnedCommand>,
@@ -173,6 +174,7 @@ impl Decoder {
                 let start = consumed;
                 consumed += total;
                 self.read_record(pending[start], &pending[start + 5..consumed])?;
+                self.records += 1;
             }
         })();
         if consumed > 0 {
@@ -182,6 +184,12 @@ impl Decoder {
         }
         self.pending = pending;
         result
+    }
+
+    /// Records decoded so far. After a failed `push` it is the index of the failing
+    /// record, so an adapter that batches records can tell which call wrote it.
+    pub fn records(&self) -> usize {
+        self.records
     }
 
     fn read_header(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {

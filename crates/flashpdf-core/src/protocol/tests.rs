@@ -350,6 +350,21 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
 }
 
 #[test]
+fn given_a_batch_with_a_bad_record_when_pushing_then_records_is_its_index() {
+    let mut batch = header(VERSION, 120.0, 60.0, 10.0);
+    batch.extend(plain(b"one"));
+    batch.extend(plain(b"two"));
+    batch.extend(record(4, &[]));
+    batch.extend(plain(b"never read"));
+    let mut decoder = Decoder::default();
+    assert_eq!(
+        decoder.push(&batch).unwrap_err().to_string(),
+        "invalid nesting"
+    );
+    assert_eq!(decoder.records(), 2);
+}
+
+#[test]
 fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
     assert_eq!(
         push_error(&header(VERSION, f32::NAN, 60.0, 10.0)),

@@ -53,6 +53,11 @@ impl PdfRenderer {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    /// Records decoded so far; after a failed `push`, the index of the failing record.
+    pub fn records(&self) -> usize {
+        self.decoder.records()
+    }
+
     pub fn finish(self) -> Result<Vec<u8>, JsValue> {
         self.decoder
             .finish()
