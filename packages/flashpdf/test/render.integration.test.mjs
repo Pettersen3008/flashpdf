@@ -568,20 +568,20 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 			className: "row",
 			children: jsx("span", {
 				className: "total",
-				style: { color: "oklch(50% 0.1 20)" },
+				style: { color: "lab(50% 40 20)" },
 				children: "x",
 			}),
 		}),
 	});
 	await assert.rejects(
 		render(document),
-		/unsupported color: oklch\(50% 0.1 20\) on <span\.total> in <div\.row> > <main\.invoice>/,
+		/unsupported color: lab\(50% 40 20\) on <span\.total> in <div\.row> > <main\.invoice>/,
 	);
 	await assert.rejects(
 		render(jsx("p", { className: "text-red-500", children: "x" }), {
-			stylesheets: [".text-red-500 { color: oklch(63.7% 0.237 25.331) }"],
+			stylesheets: [".text-red-500 { color: lab(54% 77 49) }"],
 		}),
-		/unsupported color: oklch\(63.7% 0.237 25.331\) on <p\.text-red-500>/,
+		/unsupported color: lab\(54% 77 49\) on <p\.text-red-500>/,
 	);
 });
 

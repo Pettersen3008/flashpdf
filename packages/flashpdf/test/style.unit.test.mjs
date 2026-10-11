@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 
 import { test } from "vitest";
 
-import { color, edges, font, helvetica, point, style } from "../dist/style.js";
+import { color, dimension, edges, font, helvetica, point, style } from "../dist/style.js";
 
 test("given pt, px, em, and rem lengths, when resolving a point value, then converts to points", () => {
 	assert.equal(point("12pt"), 12);
@@ -71,6 +71,14 @@ test("given the flex shorthand, when normalizing, then keeps only the grow facto
 	assert.throws(() => style({ flex: "10px" }), /invalid flex: 10px/);
 });
 
+test("given a flex basis that a column would drop, when normalizing, then rejects it", () => {
+	assert.throws(() => style({ flex: "1 1 100px" }), /flex basis is not supported: 1 1 100px/);
+	assert.throws(() => style({ flex: "auto", width: "80pt" }), /flex basis is not supported: auto/);
+	// A zero basis ignores width in CSS too, and `none` keeps the width as the fixed column.
+	assert.equal(style({ flex: 1, width: "80pt" }).flex, 1);
+	assert.equal(style({ flex: "none", width: "80pt" }).flex, 0);
+});
+
 test("given a font-family list, when selecting a font, then uses the first registered family or a generic fallback", () => {
 	const inter = { regular: 2, bold: 3 };
 	const fonts = new Map([
@@ -88,6 +96,10 @@ test("given a font weight outside normal, bold, and 1 to 1000, when normalizing,
 	for (const fontWeight of ["normal", "bold", 700, "700"]) style({ fontWeight });
 	for (const fontWeight of ["bolder", "boldd", 0, "1001"])
 		assert.throws(() => style({ fontWeight }), /invalid fontWeight/, String(fontWeight));
+});
+
+test("given a rem width, as minified Tailwind emits, when parsing it, then converts at 12pt per rem", () => {
+	assert.deepEqual(dimension("8rem", "width"), { kind: 1, value: 96 });
 });
 
 test("given a width with more digits than a float holds, when normalizing, then rejects it", () => {

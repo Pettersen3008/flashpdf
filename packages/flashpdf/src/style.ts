@@ -25,15 +25,18 @@ export function decoration(value: unknown): { underline: boolean; lineThrough: b
 	return result;
 }
 
-export function style(value: unknown): NormalizedStyle {
+/** `parent` is the parent element's normalized style, which `inherit` reads. */
+export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedStyle {
 	if (value === undefined) return {};
-	const result = object(value);
-	for (const key of Object.keys(result)) {
+	const source = object(value);
+	for (const key of Object.keys(source)) {
 		if (key.startsWith("--")) continue;
 		const reason = unsupported[key as keyof typeof unsupported];
 		if (reason) throw new Error(`unsupported style property: ${key} (${reason})`);
 		if (!supported.has(key as never)) throw new Error(`unsupported style property: ${key}`);
 	}
+	// Validated after normalize, so `inherit` and `initial` have become values.
+	const result = normalize(source, parent) as Record<string, unknown>;
 	if (result.display !== undefined && result.display !== "block" && result.display !== "flex")
 		throw new Error("invalid display");
 	if (
@@ -58,7 +61,15 @@ export function style(value: unknown): NormalizedStyle {
 		result.breakInside !== "avoid"
 	)
 		throw new Error("invalid breakInside");
-	if (result.flex !== undefined) result.flex = flexGrow(result.flex);
+	if (result.flex !== undefined) {
+		const { grow, basis } = flexGrow(result.flex);
+		// A column keeps only the grow factor, so a length basis, or `auto` beside a width, would be dropped.
+		if (grow > 0 && (basis === "length" || (basis === "auto" && result.width !== undefined)))
+			throw new Error(
+				`flex basis is not supported: ${String(result.flex)}; use flex: ${grow} to share the row or width alone to fix the column`,
+			);
+		result.flex = grow;
+	}
 	if (result.gap !== undefined) point(result.gap);
 	if (result.fontSize !== undefined) point(result.fontSize, 12, true);
 	if (result.fontWeight !== undefined) bold(result.fontWeight);
@@ -69,5 +80,5 @@ export function style(value: unknown): NormalizedStyle {
 	if (result.width !== undefined) dimension(result.width, "width");
 	if (result.height !== undefined) dimension(result.height, "height");
 	if (result.textDecoration !== undefined) decoration(result.textDecoration);
-	return normalize(result);
+	return result as NormalizedStyle;
 }

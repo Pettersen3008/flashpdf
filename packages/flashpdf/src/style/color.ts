@@ -65,15 +65,43 @@ function hsl(hue: number, saturation: number, lightness: number): Rgb {
 	return [channel(0), channel(8), channel(4)];
 }
 
+/** OKLab to sRGB bytes, clipped per channel to the gamut; see https://bottosson.github.io/posts/oklab/. */
+function oklab(lightness: number, a: number, b: number): Rgb {
+	const l = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+	const m = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+	const s = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
+	const encode = (linear: number) =>
+		byte(linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055);
+	return [
+		encode(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+		encode(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+		encode(-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s),
+	];
+}
+/** An OKLab a/b axis or OKLCH chroma, where 100% is 0.4. */
+function axis(token: string) {
+	return fraction(token, 1) * (token.endsWith("%") ? 0.4 : 1);
+}
+
 function functional(source: string): Rgb | undefined {
-	const match = /^(rgba?|hsla?)\((.*)\)$/.exec(source);
+	const match = /^(rgba?|hsla?|oklab|oklch)\((.*)\)$/.exec(source);
 	if (!match) return undefined;
 	const [first, second, third, alpha, extra] = match[2]!.split(/\s*[,/]\s*|\s+/).filter(Boolean);
 	if (third === undefined || extra !== undefined) return undefined;
 	if (alpha !== undefined) opaque(fraction(alpha, 1));
-	const rgb: Rgb = match[1]!.startsWith("rgb")
+	const hue = (token: string) => Number(token.replace(/deg$/, ""));
+	const kind = match[1]!;
+	const rgb: Rgb = kind.startsWith("rgb")
 		? [byte(fraction(first!, 255)), byte(fraction(second!, 255)), byte(fraction(third, 255))]
-		: hsl(Number(first!.replace(/deg$/, "")), fraction(second!, 100), fraction(third, 100));
+		: kind.startsWith("hsl")
+			? hsl(hue(first!), fraction(second!, 100), fraction(third, 100))
+			: kind === "oklab"
+				? oklab(fraction(first!, 1), axis(second!), axis(third))
+				: oklab(
+						fraction(first!, 1),
+						axis(second!) * Math.cos((hue(third) * Math.PI) / 180),
+						axis(second!) * Math.sin((hue(third) * Math.PI) / 180),
+					);
 	return rgb.some(Number.isNaN) ? undefined : rgb;
 }
 

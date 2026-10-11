@@ -212,6 +212,11 @@ export function href(value: unknown, where = ""): string {
 		throw new Error(
 			`href scheme ${url.protocol} is not allowed; use http, https, or mailto${where}`,
 		);
+	// WHATWG parses `http:foo` as `http://foo/`; an absolute web URL must spell out its host.
+	if (url.protocol !== "mailto:" && !/^\s*https?:\/\/[^/\\?#\s]/i.test(value))
+		throw new Error(
+			`href must name a host, such as https://example.com/, not ${JSON.stringify(value)}${where}`,
+		);
 	if (!/^[\x21-\x7e]+$/.test(url.href))
 		throw new Error(
 			`href must be printable ASCII; percent-encode ${JSON.stringify(url.href)}${where}`,
@@ -254,8 +259,15 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 	if (Array.isArray(value))
 		return value.flatMap((child) => host(child, depth + Number(nested), chain, true));
 
-	const element = object(value);
 	const inside = chain ? ` in ${chain}` : "";
+	if (typeof value !== "object" || !("type" in value) || !("props" in value)) {
+		const kind =
+			typeof value === "object"
+				? `${Object.prototype.toString.call(value).slice(8, -1)} object`
+				: typeof value;
+		throw new Error(`unsupported child: a ${kind}${inside}; pass a string, number, or element`);
+	}
+	const element = object(value);
 	if (!isTag(element.type)) {
 		const hint = typeof element.type === "string" ? HINTS[element.type] : undefined;
 		throw new Error(

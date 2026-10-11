@@ -154,6 +154,20 @@ test("given an img with a string src, when resolving, then rejects with the byte
 	assert.equal(main.children[0].alt, "Logo");
 });
 
+test("given an http href without a host, when resolving, then rejects it", async () => {
+	await assert.rejects(
+		resolveTree(jsx("a", { href: "http:foo", children: "x" })),
+		/href must name a host, such as https:\/\/example\.com\/, not "http:foo" on <a>/,
+	);
+});
+
+test("given a Date child, when resolving, then names its type and parents", async () => {
+	await assert.rejects(
+		resolveTree(jsx("main", { children: jsx("p", { children: new Date(0) }) })),
+		/^Error: unsupported child: a Date object in <p> > <main>; pass a string, number, or element$/,
+	);
+});
+
 test("given an a with a javascript: href, when resolving, then rejects naming the scheme", async () => {
 	await assert.rejects(
 		resolveTree(jsx("a", { href: "javascript:alert(1)", children: "x" })),

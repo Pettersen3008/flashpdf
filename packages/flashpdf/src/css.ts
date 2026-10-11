@@ -9,9 +9,11 @@ export function stylesheet(source: string | TemplateStringsArray, ...values: unk
 	const css = typeof source === "string" ? source : String.raw(source, ...values);
 	for (const rule of parse(css))
 		for (const declarations of Object.values(rule.declarations())) {
-			// A var() value resolves only in an element's cascade, so render checks it.
+			// Custom properties and var() resolve only in an element's cascade, and Tailwind puts
+			// calc() and color-mix() in most utilities, so render checks those where a rule applies.
 			const known = Object.entries(declarations).filter(
-				([key, value]) => !key.startsWith("--") && !String(value).includes("var("),
+				([key, value]) =>
+					!key.startsWith("--") && !/\b(?:var|calc|min|max|clamp|color-mix)\(/i.test(String(value)),
 			);
 			try {
 				const resolved = style(Object.fromEntries(known));

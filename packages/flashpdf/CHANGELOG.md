@@ -17,6 +17,13 @@
 - Embedded fonts use one `cmap` subtable: format 12 before format 4, then Windows before Unicode platform. A font with many records or overlapping format 4 segments no longer takes minutes to load, and a format 12 group that starts inside the previous one keeps its remaining characters.
 - Registered fonts are capped at 64 MiB per render, checked in JavaScript before the bytes are copied into WASM memory.
 - Page sides over 14,400 pt reject, the largest size PDF readers accept.
+### Added
+
+- `oklch()` and `oklab()` colours, converted to sRGB and clipped per channel. Tailwind v4 emits them for every colour utility.
+- `inherit` and `initial` on every supported property, and `currentcolor` as the element's own `color`.
+- `text-decoration-line`, with the values `text-decoration` takes, so Tailwind's `underline` and `line-through` work.
+- `rem` for `width` and image `height`, as minified Tailwind emits for `w-32`.
+
 ### Fixed
 
 - The package root exports `createElement`. TypeScript and Babel import it for `<Row {...row} key={row.id} />`, a spread before `key`, so such a module failed to load.
@@ -34,13 +41,19 @@
 - Type selectors are case-insensitive, so `P { }` matches `<p>`.
 - `<hr>` honours `break-before` and `break-after`.
 - An engine `InvalidLayout`, `TextTooWide`, or `PageOverflow` now says what to change and names the element.
+- `stylesheet()` and `render` no longer fail to parse a sheet whose escaped class name holds a quote, such as Tailwind's `.\[\&_svg\:not\(\[class\*\=\'size-\'\]\)\]`.
+- A non-element object child, such as a `Date`, rejects naming its type instead of `unsupported element undefined`.
 
 ### Changed
 
 - `font-weight` rejects values other than `normal`, `bold`, and 1 to 1000, such as `bolder` or a typo. They rendered regular before.
 - `<hr>` and `<br>` reject children, `<br>` rejects box and layout styles, and `width` on an `<hr>` outside a flex row rejects. All were dropped before.
 - `<td>` and `<th>` outside a table row reject. They rendered as a `<div>` before.
-- `stylesheet()` validates declaration values, not only property names, so `.a { color: notacolor }` rejects up front, naming the selector and position. Values that use `var()` are still checked at `render`.
+- `stylesheet()` validates declaration values, not only property names, so `.a { color: notacolor }` rejects up front, naming the selector and position. Custom property definitions and values that use `var()`, `calc()`, `min()`, `max()`, `clamp()`, or `color-mix()` are checked at `render` where a rule applies, so a Tailwind v4 build still passes `stylesheet()`.
+- Rules whose type selector names a tag FlashPDF never renders, such as `html`, `body`, or `button`, are skipped like other selectors that cannot match.
+- A camelCase property name in a stylesheet, such as `fontSize`, rejects with its kebab-case spelling. Property names are now case-insensitive, as in CSS.
+- An `http:` or `https:` `href` must spell out its host, so `http:foo` rejects.
+- A `flex` grow above 0 with a length basis, or with `auto` beside a `width`, rejects. Columns keep only the grow factor, so the basis was dropped.
 - U+001E and U+001F reject in user text. They are the page number and total pages tokens, so they threw in body text and became page numbers in a footer. `PageNumber` and `TotalPages` still emit them.
 - A `width` or image `height` too large for a 32-bit float rejects as an invalid width instead of reaching the engine.
 ### Added
