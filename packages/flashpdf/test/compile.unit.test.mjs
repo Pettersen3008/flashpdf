@@ -81,7 +81,11 @@ test("given text with an inline bold child, when compiling, then emits one parag
 	const calls = await compiled(
 		jsxs("p", { children: ["Hello ", jsx("b", { children: "World" })] }),
 	);
-	assert.deepEqual(calls, [["paragraph", [run(0, "Hello "), run(1, "World")], "left"]]);
+	assert.deepEqual(calls, [
+		["margin", 12],
+		["paragraph", [run(0, "Hello "), run(1, "World")], "left"],
+		["margin", 12],
+	]);
 });
 
 test("given a br between text, when compiling, then flags a hard break on the preceding run", async () => {
@@ -131,6 +135,7 @@ test("given a link inside a paragraph, when compiling, then its runs carry the h
 		}),
 	);
 	assert.deepEqual(calls, [
+		["margin", 12],
 		[
 			"paragraph",
 			[
@@ -144,6 +149,7 @@ test("given a link inside a paragraph, when compiling, then its runs carry the h
 			],
 			"left",
 		],
+		["margin", 12],
 	]);
 });
 
@@ -184,7 +190,7 @@ test("given a table with thead and tbody, when compiling, then emits the contain
 		["rowStart", columns],
 		...texts.flatMap((text) => [
 			["stackStart", 0, false],
-			["paragraph", [run(font, text)], "left"],
+			["paragraph", [run(font, text)], font === 1 ? "center" : "left"],
 			["stackEnd", false],
 		]),
 		["rowEnd"],
@@ -222,7 +228,7 @@ test("given an hr with break-before: page, when compiling, then breaks the page 
 	const calls = await compiled(jsx("hr", { style: { breakBefore: "page" } }));
 	assert.deepEqual(
 		calls.map(([method]) => method),
-		["pageBreak", "boxStart", "boxEnd"],
+		["pageBreak", "margin", "boxStart", "boxEnd", "margin"],
 	);
 });
 
@@ -309,11 +315,13 @@ test("given a unitless line-height on a block, when a child changes font size, t
 		}),
 	);
 	assert.deepEqual(calls, [
+		["margin", 12],
 		[
 			"paragraph",
 			[run(0, "a", { lineHeight: 18 }), run(0, "b", { size: 20, lineHeight: 30 })],
 			"left",
 		],
+		["margin", 12],
 	]);
 });
 
@@ -327,7 +335,11 @@ test("given em, i, and cite, when compiling, then they default to the Helvetica-
 			],
 		}),
 	);
-	assert.deepEqual(calls, [["paragraph", [run(2, "abc")], "left"]]);
+	assert.deepEqual(calls, [
+		["margin", 12],
+		["paragraph", [run(2, "abc")], "left"],
+		["margin", 12],
+	]);
 });
 
 test("given bold italic text in a family with only regular and bold faces, when compiling, then the run slants the bold face", async () => {
@@ -342,7 +354,11 @@ test("given bold italic text in a family with only regular and bold faces, when 
 		}),
 		fonts,
 	);
-	assert.deepEqual(calls, [["paragraph", [run(5, "x", { oblique: true })], "left"]]);
+	assert.deepEqual(calls, [
+		["margin", 12],
+		["paragraph", [run(5, "x", { oblique: true })], "left"],
+		["margin", 12],
+	]);
 });
 
 test("given capitalize over a word split across runs, when compiling, then only word starts are uppercased", async () => {
@@ -354,6 +370,7 @@ test("given capitalize over a word split across runs, when compiling, then only 
 	);
 	const capitalize = { transform: "capitalize" };
 	assert.deepEqual(calls, [
+		["margin", 12],
 		[
 			"paragraph",
 			[
@@ -363,6 +380,7 @@ test("given capitalize over a word split across runs, when compiling, then only 
 			],
 			"left",
 		],
+		["margin", 12],
 	]);
 });
 
@@ -374,7 +392,9 @@ test("given letter-spacing in em on a parent, when a child changes font size, th
 		}),
 	);
 	assert.deepEqual(calls, [
+		["margin", 12],
 		["paragraph", [run(0, "x", { size: 24, letterSpacing: 6, wordSpacing: -1 })], "left"],
+		["margin", 12],
 	]);
 });
 
@@ -386,6 +406,7 @@ test("given a text-decoration shorthand without a colour inside one with a colou
 		}),
 	);
 	assert.deepEqual(calls, [
+		["margin", 12],
 		[
 			"paragraph",
 			[
@@ -394,6 +415,7 @@ test("given a text-decoration shorthand without a colour inside one with a colou
 			],
 			"left",
 		],
+		["margin", 12],
 	]);
 });
 
@@ -567,7 +589,7 @@ test("given a p with a 10pt bottom margin before an h2 with a 16pt top margin, w
 			],
 		}),
 	);
-	assert.deepEqual(records, ["paragraph", ["spacer", 16], "paragraph"]);
+	assert.deepEqual(records, [["spacer", 12], "paragraph", ["spacer", 16], "paragraph"]);
 });
 
 test("given a box with a left border and bottom padding, when compiling, then a child's top margin collapses through it and its bottom margin stays inside", async () => {
@@ -603,7 +625,7 @@ test("given an empty bordered div with 20pt margins between paragraphs, when com
 			],
 		}),
 	);
-	assert.deepEqual(records, ["paragraph", ["spacer", 20], "paragraph"]);
+	assert.deepEqual(records, [["spacer", 12], "paragraph", ["spacer", 20], "paragraph"]);
 });
 
 test("given flex column items with margins, when compiling, then their margins and their children's add up", async () => {
@@ -622,6 +644,7 @@ test("given flex column items with margins, when compiling, then their margins a
 		"boxEnd",
 		["spacer", 6],
 		"paragraph",
+		["spacer", 12],
 	]);
 });
 
@@ -634,5 +657,11 @@ test("given margins around a forced page break, when compiling, then drops the o
 			],
 		}),
 	);
-	assert.deepEqual(records, ["paragraph", "pageBreak", ["spacer", 12], "paragraph"]);
+	assert.deepEqual(records, [
+		["spacer", 12],
+		"paragraph",
+		"pageBreak",
+		["spacer", 12],
+		"paragraph",
+	]);
 });

@@ -15,7 +15,6 @@ import {
 	times,
 } from "../dist/style.js";
 
-
 test("given pt, px, em, and rem lengths, when resolving a point value, then converts to points", () => {
 	assert.equal(point("12pt"), 12);
 	assert.equal(point("16px"), 12);
@@ -92,7 +91,6 @@ test("given a flex basis that a column would drop, when normalizing, then reject
 });
 
 test("given a font-family list, when selecting a font, then takes the first registered family or built-in match in order", () => {
-
 	const inter = { regular: 2, bold: 3 };
 	const fonts = new Map([
 		["Helvetica", helvetica],

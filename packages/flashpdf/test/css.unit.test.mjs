@@ -311,3 +311,31 @@ test("given a camelCase property name in a stylesheet, when parsing, then reject
 		/unsupported CSS property: fontSize \(use kebab-case: font-size\) in selector "p" at 1:1/,
 	);
 });
+
+test("given paragraphs and headings, when cascading browser defaults, then scales their margins and honors author overrides", async () => {
+	const tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "hr"];
+	const sizes = [1, 2, 1.5, 1.17, 1, 0.83, 0.67, 1];
+	const margins = [1, 0.67, 0.83, 1, 1.33, 1.67, 2.33, 0.5];
+	const [root] = await resolve(
+		jsx("main", {
+			style: { fontSize: 20 },
+			children: tags.map((tag) => jsx(tag, { children: tag === "hr" ? undefined : "text" })),
+		}),
+	);
+	for (const [index, child] of root.children.entries()) {
+		const size = sizes[index] * 20;
+		const edges = boxStyle(child.style, size).margin;
+		assert.ok(Math.abs(edges[0] - size * margins[index]) < 0.00001, child.tag);
+		assert.equal(edges[1], 0);
+		assert.equal(edges[2], edges[0]);
+		assert.equal(edges[3], 0);
+	}
+	const [heading] = await resolve(jsx("h1", { style: { marginBottom: 3 }, children: "x" }), [
+		"h1 { margin: 0 }",
+	]);
+	assert.deepEqual(boxStyle(heading.style, 24).margin, [0, 0, 3, 0]);
+	const [table] = await resolve(
+		jsx("table", { children: jsx("tr", { children: jsx("th", { children: "Heading" }) }) }),
+	);
+	assert.equal(table.children[0].children[0].style.textAlign, "center");
+});

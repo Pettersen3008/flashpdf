@@ -14,13 +14,15 @@ export type StyledElement = Omit<ElementNode, "style" | "children"> & {
 };
 export type StyledNode = TextNode | StyledElement;
 
+// https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/html/resources/html.css
 const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	b: { fontWeight: "bold" },
 	strong: { fontWeight: "bold" },
 	em: { fontStyle: "italic" },
 	i: { fontStyle: "italic" },
 	cite: { fontStyle: "italic" },
-	th: { fontWeight: "bold", textAlign: "left" },
+	th: { fontWeight: "bold", textAlign: "center" },
+	p: { margin: "1em 0" },
 	a: { color: "#0000EE", textDecoration: "underline" },
 	u: { textDecoration: "underline" },
 	ins: { textDecoration: "underline" },
@@ -38,13 +40,13 @@ const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	figure: { margin: "1em 40px" },
 	dd: { marginLeft: "40px" },
 	address: { fontStyle: "italic" },
-	hr: { borderBottom: "1pt solid black" },
-	h1: { fontSize: "2em", fontWeight: "bold" },
-	h2: { fontSize: "1.5em", fontWeight: "bold" },
-	h3: { fontSize: "1.17em", fontWeight: "bold" },
-	h4: { fontSize: "1em", fontWeight: "bold" },
-	h5: { fontSize: "0.83em", fontWeight: "bold" },
-	h6: { fontSize: "0.67em", fontWeight: "bold" },
+	hr: { borderBottom: "1pt solid black", margin: "0.5em 0" },
+	h1: { fontSize: "2em", fontWeight: "bold", margin: "0.67em 0" },
+	h2: { fontSize: "1.5em", fontWeight: "bold", margin: "0.83em 0" },
+	h3: { fontSize: "1.17em", fontWeight: "bold", margin: "1em 0" },
+	h4: { fontSize: "1em", fontWeight: "bold", margin: "1.33em 0" },
+	h5: { fontSize: "0.83em", fontWeight: "bold", margin: "1.67em 0" },
+	h6: { fontSize: "0.67em", fontWeight: "bold", margin: "2.33em 0" },
 };
 
 /** The user-agent rules that depend on nesting: a list inside a list has no vertical margin, and
