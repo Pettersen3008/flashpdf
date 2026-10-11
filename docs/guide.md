@@ -48,12 +48,13 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
-| `undefined CSS variable: --spacing` | A Tailwind build without `theme(inline)` keeps its values in a `:root` rule, which FlashPDF skips. | Import the theme as `theme(inline)`. See Tailwind v4 below. |
+| `undefined CSS variable: --spacing` | A Tailwind build without `theme(inline)` keeps its values in a `:root` rule inside `@layer theme`, which FlashPDF skips with every `@layer` block. | Import the theme as `theme(inline)`. See Tailwind v4 below. |
 | `unsupported media query "(prefers-color-scheme: dark)"` | Only `print`, `screen`, and width conditions evaluate. | Drop the `dark:` or `motion-safe:` utility from the element. |
+| `unsupported CSS selector: attribute selectors`, `:has()`, `:lang()` | The selector could match an element, and FlashPDF cannot evaluate it. `stylesheet()` rejects it even if no element matches. | Select a class or id instead. Selectors that can never match in a PDF, such as `:hover` and `::before`, are skipped without an error. |
 
 ## Tailwind v4
 
-Compile with the Tailwind CLI, then pass the CSS to `render`. Import the theme inline and only the utilities, so colour and spacing utilities carry their values and the preflight, whose `*` and `::before` rules FlashPDF skips, stays out. `examples/css-integrations/tailwind.mjs` builds and renders an invoice this way.
+Compile with the Tailwind CLI, then pass the CSS to `render`. Import the theme inline and only the utilities, so colour and spacing utilities carry their values and the preflight, whose `*` rule sets `box-sizing` and other properties FlashPDF rejects, stays out. `examples/css-integrations/tailwind.mjs` builds and renders an invoice this way.
 
 ```css
 @import 'tailwindcss/theme.css' theme(inline);
@@ -81,7 +82,9 @@ Tailwind compiles spacing to `calc(0.25rem * 4)`, `px-4` to `padding-inline`, `w
 | `hidden`, `grid`, `inline`, `h-8`, `min-w-0`, `max-w-md`, `size-4` | Reject: `display` is `block` or `flex`, block height comes from content, and `min-width` and `max-width` are not implemented. |
 | `uppercase`, `italic`, `tracking-wide`, `truncate` | Reject: no `text-transform`, italic face, letter spacing, or `overflow`. |
 | `dark:`, `motion-safe:`, `portrait:` | Reject with `unsupported media query`, only where the utility is used. |
-| `hover:`, `first:`, `space-y-*` | Do nothing. Their selectors (`:hover`, `:first-child`, `:where(... > :not(:last-child))`) are outside the subset and skipped. |
+| `first:`, `last:`, `only:`, `odd:`, `even:`, `empty:`, `nth-*:`, `*:`, `group-first:`, `space-y-*`, `divide-y`, `divide-gray-200` | Render. They compile to `:first-child`, `:nth-child(odd)`, `:is(.x > *)`, and `:where(.space-y-4 > :not(:last-child))`. Position counts the element siblings: text, `null`, and fragments do not count, so `first:` on a `<tr>` is the first row of its `<tbody>`. `space-y-*` and `divide-y` style the children, not the container. |
+| `hover:`, `focus:`, `active:`, `disabled:`, `checked:`, `group-hover:`, `before:`, `placeholder:`, `selection:` | Do nothing, quietly. A PDF has no pointer, focus, or form state and no generated content, so these selectors never match. |
+| `data-*:`, `aria-*:`, `has-*:`, `open:`, `rtl:`, `ltr:` | Reject with the selector and reason: attribute selectors, `:has()`, and `:dir()` are not implemented. |
 
 ## Recipes
 

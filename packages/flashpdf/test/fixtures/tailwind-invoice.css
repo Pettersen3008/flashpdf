@@ -27,6 +27,21 @@
 .gap-4 {
 	gap: calc(0.25rem * 4);
 }
+:where(.space-y-4 > :not(:last-child)) {
+	--tw-space-y-reverse: 0;
+	margin-block-start: calc(calc(0.25rem * 4) * var(--tw-space-y-reverse));
+	margin-block-end: calc(calc(0.25rem * 4) * calc(1 - var(--tw-space-y-reverse)));
+}
+:where(.divide-y > :not(:last-child)) {
+	--tw-divide-y-reverse: 0;
+	border-bottom-style: var(--tw-border-style);
+	border-top-style: var(--tw-border-style);
+	border-top-width: calc(1px * var(--tw-divide-y-reverse));
+	border-bottom-width: calc(1px * calc(1 - var(--tw-divide-y-reverse)));
+}
+:where(.divide-gray-200 > :not(:last-child)) {
+	border-color: oklch(92.8% 0.006 264.531);
+}
 .border {
 	border-style: var(--tw-border-style);
 	border-width: 1px;
@@ -85,10 +100,32 @@
 .underline {
 	text-decoration-line: underline;
 }
+.first\:pt-0:first-child {
+	padding-top: 0px;
+}
+.last\:pb-0:last-child {
+	padding-bottom: 0px;
+}
+.odd\:bg-gray-100:nth-child(odd) {
+	background-color: oklch(96.7% 0.003 264.542);
+}
+.even\:bg-white:nth-child(even) {
+	background-color: #fff;
+}
 @media (width >= 48rem) {
 	.md\:p-8 {
 		padding: calc(0.25rem * 8);
 	}
+}
+@property --tw-space-y-reverse {
+	syntax: "*";
+	inherits: false;
+	initial-value: 0;
+}
+@property --tw-divide-y-reverse {
+	syntax: "*";
+	inherits: false;
+	initial-value: 0;
 }
 @property --tw-border-style {
 	syntax: "*";
@@ -110,6 +147,8 @@
 		::before,
 		::after,
 		::backdrop {
+			--tw-space-y-reverse: 0;
+			--tw-divide-y-reverse: 0;
 			--tw-border-style: solid;
 			--tw-leading: initial;
 			--tw-font-weight: initial;

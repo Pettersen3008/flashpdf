@@ -218,3 +218,59 @@ test("given a Tailwind v4 build of invoice utilities, when resolving styles, the
 	assert.equal(leading.style.lineHeight, "18pt");
 	assert.equal(leading.children[0].style.lineHeight, "1.428571", "--tw-leading does not inherit");
 });
+
+test("given Tailwind's first:, last:, odd:, even:, space-y, and divide-y utilities, when resolving a list of divs and a table, then each applies to the elements a browser applies it to", async () => {
+	stylesheet(fixture);
+	const cell = (id, className) => jsx("div", { id, className, children: id });
+	const [list] = await resolve(
+		jsx("div", {
+			className: "space-y-4 divide-y divide-gray-200",
+			children: ["a", "b", "c", "d"].map((id) =>
+				cell(id, "p-4 first:pt-0 last:pb-0 odd:bg-gray-100 even:bg-white"),
+			),
+		}),
+		[fixture],
+	);
+	const boxes = list.children.map((child) => boxStyle(child.style, 12));
+	assert.deepEqual(
+		boxes.map((box) => box.padding[0] + box.padding[2]),
+		[12, 24, 24, 12],
+		"first:pt-0 and last:pb-0",
+	);
+	assert.deepEqual(
+		boxes.map((box) => box.margin[2]),
+		[12, 12, 12, 0],
+		"space-y-4 puts 4 rem-quarters below every child but the last",
+	);
+	assert.deepEqual(
+		boxes.map((box) => box.border),
+		[
+			[0, 0, 0.75, 0],
+			[0, 0, 0.75, 0],
+			[0, 0, 0.75, 0],
+			[0, 0, 0, 0],
+		],
+		"divide-y draws 1px under every child but the last",
+	);
+	assert.deepEqual(boxes[0].borderColor[2], color("oklch(92.8% 0.006 264.531)"));
+	const gray = color("oklch(96.7% 0.003 264.542)");
+	assert.deepEqual(
+		boxes.map((box) => box.background),
+		[gray, color("#fff"), gray, color("#fff")],
+		"odd:bg-gray-100 and even:bg-white",
+	);
+	const [table] = await resolve(
+		jsx("table", {
+			children: jsx("tbody", {
+				children: ["a", "b", "c"].map((id) =>
+					jsx("tr", { id, className: "odd:bg-gray-100", children: jsx("td", { children: id }) }),
+				),
+			}),
+		}),
+		[fixture],
+	);
+	assert.deepEqual(
+		table.children[0].children.map((row) => row.style.backgroundColor !== undefined),
+		[true, false, true],
+	);
+});

@@ -29,7 +29,7 @@ try {
 
 	const h = (tag, className, children) => jsx(tag, { className, children });
 	const row = (name, amount) =>
-		h("tr", undefined, [
+		h("tr", "odd:bg-gray-100", [
 			h("td", "px-4 py-2 border-b border-gray-200", name),
 			h("td", "px-4 py-2 border-b border-gray-200 text-right", amount),
 		]);

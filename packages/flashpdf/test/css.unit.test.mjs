@@ -31,9 +31,9 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 	}
 });
 
-test("given at-rules and selectors outside the subset, when validating a stylesheet, then skips them instead of failing", () => {
+test("given at-rules and selectors that match nothing in a PDF, when validating a stylesheet, then skips them instead of failing", () => {
 	const source = `@import "x.css"; @layer a, b; @media print { .a { line-height: 1 } }
-		.a:hover, a[href], .a > *, :root, .a::before, .a + .b, . { line-height: 1; content: "}" }
+		.a:hover, a[href]::after, .a::before, input[type=text]:focus, :host { line-height: 1; content: "}" }
 		html, body button { -webkit-text-size-adjust: 100%; color: notacolor }
 		@layer utilities { .\\[class\\*\\=\\'size-\\'\\] { width: 1rem } }
 		.a { color: red }`;
@@ -86,8 +86,8 @@ const tailwind = `/*! tailwindcss v4.1.0 | MIT License | https://tailwindcss.com
   }
 }
 @layer theme, base, components, utilities;
-:root, :host { --spacing: .25rem; --color-red-500: oklch(63.7% 0.237 25.331); }
-*, ::before, ::after { box-sizing: border-box; border: 0 solid; }
+@layer theme { :root, :host { --spacing: .25rem; --color-red-500: oklch(63.7% 0.237 25.331); } }
+@layer base { *, ::before, ::after { box-sizing: border-box; border: 0 solid; } }
 .p-4 { padding: 1rem; }
 .p-5 { padding: calc(var(--spacing) * 5); }
 .text-red-500 { color: oklch(63.7% 0.237 25.331); }

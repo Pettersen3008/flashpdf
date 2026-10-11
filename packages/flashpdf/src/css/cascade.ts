@@ -5,7 +5,7 @@ import { label, locate } from "../tree.js";
 import { evaluateMath } from "./math.js";
 import { compareSpecificity, inline, matches, parse } from "./parser.js";
 import { inherited } from "./properties.js";
-import type { CascadedStyle, Identity, Registration, Rule } from "./types.js";
+import type { CascadedStyle, Elem, Registration, Rule } from "./types.js";
 
 export type StyledElement = Omit<ElementNode, "style" | "children"> & {
 	readonly style: NormalizedStyle;
@@ -87,7 +87,7 @@ function resolveVariable(
 			const candidate = variables[name as `--${string}`] ?? fallback;
 			if (candidate === undefined)
 				throw new Error(
-					`undefined CSS variable: ${name} (rules with unsupported selectors such as :root are skipped)`,
+					`undefined CSS variable: ${name} (rules inside an @layer block, such as Tailwind's :root theme, are skipped)`,
 				);
 			return typeof candidate === "string"
 				? resolveVariable(candidate, variables, resolving, budget)
@@ -108,17 +108,42 @@ function resolveFontSize(result: CascadedStyle, parent: NormalizedStyle) {
 	result.fontSize = point(evaluateMath("fontSize", result.fontSize, parentSize), parentSize, true);
 }
 
+/** The element siblings of `nodes` under `parent`, which is how selectors see a tree: text nodes do not count. */
+function elements(nodes: readonly Node[], parent?: Elem): Elem[] {
+	const found = nodes.filter((node): node is ElementNode => node.kind === "element");
+	const totals = new Map<string, number>();
+	for (const { tag } of found) totals.set(tag, (totals.get(tag) ?? 0) + 1);
+	const seen = new Map<string, number>();
+	let previous: Elem | undefined;
+	return found.map((node, index) => {
+		const typeIndex = (seen.get(node.tag) ?? 0) + 1;
+		seen.set(node.tag, typeIndex);
+		const elem: Elem = {
+			tag: node.tag,
+			id: node.id,
+			classes: node.classes,
+			parent,
+			previous,
+			index: index + 1,
+			count: found.length,
+			typeIndex,
+			typeCount: totals.get(node.tag)!,
+			empty: node.children.every((child) => child.kind === "text" && child.value === ""),
+		};
+		previous = elem;
+		return elem;
+	});
+}
+
 function visit(
-	value: Node,
+	value: ElementNode,
+	elem: Elem,
 	rules: Rule[],
 	properties: ReadonlyMap<string, Registration>,
-	ancestors: Identity[],
 	parent: CascadedStyle,
 	parentStyle: NormalizedStyle,
 	chain: string,
-): StyledNode {
-	if (value.kind === "text") return value;
-	const identity: Identity = { tag: value.tag, id: value.id, classes: value.classes };
+): StyledElement {
 	const self = label(value);
 	const where = chain ? `${self} in ${chain}` : self;
 	// No prototype, so an own `__proto__` key (from JSON.parse) stays a key that style() rejects.
@@ -133,7 +158,7 @@ function visit(
 			if (initial !== undefined && !(name in result))
 				(result as Record<string, unknown>)[name] = initial;
 		cascade(result, uaStyles[value.tag]);
-		const matched = rules.filter((rule) => matches(rule.selector, identity, ancestors));
+		const matched = rules.filter((rule) => matches(rule.selector, elem));
 		const own = inline(value.style);
 		for (const rule of matched) cascade(result, rule.declarations().normal);
 		cascade(result, own.normal);
@@ -162,19 +187,21 @@ function visit(
 	} catch (error) {
 		throw locate(error, where);
 	}
-	ancestors.push(identity);
+	const siblings = elements(value.children, elem);
+	let next = 0;
 	const children = value.children.map((child) =>
-		visit(
-			child,
-			rules,
-			properties,
-			ancestors,
-			result,
-			resolved,
-			chain ? `${self} > ${chain}` : self,
-		),
+		child.kind === "text"
+			? child
+			: visit(
+					child,
+					siblings[next++]!,
+					rules,
+					properties,
+					result,
+					resolved,
+					chain ? `${self} > ${chain}` : self,
+				),
 	);
-	ancestors.pop();
 	return { ...value, style: resolved, where, children };
 }
 
@@ -188,5 +215,9 @@ export function resolveStyles(
 	const rules = sheets.flatMap((sheet) => parse(sheet, { width, properties }));
 	for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
 	rules.sort((a, b) => compareSpecificity(a.specificity, b.specificity) || a.order - b.order);
-	return value.map((node) => visit(node, rules, properties, [], {}, {}, ""));
+	const roots = elements(value);
+	let next = 0;
+	return value.map((node) =>
+		node.kind === "text" ? node : visit(node, roots[next++]!, rules, properties, {}, {}, ""),
+	);
 }

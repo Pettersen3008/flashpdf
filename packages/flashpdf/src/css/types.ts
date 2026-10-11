@@ -1,9 +1,37 @@
 import type { Style } from "../element.js";
 import type { CssProperty, RejectedProperty } from "./properties.js";
 
-export type Identity = { tag: string; id?: string | undefined; classes: readonly string[] };
-export type SelectorPart = { tag: string; ids: readonly string[]; classes: readonly string[] };
-export type SelectorPiece = SelectorPart | " " | ">";
+/** An element as selectors see it: its identity and place among the element siblings, with text nodes not counted. */
+export type Elem = {
+	tag: string;
+	id?: string | undefined;
+	classes: readonly string[];
+	parent: Elem | undefined;
+	/** The element sibling just before this one. */
+	previous: Elem | undefined;
+	/** 1-based place among the element siblings, and how many there are. */
+	index: number;
+	count: number;
+	/** The same among the siblings with this tag. */
+	typeIndex: number;
+	typeCount: number;
+	/** No children but zero-length text. */
+	empty: boolean;
+	/** Verdicts the matcher caches per compound selector, which keeps combinators polynomial. */
+	memo?: Map<object, boolean>;
+	before?: Map<object, boolean>;
+};
+export type Pseudo =
+	| { kind: "root" | "empty" }
+	| { kind: "nth"; a: number; b: number; last: boolean; type: boolean }
+	| { kind: "is" | "where" | "not"; list: readonly (readonly SelectorPiece[])[] };
+export type SelectorPart = {
+	tag: string;
+	ids: readonly string[];
+	classes: readonly string[];
+	pseudos: readonly Pseudo[];
+};
+export type SelectorPiece = SelectorPart | " " | ">" | "+" | "~";
 export type Specificity = readonly [ids: number, classes: number, tags: number];
 export type CascadedStyle = Partial<
 	Record<keyof Style | RejectedProperty | CssProperty | `--${string}`, string | number | undefined>
