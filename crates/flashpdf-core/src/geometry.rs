@@ -71,7 +71,7 @@ impl PageLayout {
     }
 
     pub(crate) fn content_width(self) -> Pt {
-        self.page.width - self.page.margin - self.page.margin
+        self.page.width - self.page.margin.left - self.page.margin.right
     }
 
     pub(crate) fn content_height(self) -> Pt {
@@ -79,15 +79,15 @@ impl PageLayout {
     }
 
     pub(crate) fn top(self) -> Pt {
-        self.page.height - self.page.margin - self.header
+        self.page.height - self.page.margin.top - self.header
     }
 
     pub(crate) fn bottom(self) -> Pt {
-        self.page.margin + self.footer
+        self.page.margin.bottom + self.footer
     }
 
-    pub(crate) fn margin(self) -> Pt {
-        self.page.margin
+    pub(crate) fn left(self) -> Pt {
+        self.page.margin.left
     }
 
     pub(crate) fn validate_block(self, height: Pt) -> Result<(), RenderError> {
@@ -122,7 +122,7 @@ impl PageCursor {
 
     pub(crate) fn origin(&self, page: PageLayout) -> Point {
         Point {
-            x: page.margin(),
+            x: page.left(),
             y: self.y,
         }
     }

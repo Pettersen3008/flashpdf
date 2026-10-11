@@ -67,6 +67,18 @@ const logo = new Uint8Array(await readFile('logo.png'));
 
 PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](./CSS.md).
 
+## Page setup
+
+`pageFormat` takes `'A3'`, `'A4'`, `'A5'`, `'Letter'`, `'Legal'`, or `{ width, height }`, and `orientation: 'landscape'` puts the longer side across. `margin` takes one to four lengths in CSS shorthand order or `{ top, right, bottom, left }`. A number is points, and every length also accepts `mm`, `cm`, `in`, `pc`, and `Q`, in styles too. The header and footer sit inside the top and bottom margins.
+
+```tsx
+// DIN 5008 form B: content starts at the address field, 45mm down and 25mm from the left edge.
+const letter = await render(<Invoice />, { pageFormat: 'A4', margin: '45mm 20mm 20mm 25mm' });
+const report = await render(<Report />, { pageFormat: 'A4', orientation: 'landscape', margin: '15mm' });
+```
+
+A stylesheet can set the same through `@page { size: A4 landscape; margin: 15mm }`. Options win over `@page`, as an inline style wins over a stylesheet. `@page :first` and margin boxes reject; see [CSS.md](./CSS.md).
+
 ## Install
 
 Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
@@ -107,7 +119,7 @@ CSS Modules, minification, and syntax transforms belong to the frontend build. L
 
 Runnable Tailwind, StyleX, and styled-components build-step examples live in [`packages/flashpdf/examples/css-integrations`](./packages/flashpdf/examples/css-integrations). They compile or extract static CSS, then pass that string through `render({ stylesheets })`.
 
-FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules, and unsupported selectors are skipped.
+FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules other than `@page`, and unsupported selectors are skipped.
 
 ## API
 
@@ -118,7 +130,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A3' | 'A4' | 'A5' | 'Letter' | 'Legal' | { width: Length; height: Length }; orientation?: 'portrait' | 'landscape'; margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length }; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. The page defaults to A4 portrait with 36pt margins; see [Page setup](#page-setup). Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';

@@ -12,7 +12,7 @@ mod tests;
 
 pub use error::ProtocolError;
 
-use cursor::{nonnegative_f32, positive_f32, pt, Cursor};
+use cursor::{pt, Cursor};
 use opcode::Opcode;
 
 use pdf_writer::types::AssociationKind;
@@ -31,9 +31,9 @@ pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 /// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
 const MAX_PAGE_SIDE: f32 = 14_400.0;
-const HEADER_LEN: usize = 18;
+const HEADER_LEN: usize = 30;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 7;
+const VERSION: u16 = 8;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -189,13 +189,19 @@ impl Decoder {
         if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != VERSION {
             return Err(ProtocolError::UnknownVersion);
         }
-        let width = positive_f32(&bytes[6..10], "page width")?;
-        let height = positive_f32(&bytes[10..14], "page height")?;
+        let mut cursor = Cursor::new(&bytes[6..]);
+        let width = cursor.positive_f32("page width")?;
+        let height = cursor.positive_f32("page height")?;
         if width > MAX_PAGE_SIDE || height > MAX_PAGE_SIDE {
             return Err(ProtocolError::InvalidValue("page size"));
         }
-        let margin = nonnegative_f32(&bytes[14..18], "margin")?;
-        self.page = Some(crate::Page::new(pt(width)?, pt(height)?, pt(margin)?)?);
+        let margin = Edges {
+            top: pt(cursor.nonnegative_f32("page margin top")?)?,
+            right: pt(cursor.nonnegative_f32("page margin right")?)?,
+            bottom: pt(cursor.nonnegative_f32("page margin bottom")?)?,
+            left: pt(cursor.nonnegative_f32("page margin left")?)?,
+        };
+        self.page = Some(crate::Page::new(pt(width)?, pt(height)?, margin)?);
         Ok(())
     }
 

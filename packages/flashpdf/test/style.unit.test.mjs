@@ -12,6 +12,13 @@ test("given pt, px, em, and rem lengths, when resolving a point value, then conv
 	assert.equal(point("0"), 0);
 });
 
+test("given mm, cm, in, pc, and Q lengths, when resolving a length or width, then converts at 72pt per inch", () => {
+	for (const length of ["25.4mm", "2.54cm", "1in", "6pc", "101.6Q"]) {
+		assert.equal(point(length), 72, length);
+		assert.equal(dimension(length, "width").value, 72, length);
+	}
+});
+
 test("given an unrecognised length, when resolving a point value, then rejects it", () => {
 	assert.throws(() => point("2vh"), /invalid length/);
 	assert.throws(() => point("abc"), /invalid length/);

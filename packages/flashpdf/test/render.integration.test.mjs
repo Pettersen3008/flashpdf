@@ -470,13 +470,24 @@ test("given per-edge borders and hr, when rendering, then emits native rules", a
 	assert.match(string(pdf), /0 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
 });
 
+test("given A5 landscape with per-side mm margins, when rendering, then the page turns and text starts at the left and top margins", async () => {
+	const pdf = await render(jsx("p", { children: "x" }), {
+		pageFormat: "A5",
+		orientation: "landscape",
+		margin: "20mm 15mm 10mm 25mm",
+	});
+	assert.match(string(pdf), /\/MediaBox \[0 0 595 420\]/);
+	// 25mm is 70.866pt; 12pt Helvetica's baseline sits 8.616pt under the 20mm top margin.
+	assert.match(string(pdf), /\n70\.86614 354\.6911 Td\n/);
+});
+
 test("given an invalid option, when rendering, then rejects before running any component", async () => {
 	let ran = false;
 	const Page = () => {
 		ran = true;
 		return jsx("main", { children: "x" });
 	};
-	await assert.rejects(render(jsx(Page, {}), { pageFormat: "A5" }), /invalid page format/);
+	await assert.rejects(render(jsx(Page, {}), { pageFormat: "B5" }), /unsupported page size: B5/);
 	assert.equal(ran, false);
 });
 

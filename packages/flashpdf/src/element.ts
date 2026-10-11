@@ -1,5 +1,6 @@
-export type Length = number | "0" | `${number}${"pt" | "px" | "em" | "rem"}`;
-export type Width = number | `${number}${"pt" | "px" | "%"}`;
+type Absolute = "pt" | "px" | "pc" | "in" | "cm" | "mm" | "Q";
+export type Length = number | "0" | `${number}${Absolute | "em" | "rem"}`;
+export type Width = number | `${number}${Absolute | "%"}`;
 export type Edges =
 	| Length
 	| `${Length} ${Length}`

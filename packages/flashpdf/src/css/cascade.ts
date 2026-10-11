@@ -159,7 +159,7 @@ export function resolveStyles(
 	value: readonly Node[],
 	sheets: readonly string[] = [],
 ): readonly StyledNode[] {
-	const rules = sheets.flatMap(parse);
+	const rules = sheets.flatMap((sheet) => parse(sheet));
 	for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
 	rules.sort((a, b) => compareSpecificity(a.specificity, b.specificity) || a.order - b.order);
 	return value.map((node) => visit(node, rules, [], {}, {}, ""));

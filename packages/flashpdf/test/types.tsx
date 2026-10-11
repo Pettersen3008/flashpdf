@@ -18,6 +18,13 @@ const invoice = (
 );
 void render(invoice, { pageFormat: "A4", margin: 36, stylesheets: [".invoice { color: #222 }"] });
 void render([invoice]);
+void render(invoice, { pageFormat: "A5", orientation: "landscape", margin: "20mm 15mm" });
+void render(invoice, {
+	pageFormat: { width: "210mm", height: 400 },
+	margin: { top: "45mm", right: "2cm", bottom: "1in", left: 72 },
+});
+// @ts-expect-error Page lengths take a unit; a bare numeric string is not points.
+void render(invoice, { margin: { top: "45", right: 0, bottom: 0, left: 0 } });
 const font: EmbeddedFont = { family: "Invoice", regular: new Uint8Array(), bold: new Uint8Array() };
 void render(invoice, { fonts: [font] });
 void render(invoice, {

@@ -398,7 +398,7 @@ impl Renderer {
                     &text,
                     furniture.style,
                     crate::geometry::Point {
-                        x: self.page.margin(),
+                        x: self.page.left(),
                         y: furniture.baseline,
                     },
                     self.page.content_width(),

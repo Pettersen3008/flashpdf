@@ -184,7 +184,7 @@ function closing(source: string, open: number) {
 	}
 	throw invalid(source, open);
 }
-/** At-rules (`@layer`, `@media`, `@property`, `@import`, ...) are skipped whole. */
+/** Other at-rules (`@layer`, `@media`, `@property`, `@import`, ...) are skipped whole. */
 function skipAtRule(source: string, start: number) {
 	for (let index = start; index < source.length; index++) {
 		const character = source[index];
@@ -196,7 +196,52 @@ function skipAtRule(source: string, start: number) {
 	}
 	throw invalid(source, start);
 }
-export function parse(source: string): Rule[] {
+/** One `@page` declaration, in source order. */
+export type PageDeclaration = { name: string; value: string; important: boolean; where: string };
+const PAGE_PROPERTIES = [
+	"size",
+	"margin",
+	"margin-top",
+	"margin-right",
+	"margin-bottom",
+	"margin-left",
+];
+/** Reads an `@page` rule into `pages` and returns the index past it. */
+function pageRule(source: string, start: number, pages: PageDeclaration[]) {
+	const open = source.indexOf("{", start);
+	if (open < 0) throw invalid(source, start);
+	const where = ` in @page at ${position(source, start)}`;
+	const selector = source.slice(start + 5, open).trim();
+	if (selector)
+		throw new Error(
+			`unsupported @page selector: ${selector} (one size and margin apply to every page)${where}`,
+		);
+	const end = closing(source, open);
+	const body = source.slice(open + 1, end - 1);
+	const box = /@[\w-]+/.exec(body);
+	if (box)
+		throw new Error(
+			`unsupported @page margin box: ${box[0]} (use the header and footer options)${where}`,
+		);
+	for (const item of body.split(";")) {
+		if (!item.trim()) continue;
+		const colon = item.indexOf(":");
+		if (colon < 1) throw new Error(`invalid CSS declaration: ${item.trim()}${where}`);
+		const name = item.slice(0, colon).trim();
+		if (!PAGE_PROPERTIES.includes(name))
+			throw new Error(`unsupported @page property: ${name} (only size and margin apply)${where}`);
+		const value = item.slice(colon + 1).trim();
+		pages.push({
+			name,
+			value: value.replace(IMPORTANT, ""),
+			important: IMPORTANT.test(value),
+			where,
+		});
+	}
+	return end;
+}
+/** `@page` declarations go to `pages`; every other at-rule is skipped. */
+export function parse(source: string, pages: PageDeclaration[] = []): Rule[] {
 	const rules: Rule[] = [];
 	const clean = withoutComments(source);
 	let index = 0;
@@ -206,7 +251,9 @@ export function parse(source: string): Rule[] {
 			continue;
 		}
 		if (clean[index] === "@") {
-			index = skipAtRule(clean, index);
+			index = /^@page(?![\w-])/i.test(clean.slice(index, index + 6))
+				? pageRule(clean, index, pages)
+				: skipAtRule(clean, index);
 			continue;
 		}
 		const open = clean.indexOf("{", index);

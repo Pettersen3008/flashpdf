@@ -1,11 +1,18 @@
 use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, VERSION};
 
 fn header(version: u16, width: f32, height: f32, margin: f32) -> Vec<u8> {
+    page_header(version, width, height, [margin; 4])
+}
+
+/// Margins in CSS order: top, right, bottom, left.
+fn page_header(version: u16, width: f32, height: f32, margin: [f32; 4]) -> Vec<u8> {
     let mut bytes = MAGIC.to_vec();
     bytes.extend(version.to_le_bytes());
     bytes.extend(width.to_le_bytes());
     bytes.extend(height.to_le_bytes());
-    bytes.extend(margin.to_le_bytes());
+    for side in margin {
+        bytes.extend(side.to_le_bytes());
+    }
     assert_eq!(bytes.len(), HEADER_LEN);
     bytes
 }
@@ -679,6 +686,18 @@ fn given_a_page_side_over_14400_units_when_decoding_then_rejects() {
         push_error(&header(VERSION, 120.0, f32::MAX, 10.0)),
         "invalid page size"
     );
+}
+
+#[test]
+fn given_page_margins_that_leave_no_width_or_no_height_when_decoding_then_rejects() {
+    for margin in [[0.0, 60.0, 0.0, 60.0], [30.0, 0.0, 30.0, 0.0]] {
+        assert_eq!(
+            push_error(&page_header(VERSION, 120.0, 60.0, margin)),
+            "InvalidPage"
+        );
+    }
+    let narrow = page_header(VERSION, 120.0, 60.0, [29.0, 0.0, 30.0, 119.0]);
+    Decoder::default().push(&narrow).unwrap();
 }
 
 #[test]

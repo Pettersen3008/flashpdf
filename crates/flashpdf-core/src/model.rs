@@ -49,24 +49,24 @@ impl std::ops::SubAssign for Pt {
 pub struct Page {
     pub(crate) width: Pt,
     pub(crate) height: Pt,
-    pub(crate) margin: Pt,
+    pub(crate) margin: Edges<Pt>,
 }
 
 impl Page {
     pub const A4: Self = Self {
         width: Pt(595.0),
         height: Pt(842.0),
-        margin: Pt(36.0),
+        margin: Edges::all(Pt(36.0)),
     };
 
     pub const LETTER: Self = Self {
         width: Pt(612.0),
         height: Pt(792.0),
-        margin: Pt(36.0),
+        margin: Edges::all(Pt(36.0)),
     };
 
-    pub fn new(width: Pt, height: Pt, margin: Pt) -> Result<Self, RenderError> {
-        if width.0 > margin.0 * 2.0 && height.0 > margin.0 * 2.0 {
+    pub fn new(width: Pt, height: Pt, margin: Edges<Pt>) -> Result<Self, RenderError> {
+        if width.0 > margin.left.0 + margin.right.0 && height.0 > margin.top.0 + margin.bottom.0 {
             Ok(Self {
                 width,
                 height,
