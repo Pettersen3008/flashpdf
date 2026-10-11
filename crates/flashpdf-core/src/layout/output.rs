@@ -62,6 +62,8 @@ pub(crate) struct LayoutBuffer {
     pub(crate) boxes: Vec<PositionedBox>,
     pub(crate) images: Vec<PositionedImage>,
     pub(crate) links: Vec<String>,
+    /// Anchor slot and the index of the line it waits for; `lines.len()` when none follows.
+    pub(crate) anchors: Vec<(u16, usize)>,
 }
 
 impl LayoutBuffer {
@@ -73,6 +75,7 @@ impl LayoutBuffer {
         self.boxes.clear();
         self.images.clear();
         self.links.clear();
+        self.anchors.clear();
     }
 
     #[cfg(test)]

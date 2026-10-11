@@ -80,6 +80,14 @@ fn plain(value: &[u8]) -> Vec<u8> {
     paragraph(0, &[(0, 10.0, [0, 0, 0], 0, value)])
 }
 
+/// An Anchor record: a destination `name` (may be empty), and a bookmark when `level` is 1 to 6.
+fn anchor(name: &str, level: u8, title: &str) -> Vec<u8> {
+    let mut payload = text(name.as_bytes());
+    payload.push(level);
+    payload.extend(text(title.as_bytes()));
+    record(22, &payload)
+}
+
 fn box_start() -> Vec<u8> {
     let mut payload = Vec::new();
     for _ in 0..12 {
@@ -94,12 +102,14 @@ fn box_start() -> Vec<u8> {
 /// forces the stream across four pages.
 fn representative() -> Vec<u8> {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(anchor("top", 1, "Invoice"));
     bytes.extend(plain(b"Before"));
     bytes.extend(box_start());
     bytes.extend(plain(b"Boxed"));
     bytes.extend(record(18, &[]));
     bytes.extend(record(5, &columns(&[(0, 50.0), (1, 1.0)])));
     bytes.extend(plain(b"row"));
+    bytes.extend(anchor("cell", 2, "Cell"));
     bytes.extend(plain(b"1"));
     bytes.extend(record(6, &[]));
     bytes.extend(record(10, &table_start(1)));
@@ -115,8 +125,11 @@ fn representative() -> Vec<u8> {
     bytes.extend(record(4, &[]));
     bytes.extend(linked_paragraph(
         1,
-        &[b"https://example.com"],
-        &[(1, 10.0, [0xcc, 0, 0], 2, Some(0), b"Styled")],
+        &[b"https://example.com", b"#top"],
+        &[
+            (1, 10.0, [0xcc, 0, 0], 2, Some(0), b"Styled"),
+            (1, 10.0, [0xcc, 0, 0], 2, Some(1), b" top"),
+        ],
     ));
     bytes.extend(image_record(0, Some(20.0), None, Some(b"mailto:a@b.c")));
     bytes.extend(record(7, &[]));
@@ -256,7 +269,7 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
         pdf.extract_text(&[2]).unwrap().trim(),
         "head\nbody\nStacked"
     );
-    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Styled");
+    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Styled top");
     assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
     for split in 0..=bytes.len() {
         let mut decoder = decoder();
@@ -716,6 +729,195 @@ fn given_a_link_run_that_wraps_when_rendered_then_emits_one_annotation_per_line(
             b"https://example.com/invoices/42"
         );
     }
+}
+
+/// The page, left, and top of the `/Dests` entry for `name`.
+fn destination(pdf: &lopdf::Document, name: &[u8]) -> (lopdf::ObjectId, f32, f32) {
+    let names = pdf.catalog().unwrap().get(b"Names").unwrap();
+    let tree = names.as_dict().unwrap().get(b"Dests").unwrap();
+    let entries = tree.as_dict().unwrap().get(b"Names").unwrap();
+    let entries = entries.as_array().unwrap();
+    let index = (entries.chunks(2))
+        .position(|entry| entry[0].as_str().unwrap() == name)
+        .unwrap();
+    let reference = entries[index * 2 + 1].as_reference().unwrap();
+    let dest = pdf.get_object(reference).unwrap().as_array().unwrap();
+    assert_eq!(dest[1].as_name().unwrap(), b"XYZ");
+    assert!(matches!(dest[4], lopdf::Object::Null), "{dest:?}");
+    (
+        dest[0].as_reference().unwrap(),
+        dest[2].as_float().unwrap(),
+        dest[3].as_float().unwrap(),
+    )
+}
+
+#[test]
+fn given_an_anchor_before_a_block_that_moves_to_the_next_page_when_decoding_then_the_destination_follows_it_and_a_link_goes_there(
+) {
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(linked_paragraph(
+        0,
+        &[b"#end"],
+        &[(0, 10.0, [0, 0, 0xee], 2, Some(0), b"Jump")],
+    ));
+    bytes.extend(record(2, &30.0_f32.to_le_bytes()));
+    bytes.extend(anchor("end", 0, ""));
+    bytes.extend(plain(b"Target"));
+    bytes.extend(record(255, &[]));
+    let pdf = decode_with_images(&[], &bytes).unwrap();
+    let pages = pdf.get_pages();
+    assert_eq!(destination(&pdf, b"end"), (pages[&2], 10.0, 50.0));
+    let link = pdf.get_page_annotations(pages[&1]).unwrap()[0];
+    let action = link.get(b"A").unwrap().as_dict().unwrap();
+    assert_eq!(action.get(b"S").unwrap().as_name().unwrap(), b"GoTo");
+    assert_eq!(action.get(b"D").unwrap().as_str().unwrap(), b"end");
+}
+
+#[test]
+fn given_headings_when_decoding_then_nests_bookmarks_by_level_and_opens_the_outline_panel() {
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    for (level, title) in [
+        (1, "Invoice"),
+        (2, "Items"),
+        (3, "Row"),
+        (2, "Totals \u{3a9}"),
+        (1, "Notes"),
+    ] {
+        bytes.extend(anchor("", level, title));
+        bytes.extend(plain(b"h"));
+    }
+    bytes.extend(record(255, &[]));
+    let pdf = decode_with_images(&[], &bytes).unwrap();
+    let catalog = pdf.catalog().unwrap();
+    assert_eq!(
+        catalog.get(b"PageMode").unwrap().as_name().unwrap(),
+        b"UseOutlines"
+    );
+    let item = |object: &lopdf::Object| pdf.get_dictionary(object.as_reference().unwrap()).unwrap();
+    let root = item(catalog.get(b"Outlines").unwrap());
+    assert_eq!(root.get(b"Count").unwrap().as_i64().unwrap(), 5);
+    let (invoice, notes) = (
+        item(root.get(b"First").unwrap()),
+        item(root.get(b"Last").unwrap()),
+    );
+    assert_eq!(invoice.get(b"Title").unwrap().as_str().unwrap(), b"Invoice");
+    assert_eq!(invoice.get(b"Count").unwrap().as_i64().unwrap(), 3);
+    assert_eq!(notes.get(b"Prev").unwrap(), root.get(b"First").unwrap());
+    assert!(notes.get(b"Next").is_err());
+    let (items, totals) = (
+        item(invoice.get(b"First").unwrap()),
+        item(invoice.get(b"Last").unwrap()),
+    );
+    assert_eq!(items.get(b"Next").unwrap(), invoice.get(b"Last").unwrap());
+    assert_eq!(items.get(b"Count").unwrap().as_i64().unwrap(), 1);
+    assert_eq!(
+        item(items.get(b"First").unwrap())
+            .get(b"Title")
+            .unwrap()
+            .as_str()
+            .unwrap(),
+        b"Row"
+    );
+    // Not PDFDocEncoding, so UTF-16BE with a byte order mark.
+    assert_eq!(
+        totals.get(b"Title").unwrap().as_str().unwrap(),
+        [0xfe, 0xff, 0, b'T', 0, b'o', 0, b't', 0, b'a', 0, b'l', 0, b's', 0, b' ', 3, 0xa9]
+    );
+}
+
+#[test]
+fn given_bad_anchors_and_links_when_decoding_then_rejects() {
+    let error = |records: &[Vec<u8>]| {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        bytes.extend(records.concat());
+        Decoder::default().push(&bytes).unwrap_err().to_string()
+    };
+    for (record, message) in [
+        (anchor("a b", 0, ""), "invalid anchor name"),
+        (anchor(&"a".repeat(256), 0, ""), "invalid anchor name"),
+        (anchor("", 7, "Title"), "invalid bookmark"),
+        (anchor("", 1, ""), "invalid bookmark"),
+        (anchor("", 0, "Title"), "invalid bookmark"),
+        (anchor("", 1, &"t".repeat(1021)), "invalid bookmark"),
+    ] {
+        assert_eq!(error(&[record]), message);
+    }
+    let twice = [anchor("a", 0, ""), anchor("a", 0, "")];
+    assert_eq!(error(&twice), "invalid anchor name: already used");
+    let many: Vec<Vec<u8>> = (0..=10_000)
+        .map(|index| anchor(&format!("a{index}"), 0, ""))
+        .collect();
+    assert_eq!(error(&many), "invalid anchor count");
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(linked_paragraph(
+        0,
+        &[b"#missing"],
+        &[(0, 10.0, [0, 0, 0xee], 2, Some(0), b"Jump")],
+    ));
+    bytes.extend(record(255, &[]));
+    assert_eq!(
+        decode_with_images(&[], &bytes).unwrap_err(),
+        "UnknownDestination"
+    );
+}
+
+#[test]
+fn given_anchors_in_a_row_and_a_gapped_stack_when_decoding_then_they_take_no_cell_and_no_gap() {
+    let page_content = |anchors: bool| {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        let mark = |name: &str| {
+            if anchors {
+                anchor(name, 0, "")
+            } else {
+                Vec::new()
+            }
+        };
+        bytes.extend(record(5, &columns(&[(0, 50.0), (1, 1.0)])));
+        bytes.extend(plain(b"a"));
+        bytes.extend(mark("second"));
+        bytes.extend(plain(b"b"));
+        bytes.extend(record(6, &[]));
+        bytes.extend(record(3, &5.0_f32.to_le_bytes()));
+        bytes.extend(mark("first"));
+        bytes.extend(plain(b"c"));
+        bytes.extend(mark("between"));
+        bytes.extend(plain(b"d"));
+        bytes.extend(record(4, &[]));
+        bytes.extend(record(255, &[]));
+        decode_with_images(&[], &bytes).unwrap()
+    };
+    let (plain, anchored) = (page_content(false), page_content(true));
+    let page = anchored.get_pages()[&1];
+    assert_eq!(
+        plain.get_page_content(plain.get_pages()[&1]),
+        anchored.get_page_content(page)
+    );
+    assert_eq!(destination(&anchored, b"second"), (page, 60.0, 50.0));
+    let (first, between) = (
+        destination(&anchored, b"first").2,
+        destination(&anchored, b"between").2,
+    );
+    assert!(first - between > 5.0, "{first} {between}");
+}
+
+#[test]
+fn given_an_anchor_in_a_repeated_table_header_when_the_table_spans_pages_then_the_destination_is_its_first_fragment(
+) {
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(record(10, &table_start(1)));
+    for index in 0..12 {
+        bytes.extend(record(5, &columns(&[(1, 1.0)])));
+        if index == 0 {
+            bytes.extend(anchor("head", 0, ""));
+        }
+        bytes.extend(plain(if index == 0 { b"head" } else { b"row" }));
+        bytes.extend(record(6, &[]));
+    }
+    bytes.extend(record(11, &[]));
+    bytes.extend(record(255, &[]));
+    let pdf = decode_with_images(&[], &bytes).unwrap();
+    assert!(pdf.get_pages().len() > 2);
+    assert_eq!(destination(&pdf, b"head").0, pdf.get_pages()[&1]);
 }
 
 /// An Attachment record with an empty description.

@@ -33,8 +33,10 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 7;
+const VERSION: u16 = 17;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+/// Longest bookmark title, in bytes: 255 characters at four bytes each.
+const MAX_TITLE_BYTES: usize = 1020;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
     ("MINIMUM", "factur-x.xml", AssociationKind::Data),
@@ -379,6 +381,24 @@ impl Decoder {
                     data,
                 })
             }
+            Opcode::Anchor => {
+                let name = cursor.alt()?;
+                let level = cursor.take(1)?[0];
+                let title = cursor.alt()?;
+                cursor.done()?;
+                if name.len() > 255 || !name.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+                    return Err(ProtocolError::InvalidValue("anchor name"));
+                }
+                // A bookmark has a level 1 to 6 and a title; nothing else has either.
+                if level > 6 || (level == 0) != title.is_empty() || title.len() > MAX_TITLE_BYTES {
+                    return Err(ProtocolError::InvalidValue("bookmark"));
+                }
+                let slot = self
+                    .ensure_renderer()?
+                    .add_anchor(name, level, title)
+                    .map_err(ProtocolError::InvalidValue)?;
+                self.layout_command(OwnedCommand::Anchor(slot))
+            }
             Opcode::Paragraph => {
                 let align = cursor.align()?;
                 let links: Vec<String> = (0..cursor.u16()?)
@@ -597,8 +617,12 @@ impl Decoder {
 
     fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         self.body_started = true;
+        // An anchor rides with the cell after it, so it is not a cell.
+        let anchor = matches!(command, OwnedCommand::Anchor(_));
         self.push_command(command)?;
-        self.complete_child()?;
+        if !anchor {
+            self.complete_child()?;
+        }
         if self.frames.is_empty() {
             self.flush_block()?;
         }

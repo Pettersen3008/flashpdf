@@ -272,4 +272,6 @@ pub enum RenderError {
     MissingGlyph(char),
     DocumentTooLarge,
     ImageTooWide,
+    /// A link names a destination no element registered.
+    UnknownDestination,
 }
