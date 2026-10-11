@@ -1,8 +1,6 @@
 import type { Style } from "../element.js";
 
 export type RejectedProperty =
-	| "minWidth"
-	| "maxWidth"
 	| "borderRadius"
 	| "letterSpacing"
 	| "verticalAlign"
@@ -14,9 +12,21 @@ type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: str
 const properties = {
 	display: {},
 	flexDirection: { css: "flex-direction" },
+	flexWrap: { css: "flex-wrap" },
+	justifyContent: { css: "justify-content" },
+	alignItems: { css: "align-items" },
+	alignSelf: { css: "align-self" },
 	flex: {},
+	flexGrow: { css: "flex-grow" },
+	flexShrink: { css: "flex-shrink" },
+	flexBasis: { css: "flex-basis" },
 	width: {},
+	minWidth: { css: "min-width" },
+	maxWidth: { css: "max-width" },
 	height: {},
+	minHeight: { css: "min-height" },
+	maxHeight: { css: "max-height" },
+	boxSizing: { css: "box-sizing" },
 	margin: {},
 	marginTop: { css: "margin-top" },
 	marginRight: { css: "margin-right" },
@@ -49,14 +59,6 @@ const properties = {
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
-	minWidth: {
-		css: "min-width",
-		unsupported: "only width on a flex row child is implemented",
-	},
-	maxWidth: {
-		css: "max-width",
-		unsupported: "only width on a flex row child is implemented",
-	},
 	borderRadius: { css: "border-radius", unsupported: "box corners are square" },
 	letterSpacing: {
 		css: "letter-spacing",

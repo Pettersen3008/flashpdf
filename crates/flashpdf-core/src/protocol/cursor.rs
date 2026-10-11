@@ -1,5 +1,5 @@
 use crate::win_ansi::valid;
-use crate::{Fraction, ImageSize, Percent, Rgb, TextAlign};
+use crate::{Align, Fraction, ImageSize, Percent, Pt, Rgb, TextAlign};
 
 use super::ProtocolError;
 
@@ -114,6 +114,37 @@ impl<'a> Cursor<'a> {
             2 => ImageSize::Percent(Percent::new(self.positive_f32("image width")?)?),
             _ => return Err(ProtocolError::InvalidValue("image width kind")),
         })
+    }
+
+    /// Kind 0 is `auto`, 1 points (zero allowed), 2 a positive percent.
+    pub(super) fn size(&mut self, name: &'static str) -> Result<ImageSize, ProtocolError> {
+        Ok(match self.take(1)?[0] {
+            0 => ImageSize::Auto,
+            1 => ImageSize::Fixed(pt(self.nonnegative_f32(name)?)?),
+            2 => ImageSize::Percent(Percent::new(self.positive_f32(name)?)?),
+            _ => return Err(ProtocolError::InvalidValue(name)),
+        })
+    }
+
+    /// A height in points, read as a `size` that may not be a percent.
+    pub(super) fn height(&mut self) -> Result<Option<Pt>, ProtocolError> {
+        match self.size("height")? {
+            ImageSize::Auto => Ok(None),
+            ImageSize::Fixed(height) => Ok(Some(height)),
+            ImageSize::Percent(_) => Err(ProtocolError::InvalidValue("height")),
+        }
+    }
+
+    /// 0 is `auto`, then stretch, start, end, and center.
+    pub(super) fn alignment(&mut self) -> Result<Option<Align>, ProtocolError> {
+        Ok(Some(match self.take(1)?[0] {
+            0 => return Ok(None),
+            1 => Align::Stretch,
+            2 => Align::Start,
+            3 => Align::End,
+            4 => Align::Center,
+            _ => return Err(ProtocolError::InvalidValue("flex alignment")),
+        }))
     }
 
     pub(super) fn done(&self) -> Result<(), ProtocolError> {

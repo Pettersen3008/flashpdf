@@ -3,12 +3,14 @@ import type { StyledElement } from "./css/cascade.js";
 import { inherited } from "./css/properties.js";
 import { glyphError } from "./fonts.js";
 import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
-import type { ProtocolWriter, Column, Run } from "./protocol.js";
+import type { ProtocolWriter, Column, FlexItem, Run } from "./protocol.js";
 import {
+	boxSize,
 	boxStyle,
 	color,
 	decoration,
 	dimension,
+	flexBasis,
 	font,
 	helvetica,
 	lineHeight,
@@ -32,8 +34,14 @@ type TextState = {
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
 };
-/** `cell` is set only for the direct children of a table row. */
-type Context = TextState & { inRow: boolean; cell?: boolean };
+/** `inRow` marks one row or flex item, `cell` a table cell, and `item` a CSS flex item, whose
+ *  width is its own. `height` is the parent's fixed content height, for percent heights. */
+type Context = TextState & {
+	inRow: boolean;
+	cell?: boolean;
+	item?: boolean;
+	height?: number | undefined;
+};
 type Fonts = ReadonlyMap<string, FontSlots>;
 
 const ROOT: Context = {
@@ -50,6 +58,52 @@ const ROOT: Context = {
 };
 
 const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
+/** Tags whose `display: flex` lays out their children. */
+const BLOCK_TAGS = new Set<string>([
+	"div",
+	"main",
+	"section",
+	"article",
+	"header",
+	"footer",
+	"td",
+	"th",
+]);
+const SIZES = ["width", "minWidth", "maxWidth", "height", "minHeight", "maxHeight"] as const;
+const MARGINS = ["marginTop", "marginRight", "marginBottom", "marginLeft"] as const;
+const EMPTY: Box = {
+	margin: [0, 0, 0, 0],
+	padding: [0, 0, 0, 0],
+	border: [0, 0, 0, 0],
+	background: undefined,
+	borderColor: [
+		[0, 0, 0],
+		[0, 0, 0],
+		[0, 0, 0],
+		[0, 0, 0],
+	],
+};
+const JUSTIFY: Record<string, number> = {
+	normal: 0,
+	"flex-start": 0,
+	start: 0,
+	"flex-end": 1,
+	end: 1,
+	center: 2,
+	"space-between": 3,
+	"space-around": 4,
+	"space-evenly": 5,
+};
+const ALIGN: Record<string, number> = {
+	auto: 0,
+	normal: 0,
+	stretch: 1,
+	"flex-start": 2,
+	start: 2,
+	"flex-end": 3,
+	end: 3,
+	center: 4,
+};
 
 /** CSS collapsible whitespace only; U+00A0 is content. */
 function blank(text: string) {
@@ -73,6 +127,10 @@ const ENGINE_ERRORS = new Map([
 	[
 		"TextTooWide",
 		"TextTooWide: a character, or a header or footer line, is wider than its space; reduce the font size or widen the column",
+	],
+	[
+		"ContentOverflow",
+		"ContentOverflow: the content is taller than its box's height or max-height, or than its flex container; raise the height or shorten the content",
 	],
 ]);
 /** Explains the engine's bare error codes; `locate` then names the element. */
@@ -144,6 +202,7 @@ function inlineRuns(node: StyledNode, context: Context, fonts: Fonts): Run[] | u
 		rowOnly(style, context.inRow);
 		if (
 			boxStyle(style, context.size) ||
+			sized(style) ||
 			style.breakBefore === "page" ||
 			style.breakAfter === "page"
 		)
@@ -202,9 +261,47 @@ function box(writer: ProtocolWriter, value: Box | undefined, body: () => void) {
 		if (value) writer.boxEnd();
 	} catch (error) {
 		if (value && error instanceof Error && error.message === "PageOverflow")
-			throw new Error("PageOverflow: use document margins or split this decorated box");
+			throw new Error(
+				(value.size?.height ?? value.size?.maxHeight) === undefined
+					? "PageOverflow: use document margins or split this decorated box"
+					: "PageOverflow: a box with a height or max-height moves whole, and this one is taller than a page",
+			);
 		throw error;
 	}
+}
+
+/** Sizes or an auto margin make a layout node; `box-sizing` alone changes nothing. */
+function sized(s: NormalizedStyle) {
+	return SIZES.some((key) => s[key] !== undefined) || MARGINS.some((key) => s[key] === "auto");
+}
+
+/** Rejects the sizes and auto margins an image or a table part cannot honour. */
+function sizeless(s: NormalizedStyle, tag: string, keep: readonly string[] = []) {
+	for (const key of [...SIZES, "boxSizing"] as const)
+		if (s[key] !== undefined && !keep.includes(key))
+			throw new Error(`${key} applies to blocks and flex items, not <${tag}>`);
+	if (MARGINS.some((key) => s[key] === "auto"))
+		throw new Error(`auto margins apply to blocks and flex items, not <${tag}>`);
+}
+
+/** The box an element paints and sizes. A column-model row or a table owns its items' width. */
+function layoutBox(style: NormalizedStyle, size: number, context: Context): Box | undefined {
+	const paint = boxStyle(style, size);
+	const sizes = boxSize(style, context.height, !context.inRow || context.item === true);
+	return sizes ? { ...(paint ?? EMPTY), size: sizes } : paint;
+}
+
+/** Bounds of a box's content height; equal when `height` fixes it. */
+function heights(box: Box | undefined): [number, number | undefined] {
+	const size = box?.size;
+	if (!size) return [0, undefined];
+	const frame = box.padding[0] + box.padding[2] + box.border[0] + box.border[2];
+	const inner = (value: number) => (size.borderBox ? Math.max(0, value - frame) : value);
+	const min = inner(size.minHeight ?? 0);
+	const max = size.maxHeight === undefined ? undefined : inner(size.maxHeight);
+	if (size.height === undefined) return [min, max];
+	const fixed = Math.max(Math.min(inner(size.height), max ?? Infinity), min);
+	return [fixed, fixed];
 }
 
 /** Block flow: consecutive inline children form one paragraph; layout nodes stand alone. */
@@ -246,6 +343,7 @@ function flow(
 function streamMargin(box: Box | undefined, context: Context, style: NormalizedStyle): boolean {
 	return Boolean(
 		box &&
+		!box.size &&
 		box.margin[1] === 0 &&
 		box.margin[3] === 0 &&
 		box.padding.every((edge) => edge === 0) &&
@@ -256,20 +354,115 @@ function streamMargin(box: Box | undefined, context: Context, style: NormalizedS
 	);
 }
 
+/** A column-model track: a width, or a grow factor with a zero basis, or with `auto` and no
+ *  width. Undefined for any other flex, which needs the CSS flex algorithm. */
+function track(s: NormalizedStyle): Column | undefined {
+	const grow = s.flexGrow ?? 0;
+	const basis = s.flexBasis === undefined ? undefined : flexBasis(s.flexBasis);
+	if (basis && basis.value > 0) return undefined;
+	if (grow > 0 && (basis || s.width === undefined)) return { kind: 1, value: grow };
+	if (s.width !== undefined && grow === 0) {
+		const { kind, value } = dimension(s.width, "width");
+		return { kind: kind === 2 ? 2 : 0, value };
+	}
+	const flexed =
+		s.flexGrow !== undefined || s.flexShrink !== undefined || s.flexBasis !== undefined;
+	return flexed ? undefined : { kind: 1, value: 1 };
+}
+
 function column(value: StyledNode): Column {
 	if (value.kind === "text") return { kind: 1, value: 1 };
-	const { flex, width } = value.style;
-	if (typeof flex === "number" && flex > 0) return { kind: 1, value: flex };
-	if (width !== undefined) {
-		const { kind, value: amount } = dimension(width, "width");
-		return { kind: kind === 2 ? 2 : 0, value: amount };
-	}
-	if (flex === 0)
+	const result = track(value.style);
+	if (!result)
 		throw locate(
-			new Error("flex: 0 (none) needs a width; columns have no content width"),
+			new Error(
+				"a table column takes a width or a flex grow factor, not a flex basis or flex: none",
+			),
 			value.where,
 		);
-	return { kind: 1, value: 1 };
+	return result;
+}
+
+/** Earlier releases measured flex rows as columns: an item without flex or width took an equal
+ *  share. A row keeps that model, so its output is unchanged, until it or an item uses a
+ *  property the model cannot express. A column without one stays block flow. */
+function cssFlex(style: NormalizedStyle, items: readonly StyledNode[], column: boolean) {
+	const own = [
+		style.justifyContent,
+		style.alignItems,
+		style.height,
+		style.minHeight,
+		style.maxHeight,
+	];
+	if (own.some((value) => value !== undefined)) return true;
+	return items.some((item) => {
+		if (item.kind === "text") return false;
+		const s = item.style;
+		if (s.alignSelf !== undefined || MARGINS.some((key) => s[key] === "auto")) return true;
+		if (column)
+			return s.flexGrow !== undefined || s.flexShrink !== undefined || s.flexBasis !== undefined;
+		const sizes = [s.minWidth, s.maxWidth, s.height, s.minHeight, s.maxHeight, s.boxSizing];
+		return sizes.some((value) => value !== undefined) || track(s) === undefined;
+	});
+}
+
+/** A CSS flex container: one record for the container and its items, then one element per item. */
+function flexbox(
+	node: StyledElement,
+	items: readonly StyledNode[],
+	writer: ProtocolWriter,
+	fonts: Fonts,
+	text: TextState,
+	layout: Box | undefined,
+	depth: number,
+	pageTokens: boolean,
+) {
+	const style = node.style;
+	const column = style.flexDirection === "column";
+	const [minHeight, maxHeight] = heights(layout);
+	const justify = JUSTIFY[style.justifyContent ?? "normal"]!;
+	const specs = items.map((item): FlexItem => {
+		if (item.kind === "text") return { grow: 0, shrink: 1, basis: undefined, align: 0 };
+		const s = item.style;
+		return {
+			grow: s.flexGrow ?? 0,
+			shrink: s.flexShrink ?? 1,
+			basis: s.flexBasis === undefined ? undefined : flexBasis(s.flexBasis),
+			align: ALIGN[s.alignSelf ?? "auto"]!,
+		};
+	});
+	if (column) {
+		const flexed = items.findIndex((_, index) => specs[index]!.grow > 0 || specs[index]!.basis);
+		if (flexed >= 0)
+			throw locate(
+				new Error("flex-grow and flex-basis size flex row items; give a column item a height"),
+				(items[flexed] as StyledElement).where,
+			);
+		// Without a height the column is as tall as its items, so there is no space to distribute.
+		if (justify && layout?.size?.height === undefined && !layout?.size?.minHeight)
+			throw new Error(
+				"justify-content in a flex column needs a height or min-height on the column",
+			);
+	}
+	writer.flexStart(
+		{
+			column,
+			justify,
+			align: ALIGN[style.alignItems ?? "normal"]!,
+			gap: style.gap === undefined ? 0 : point(style.gap, text.size),
+			minHeight,
+			maxHeight,
+		},
+		specs,
+	);
+	const inner: Context = {
+		...text,
+		inRow: true,
+		item: true,
+		height: minHeight === maxHeight ? minHeight : undefined,
+	};
+	for (const child of items) compile([child], writer, fonts, inner, depth + 1, pageTokens);
+	writer.flexEnd();
 }
 
 function element(
@@ -281,8 +474,11 @@ function element(
 	pageTokens: boolean,
 ) {
 	const style = node.style;
-	if (style.height !== undefined && node.tag !== "img")
-		throw new Error("height applies only to <img> (block height comes from content)");
+	if (
+		(style.justifyContent ?? style.alignItems) !== undefined &&
+		(style.display !== "flex" || !BLOCK_TAGS.has(node.tag))
+	)
+		throw new Error("justify-content and align-items apply only to a flex container");
 	switch (node.tag) {
 		case "div":
 		case "main":
@@ -294,19 +490,29 @@ function element(
 		case "th": {
 			if ((node.tag === "td" || node.tag === "th") && !context.cell)
 				throw new Error(`<${node.tag}> belongs in a <tr> inside a <table>`);
+			if (context.cell) sizeless(style, node.tag, ["width"]);
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
-			const paint = boxStyle(style, next.size);
+			const paint = layoutBox(style, next.size, context);
 			const streamed = streamMargin(paint, context, style);
 			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
-			box(writer, streamed ? undefined : paint, () => {
-				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
-				const inner = { ...next, inRow: false };
+			// A CSS flex item is one element, so one without a box of its own gets an empty one.
+			box(writer, streamed ? undefined : (paint ?? (context.item ? EMPTY : undefined)), () => {
+				const flex = style.display === "flex";
+				const row = flex && (style.flexDirection ?? "row") === "row";
+				const [minHeight, maxHeight] = heights(paint);
+				const inner = {
+					...next,
+					inRow: false,
+					height: minHeight === maxHeight ? minHeight : undefined,
+				};
 				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
 				// A whitespace-only text child is no flex item, as in CSS.
 				const items = node.children.filter((child) => child.kind !== "text" || !blank(child.value));
-				if (row && items.length) {
+				if (flex && items.length && cssFlex(style, items, !row))
+					flexbox(node, items, writer, fonts, next, paint, depth, pageTokens);
+				else if (row && items.length) {
 					// A gap is a fixed-width empty column between items, so flex grow shares what is left.
 					const spacer: Column = { kind: 0, value: gap };
 					const columns = items.map(column);
@@ -318,7 +524,7 @@ function element(
 						compile([child], writer, fonts, { ...next, inRow: true }, depth + 1, pageTokens);
 					}
 					writer.rowEnd();
-				} else if (context.inRow || style.breakInside === "avoid") {
+				} else if ((context.inRow && !context.item) || style.breakInside === "avoid") {
 					writer.stackStart(gap);
 					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
 					writer.stackEnd();
@@ -349,7 +555,8 @@ function element(
 				throw new Error(
 					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles`,
 				);
-			box(writer, boxStyle(style, next.size), () =>
+			const own = layoutBox(style, next.size, context);
+			box(writer, own ?? (context.item && runs === undefined ? EMPTY : undefined), () =>
 				runs === undefined
 					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
 					: writeParagraph(writer, runs, next, pageTokens),
@@ -358,13 +565,17 @@ function element(
 			break;
 		}
 		case "img": {
-			if (style.flex !== undefined && !context.inRow)
-				throw new Error("flex applies only to a flex row child");
+			rowOnly(style, context.inRow);
+			sizeless(style, "img", ["width", "height"]);
 			if (typeof style.height === "string" && style.height.endsWith("%"))
 				throw new Error("percent height has no container height; use pt or px, or set width");
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
 			const width = style.width === undefined ? undefined : dimension(style.width, "width");
+			if (context.item && width?.kind === 2)
+				throw new Error(
+					"an image flex item takes a width in pt or px; wrap it to size it by percent",
+				);
 			const height =
 				style.height === undefined ? undefined : dimension(style.height, "height").value;
 			box(writer, boxStyle(style, next.size), () => {
@@ -396,7 +607,7 @@ function element(
 		case "hr":
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
-			box(writer, boxStyle(style, inherit(style, context, fonts).size), () => {});
+			box(writer, layoutBox(style, inherit(style, context, fonts).size, context), () => {});
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 	}
@@ -446,7 +657,11 @@ function table(
 	pageTokens: boolean,
 ) {
 	const style = node.style;
-	if (style.flex !== undefined) throw new Error("flex applies only to a flex row child");
+	if ((style.flexGrow ?? style.flexShrink ?? style.flexBasis) !== undefined)
+		throw new Error("flex applies only to a flex row child");
+	sizeless(style, "table", ["width"]);
+	if (context.item && style.width !== undefined)
+		throw new Error("a table in a flex container takes no width; set it on a wrapping <div>");
 	pageBreak(writer, style, "breakBefore", depth);
 	const next = inherit(style, context, fonts);
 	const paint = boxStyle(style, next.size);
@@ -486,6 +701,7 @@ function table(
 	const row = (tr: StyledElement, state: Context) => {
 		try {
 			rowOnly(tr.style, false);
+			sizeless(tr.style, "tr");
 			for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
 			const own = inherit(tr.style, state, fonts);
 			box(writer, boxStyle(tr.style, own.size), () => {
@@ -509,6 +725,7 @@ function table(
 		if (group)
 			try {
 				rowOnly(group.style, false);
+				sizeless(group.style, group.tag);
 				for (const key of BREAKS) pageBreak(writer, group.style, key, depth + 1);
 				if (boxStyle(group.style, inner.size))
 					throw new Error(`<${group.tag}> accepts no box styles; style <tr> or its cells`);

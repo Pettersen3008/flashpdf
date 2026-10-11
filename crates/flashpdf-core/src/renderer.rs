@@ -428,13 +428,16 @@ impl Renderer {
     }
 }
 
-/// Text, images, and unpainted boxes split across pages. Stack stays atomic: the
-/// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
+/// Text, images, unpainted boxes without a height or max-height, and flex columns without
+/// height bounds split across pages; a page break cuts the space a min-height adds. Stack
+/// stays atomic: the protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
 fn splittable(element: &Element<'_>) -> bool {
     match element {
         Element::Paragraph(_) | Element::Image(_) => true,
         Element::Box(node) => {
             node.style.background.is_none()
+                && node.size.height.is_none()
+                && node.size.max_height.is_none()
                 && node
                     .style
                     .padding
@@ -445,6 +448,12 @@ fn splittable(element: &Element<'_>) -> bool {
                     .children
                     .iter()
                     .all(|child| matches!(child, Element::Spacer(_)) || splittable(child))
+        }
+        Element::Flex(node) => {
+            node.style.column
+                && node.style.min_height == Pt::ZERO
+                && node.style.max_height.is_none()
+                && node.children.iter().all(splittable)
         }
         Element::Spacer(_) | Element::Stack(_) | Element::Row(_) | Element::Table(_) => false,
     }

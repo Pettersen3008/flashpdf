@@ -412,7 +412,14 @@ fn given_a_bordered_box_taller_than_the_page_when_placed_then_rejects() {
     assert_eq!(
         super::render(
             page(),
-            &[Command::BoxStart { style }, text(&long), Command::BoxEnd]
+            &[
+                Command::BoxStart {
+                    style,
+                    size: super::BoxSize::AUTO
+                },
+                text(&long),
+                Command::BoxEnd
+            ]
         ),
         Err(RenderError::PageOverflow)
     );
@@ -422,7 +429,10 @@ fn given_a_bordered_box_taller_than_the_page_when_placed_then_rejects() {
         ..style
     };
     let pdf = parsed(&[
-        Command::BoxStart { style: plain },
+        Command::BoxStart {
+            style: plain,
+            size: super::BoxSize::AUTO,
+        },
         text(&long),
         Command::BoxEnd,
     ]);
@@ -582,7 +592,10 @@ fn given_a_painted_cell_beside_a_taller_cell_when_laid_out_then_its_background_c
     let columns = [Fixed(Pt(50.0)), Fraction(FractionValue::new(1.0).unwrap())];
     let pdf = parsed(&[
         Command::RowStart { columns: &columns },
-        Command::BoxStart { style },
+        Command::BoxStart {
+            style,
+            size: super::BoxSize::AUTO,
+        },
         text("a"),
         Command::BoxEnd,
         Command::StackStart { gap: Pt(0.0) },
@@ -642,8 +655,14 @@ fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint
         ..red
     };
     let pdf = parsed(&[
-        Command::BoxStart { style: red },
-        Command::BoxStart { style: blue },
+        Command::BoxStart {
+            style: red,
+            size: super::BoxSize::AUTO,
+        },
+        Command::BoxStart {
+            style: blue,
+            size: super::BoxSize::AUTO,
+        },
         text("x"),
         Command::BoxEnd,
         Command::BoxEnd,
@@ -970,4 +989,232 @@ fn given_a_long_footer_and_many_page_breaks_when_finishing_then_rejects_past_the
         .unwrap();
     renderer.push(&vec![Command::PageBreak; 300]).unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::DocumentTooLarge));
+}
+
+fn flex(
+    column: bool,
+    justify: super::Justify,
+    align: super::Align,
+    height: Option<f32>,
+) -> super::Flex {
+    super::Flex {
+        column,
+        justify,
+        align,
+        gap: Pt(0.0),
+        min_height: Pt(height.unwrap_or(0.0)),
+        max_height: height.map(Pt),
+    }
+}
+
+const ITEM: super::FlexItem = super::FlexItem {
+    grow: 0.0,
+    shrink: 1.0,
+    basis: super::ImageSize::Auto,
+    align: None,
+};
+
+fn sized(size: super::BoxSize, background: Option<Rgb>) -> Command<'static> {
+    Command::BoxStart {
+        style: super::BoxStyle {
+            margin: Edges::all(Pt(0.0)),
+            padding: Edges::all(Pt(0.0)),
+            border: Edges::all(Pt(0.0)),
+            background,
+            border_color: Edges::all(Rgb::BLACK),
+        },
+        size,
+    }
+}
+
+const RED: Option<Rgb> = Some(Rgb { r: 255, g: 0, b: 0 });
+
+#[test]
+fn given_space_between_and_center_when_a_row_lays_out_then_items_touch_both_edges_and_centre_across(
+) {
+    let style = flex(
+        false,
+        super::Justify::SpaceBetween,
+        super::Align::Center,
+        None,
+    );
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style,
+            items: &[ITEM; 2],
+        },
+        text("a"),
+        Command::StackStart { gap: Pt(0.0) },
+        text("b"),
+        text("c"),
+        Command::StackEnd,
+        Command::FlexEnd,
+    ]);
+    // "b" is 5.56pt wide plus the 0.001pt that keeps it on one line; "a" sits half a line lower.
+    let content = content(&pdf);
+    for position in ["104.439 42.82 Td", "10 38.195 Td"] {
+        assert!(content.contains(position), "{position}: {content}");
+    }
+}
+
+#[test]
+fn given_bases_wider_than_the_row_when_shrinking_then_an_item_stops_at_its_longest_word() {
+    let basis = super::ImageSize::Fixed(Pt(80.0));
+    let items = [super::FlexItem { basis, ..ITEM }; 2];
+    let style = flex(false, super::Justify::Start, super::Align::Stretch, None);
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style,
+            items: &items,
+        },
+        text("WWWWWWW"),
+        text("a"),
+        Command::FlexEnd,
+    ]);
+    // An even shrink leaves 50pt each, but seven W's need 66.08pt, so "a" takes the rest.
+    assert!(
+        content(&pdf).contains("76.08099 42.82 Td"),
+        "{}",
+        content(&pdf)
+    );
+}
+
+#[test]
+fn given_grow_factors_and_bases_when_space_is_left_then_items_share_it_by_factor() {
+    let basis = super::ImageSize::Fixed(Pt(20.0));
+    let items = [1.0, 3.0].map(|grow| super::FlexItem {
+        grow,
+        basis,
+        ..ITEM
+    });
+    let style = flex(false, super::Justify::Start, super::Align::Stretch, None);
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style,
+            items: &items,
+        },
+        text("a"),
+        text("b"),
+        Command::FlexEnd,
+    ]);
+    // 60pt is left over: the first takes 15pt and ends at 35pt, the second takes 45pt.
+    assert!(content(&pdf).contains("45 42.82 Td"), "{}", content(&pdf));
+}
+
+#[test]
+fn given_stretch_when_a_painted_item_is_shorter_than_the_row_then_its_box_fills_the_row() {
+    let style = flex(false, super::Justify::Start, super::Align::Stretch, None);
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style,
+            items: &[ITEM; 2],
+        },
+        sized(super::BoxSize::AUTO, RED),
+        text("a"),
+        Command::BoxEnd,
+        Command::StackStart { gap: Pt(0.0) },
+        text("b"),
+        text("c"),
+        Command::StackEnd,
+        Command::FlexEnd,
+    ]);
+    assert!(
+        content(&pdf).contains("10 31.5 5.561 18.5 re"),
+        "{}",
+        content(&pdf)
+    );
+}
+
+#[test]
+fn given_a_max_width_and_auto_side_margins_when_a_box_lays_out_then_it_centres() {
+    let size = super::BoxSize {
+        max_width: super::ImageSize::Fixed(Pt(60.0)),
+        auto_margin: 2 | 8,
+        ..super::BoxSize::AUTO
+    };
+    let pdf = parsed(&[sized(size, RED), text("a"), Command::BoxEnd]);
+    assert!(
+        content(&pdf).contains("30 40.75 60 9.25 re"),
+        "{}",
+        content(&pdf)
+    );
+}
+
+#[test]
+fn given_border_box_sizing_when_a_box_has_padding_then_its_width_includes_the_padding() {
+    let size = super::BoxSize {
+        width: super::ImageSize::Fixed(Pt(50.0)),
+        border_box: true,
+        ..super::BoxSize::AUTO
+    };
+    let Command::BoxStart { style, .. } = sized(size, RED) else {
+        unreachable!()
+    };
+    let style = super::BoxStyle {
+        padding: Edges::all(Pt(5.0)),
+        ..style
+    };
+    let pdf = parsed(&[
+        Command::BoxStart { style, size },
+        text("a"),
+        Command::BoxEnd,
+    ]);
+    assert!(
+        content(&pdf).contains("10 30.75 50 19.25 re"),
+        "{}",
+        content(&pdf)
+    );
+}
+
+#[test]
+fn given_content_taller_than_a_fixed_height_when_laid_out_then_rejects_with_content_overflow() {
+    let size = super::BoxSize {
+        height: Some(Pt(5.0)),
+        ..super::BoxSize::AUTO
+    };
+    assert_eq!(
+        super::render(page(), &[sized(size, None), text("a"), Command::BoxEnd]),
+        Err(RenderError::ContentOverflow)
+    );
+}
+
+#[test]
+fn given_a_fixed_height_box_below_the_fold_when_placed_then_it_moves_whole_to_the_next_page() {
+    let size = super::BoxSize {
+        height: Some(Pt(35.0)),
+        ..super::BoxSize::AUTO
+    };
+    let pdf = parsed(&[
+        text("first"),
+        sized(size, None),
+        text("a"),
+        text("b"),
+        Command::BoxEnd,
+    ]);
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "first");
+    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "a\nb");
+}
+
+#[test]
+fn given_a_column_with_a_height_and_space_between_when_laid_out_then_items_touch_top_and_bottom() {
+    let style = flex(
+        true,
+        super::Justify::SpaceBetween,
+        super::Align::Stretch,
+        Some(40.0),
+    );
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style,
+            items: &[ITEM; 2],
+        },
+        text("a"),
+        text("b"),
+        Command::FlexEnd,
+    ]);
+    // The last line box ends on the 10pt bottom margin, so its baseline sits 9.25 - 7.18 above it.
+    let content = content(&pdf);
+    for position in ["10 42.82 Td", "10 12.07 Td"] {
+        assert!(content.contains(position), "{position}: {content}");
+    }
 }

@@ -363,6 +363,40 @@ test("given layouts the engine rejects, when rendering, then explains the code a
 	);
 });
 
+test("given an invoice header with space-between and centred items and an mx-auto block, when rendering, then places them as CSS does", async () => {
+	const pdf = await render(
+		jsxs("main", {
+			children: [
+				jsxs("header", {
+					style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+					children: [
+						jsx("div", { style: { width: 60, height: 40, background: "#ccc" } }),
+						jsx("p", { children: "Invoice 42" }),
+					],
+				}),
+				jsx("div", {
+					style: { maxWidth: "50%", margin: "0 auto", background: "#eee" },
+					children: "Centred",
+				}),
+			],
+		}),
+	);
+	const content = string(pdf);
+	// The 40pt logo sets the row height; the 11.1pt text line sits 14.45pt down, ending at the right margin.
+	assert.match(content, /36 766 60 40 re/);
+	assert.match(content, /504\.303 782\.934 Td\n\(Invoice 42\)/);
+	assert.match(content, /166\.75 754\.9 261\.5 11\.1 re/);
+});
+
+test("given content taller than a fixed height, when rendering, then rejects with ContentOverflow naming the element", async () => {
+	await assert.rejects(
+		render(
+			jsx("main", { children: jsx("div", { style: { height: 10 }, children: "a b c d e f g h" }) }),
+		),
+		/^Error: ContentOverflow: the content is taller than its box's height.* on <div> in <main>$/,
+	);
+});
+
 test("given a repeating header and tagged metadata, when rendering two pages, then writes page furniture and a structure tree", async () => {
 	const logo = png(1, 1, 2, [0, 255, 0, 0]);
 	const document = jsxs("main", {
@@ -587,12 +621,16 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
-		[{ height: 40 }, /height applies only to <img> \(block height comes from content\) on <main>/],
+		[{ flexWrap: "wrap" }, /flex-wrap: wrap is not supported; flex items stay on one line/],
+		[{ display: "flex", alignItems: "baseline" }, /alignItems: baseline is not supported/],
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
 		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
-		[{ width: "40pt" }, /width applies only to a flex row child on <main>/],
+		[
+			{ justifyContent: "center" },
+			/justify-content and align-items apply only to a flex container on <main>/,
+		],
 	])
 		await assert.rejects(
 			render(jsx("main", { style, children: "x" })),

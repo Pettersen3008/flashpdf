@@ -87,7 +87,22 @@ fn box_start() -> Vec<u8> {
     }
     payload.extend([1, 0xee, 0xee, 0xee]);
     payload.extend([0, 0, 0].repeat(4));
+    // No flags, then six auto sizes.
+    payload.extend([0; 7]);
     record(17, &payload)
+}
+
+/// A flex row with `justify` whose `items` each have `flex: 0 1 auto`.
+fn flex_start(justify: u8, items: u16) -> Vec<u8> {
+    let mut payload = vec![0, justify, 0];
+    payload.extend([0.0_f32, 0.0].map(f32::to_le_bytes).concat());
+    payload.push(0);
+    payload.extend(items.to_le_bytes());
+    for _ in 0..items {
+        payload.extend([0.0_f32, 1.0].map(f32::to_le_bytes).concat());
+        payload.extend([0, 0]);
+    }
+    record(22, &payload)
 }
 
 /// Every opcode the JSX lowering emits, on a 120x60 page whose 40pt of body
@@ -102,6 +117,10 @@ fn representative() -> Vec<u8> {
     bytes.extend(plain(b"row"));
     bytes.extend(plain(b"1"));
     bytes.extend(record(6, &[]));
+    bytes.extend(flex_start(3, 2));
+    bytes.extend(plain(b"flex"));
+    bytes.extend(plain(b"2"));
+    bytes.extend(record(23, &[]));
     bytes.extend(record(10, &table_start(1)));
     for cell in [b"head", b"body"] {
         bytes.extend(record(5, &columns(&[(1, 1.0)])));
@@ -250,7 +269,7 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     assert_eq!(pdf.get_pages().len(), 4);
     assert_eq!(
         pdf.extract_text(&[1]).unwrap().trim(),
-        "Before\nBoxed\nrow\n1"
+        "Before\nBoxed\nrow\n1\nflex\n2"
     );
     assert_eq!(
         pdf.extract_text(&[2]).unwrap().trim(),
@@ -393,6 +412,16 @@ fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
     headers_only.extend(record(10, &table_start(1)));
     headers_only.extend(record(11, &[]));
     assert_eq!(push_error(&headers_only), "InvalidLayout");
+
+    let mut bad_justify = header(VERSION, 120.0, 60.0, 10.0);
+    bad_justify.extend(flex_start(6, 1));
+    assert_eq!(push_error(&bad_justify), "invalid justify-content");
+
+    let mut flex_closes_row = header(VERSION, 120.0, 60.0, 10.0);
+    flex_closes_row.extend(record(5, &columns(&[(1, 1.0)])));
+    flex_closes_row.extend(plain(b"one"));
+    flex_closes_row.extend(record(23, &[]));
+    assert_eq!(push_error(&flex_closes_row), "invalid nesting");
 
     let mut bad_layout_row = header(VERSION, 120.0, 60.0, 10.0);
     bad_layout_row.extend(record(5, &columns(&[(0, 50.0), (1, 1.0)])));

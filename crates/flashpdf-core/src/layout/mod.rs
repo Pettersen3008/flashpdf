@@ -1,3 +1,4 @@
+mod flex;
 mod output;
 mod row;
 mod text;
@@ -12,10 +13,14 @@ use crate::font::FontBook;
 use crate::geometry::LayoutArea;
 use crate::image::Image;
 use crate::layout::output::{PositionedBox, PositionedLine};
-use crate::{BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun};
+use crate::{
+    BoxSize, BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun,
+};
 
 /// CSS reference pixels are 96 per inch; PDF points are 72.
 const PT_PER_PX: f32 = 0.75;
+/// How far content may pass a fixed size before it overflows, absorbing float error.
+const TOLERANCE: f32 = 1e-3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum LayoutError {
@@ -31,6 +36,7 @@ pub(crate) enum LayoutError {
     InvalidRuns,
     UnknownImage,
     ImageTooWide,
+    ContentOverflow,
 }
 
 impl From<LayoutError> for RenderError {
@@ -41,6 +47,7 @@ impl From<LayoutError> for RenderError {
             LayoutError::MissingGlyph(character) => Self::MissingGlyph(character),
             LayoutError::TextTooWide => Self::TextTooWide,
             LayoutError::ImageTooWide => Self::ImageTooWide,
+            LayoutError::ContentOverflow => Self::ContentOverflow,
             LayoutError::InvalidWidth
             | LayoutError::UnknownFont(_)
             | LayoutError::InvalidBox
@@ -73,12 +80,13 @@ impl<'a> LayoutEngine<'a> {
         }
         match element {
             Element::Paragraph(paragraph) => self.layout_paragraph(paragraph, area, output),
-            Element::Box(node) => self.layout_box(node, area, output),
+            Element::Box(node) => self.layout_box(node, area, None, output),
             Element::Spacer(spacer) => Ok(spacer.height),
             Element::Stack(stack) => self.layout_stack(stack, area, output),
             Element::Row(row) => self.layout_row(row, area, output),
             Element::Table(table) => self.layout_table(table, area, output),
             Element::Image(image) => self.layout_image(image, area, output),
+            Element::Flex(node) => self.layout_flex(node, area, output),
         }
     }
 
@@ -131,7 +139,7 @@ impl<'a> LayoutEngine<'a> {
         };
         let first = output.segments.len();
         let link_base = output.links.len();
-        let height = text::ParagraphLayouter::layout(self.fonts, &keyed, area, output)?;
+        let (height, _) = text::ParagraphLayouter::layout(self.fonts, &keyed, area, output)?;
         output.links.extend(paragraph.links.iter().cloned());
         for segment in &mut output.segments[first..] {
             let index = usize::from(segment.color.r)
@@ -216,31 +224,56 @@ impl<'a> LayoutEngine<'a> {
         Ok(Pt(height))
     }
 
+    /// `width` imposes the border-box width a flex container chose.
     fn layout_box(
         &self,
         node: &BoxNode<'_>,
         area: LayoutArea,
+        width: Option<Pt>,
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
         let style = node.style;
+        let size = node.size;
         let horizontal = style.margin.right
             + style.margin.left
             + style.padding.right
             + style.padding.left
             + style.border.right
             + style.border.left;
-        if horizontal >= area.width
-            || style
-                .margin
-                .iter()
-                .chain(style.padding.iter())
-                .any(|value| *value < Pt::ZERO)
+        if style
+            .margin
+            .iter()
+            .chain(style.padding.iter())
+            .any(|value| *value < Pt::ZERO)
         {
             return Err(LayoutError::InvalidBox);
         }
-        let inset_x = style.margin.left + style.padding.left + style.border.left;
+        let sized = match width {
+            Some(width) => Some((style.margin.left, width)),
+            None => block_width(&style, &size, area.width)?,
+        };
+        // An auto width keeps the arithmetic of earlier releases, so their output is unchanged.
+        let (left, width, inner_width) = match sized {
+            Some((left, width)) => (
+                left,
+                width,
+                width
+                    - style.padding.right
+                    - style.padding.left
+                    - style.border.right
+                    - style.border.left,
+            ),
+            None => (
+                style.margin.left,
+                area.width - style.margin.right - style.margin.left,
+                area.width - horizontal,
+            ),
+        };
+        if inner_width < Pt::ZERO || (inner_width == Pt::ZERO && !node.children.is_empty()) {
+            return Err(LayoutError::InvalidBox);
+        }
+        let inset_x = left + style.padding.left + style.border.left;
         let inset_y = style.margin.top + style.padding.top + style.border.top;
-        let inner_width = area.width - horizontal;
         let paint = painted(&style).then(|| {
             let index = output.boxes.len();
             output.boxes.push(PositionedBox {
@@ -265,15 +298,28 @@ impl<'a> LayoutEngine<'a> {
             + style.padding.bottom
             + style.border.top
             + style.border.bottom;
+        let inset =
+            style.padding.top + style.padding.bottom + style.border.top + style.border.bottom;
+        let border = |value: Pt| border_size(value.get(), inset.get(), size.border_box);
+        let content = box_height.get();
+        let min = border(size.min_height);
+        let mut height = size.height.map_or(content, border);
+        if let Some(max) = size.max_height {
+            height = height.min(border(max));
+        }
+        let height = height.max(min);
+        if overflows(height - content) {
+            return Err(LayoutError::ContentOverflow);
+        }
         if let Some(index) = paint {
             output.boxes[index] = PositionedBox {
-                origin: area.origin.translated(style.margin.left, style.margin.top),
-                width: area.width - style.margin.right - style.margin.left,
-                height: box_height,
+                origin: area.origin.translated(left, style.margin.top),
+                width,
+                height: Pt(height),
                 style,
             };
         }
-        Ok(style.margin.top + box_height + style.margin.bottom)
+        Ok(style.margin.top + Pt(height) + style.margin.bottom)
     }
 
     fn layout_stack(
@@ -342,6 +388,64 @@ impl<'a> LayoutEngine<'a> {
         }
         Ok(height)
     }
+}
+
+/// CSS 2.1 §10.3.3 and §10.4: a block's left margin and border-box width in `available`,
+/// or `None` when an auto width fills it unclamped.
+fn block_width(
+    style: &BoxStyle,
+    size: &BoxSize,
+    available: Pt,
+) -> Result<Option<(Pt, Pt)>, LayoutError> {
+    let inset =
+        (style.padding.left + style.padding.right + style.border.left + style.border.right).get();
+    let resolve = |value| border_width(value, available.get(), inset, size.border_box);
+    let fill = (available - style.margin.left - style.margin.right).get();
+    let (max, min) = (resolve(size.max_width), resolve(size.min_width));
+    let Some(width) = resolve(size.width).or_else(|| {
+        (max.is_some_and(|max| max < fill) || min.is_some_and(|min| min > fill)).then_some(fill)
+    }) else {
+        return Ok(None);
+    };
+    let width = max.map_or(width, |max| width.min(max));
+    let width = min.map_or(width, |min| width.max(min));
+    let free = fill - width;
+    if overflows(free) {
+        return Err(LayoutError::InvalidBox);
+    }
+    let free = free.max(0.0);
+    let left = match (size.auto_margin & 8 != 0, size.auto_margin & 2 != 0) {
+        (true, true) => free / 2.0,
+        (true, false) => free,
+        _ => 0.0,
+    };
+    Ok(Some((style.margin.left + Pt(left), Pt(width))))
+}
+
+/// A `width`, `min-width`, or `max-width` as a border-box width; `Auto` is `None`.
+// Out of line: a copy at each call costs WASM bytes and saves no measurable time.
+#[inline(never)]
+fn border_width(value: ImageSize, available: f32, inset: f32, border_box: bool) -> Option<f32> {
+    let value = match value {
+        ImageSize::Auto => return None,
+        ImageSize::Fixed(value) => value.get(),
+        ImageSize::Percent(percent) => available * percent.get() / 100.0,
+    };
+    Some(border_size(value, inset, border_box))
+}
+
+/// `box-sizing`: padding and border add to a content-box size and fit inside a border-box one.
+fn border_size(value: f32, inset: f32, border_box: bool) -> f32 {
+    if border_box {
+        value.max(inset)
+    } else {
+        value + inset
+    }
+}
+
+/// Space below `-TOLERANCE` overflows, and so does NaN from sizes too large for a float.
+fn overflows(free: f32) -> bool {
+    free.is_nan() || free < -TOLERANCE
 }
 
 fn painted(style: &BoxStyle) -> bool {

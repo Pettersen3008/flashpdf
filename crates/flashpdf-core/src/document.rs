@@ -1,4 +1,4 @@
-use crate::{BoxStyle, ColumnWidth, ImageSize, Pt, TextAlign, TextRun};
+use crate::{BoxSize, BoxStyle, ColumnWidth, Flex, FlexItem, ImageSize, Pt, TextAlign, TextRun};
 
 pub(crate) struct Document<'a> {
     pub(crate) blocks: Vec<Block<'a>>,
@@ -17,6 +17,7 @@ pub(crate) enum Element<'a> {
     Row(Row<'a>),
     Table(Table<'a>),
     Image(ImageNode<'a>),
+    Flex(FlexNode<'a>),
 }
 
 pub(crate) struct Paragraph<'a> {
@@ -40,6 +41,7 @@ pub(crate) struct Spacer {
 
 pub(crate) struct BoxNode<'a> {
     pub(crate) style: BoxStyle,
+    pub(crate) size: BoxSize,
     pub(crate) children: Vec<Element<'a>>,
 }
 
@@ -50,6 +52,13 @@ pub(crate) struct Stack<'a> {
 
 pub(crate) struct Row<'a> {
     pub(crate) cells: Vec<Cell<'a>>,
+}
+
+/// `items` and `children` pair up by index.
+pub(crate) struct FlexNode<'a> {
+    pub(crate) style: Flex,
+    pub(crate) items: &'a [FlexItem],
+    pub(crate) children: Vec<Element<'a>>,
 }
 
 pub(crate) struct Cell<'a> {

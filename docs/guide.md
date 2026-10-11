@@ -43,8 +43,11 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 | `Helvetica has no glyph for "−" (U+2212)` | The default font covers WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
 | `src must be the image's PNG or JPEG bytes as a Uint8Array` | `img` does not take a URL, path, or `data:` URL. | Read or fetch the file and pass its bytes. |
 | `unsupported element <ul>` | There are no lists. | One `<p>` per item that starts with `•`. |
-| `unsupported style property: borderRadius`, `position`, `opacity`, `justifyContent`, `alignItems` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
-| `height applies only to <img>` | Block height comes from content. | Remove `height`. Space blocks with `margin` or `padding`. |
+| `unsupported style property: borderRadius`, `position`, `opacity` | No equivalent exists. | Remove it. [CSS.md](../CSS.md) lists every limit. |
+| `ContentOverflow: the content is taller than its box's height` | A `height` or `max-height` is smaller than the content, and nothing clips. | Raise the height, use `min-height`, or shorten the content. |
+| `flex-wrap: wrap is not supported` | A flex container lays out one line. | Size the items to fit, or split them into several rows. |
+| `justify-content in a flex column needs a height or min-height` | A column without a height is as tall as its items, so there is no space to distribute. | Set `height` or `min-height` on the column. |
+| `PageOverflow: use document margins or split this decorated box` on a `max-width` or `mx-auto` wrapper | A table or flex row inside a sized box moves whole with it. | Drop the wrapper and give the table its own `width`, or set the page width with the `margin` option. |
 | `colSpan and rowSpan are not supported yet` | A table row needs one cell per column. | Split the cell. |
 | `page tokens are only valid in a header or footer` | `PageNumber` and `TotalPages` only resolve there. | Move them into the `header` or `footer` option. |
 | `href must be an absolute http, https, or mailto URL` | Links cannot be relative or `#anchors`. | Use a full URL. |
@@ -133,10 +136,11 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `renderToBuffer`, `renderToStream`, `pdf().toBlob()` | `await render(…)` returns a `Uint8Array`. Wrap it in a `Blob` yourself. |
 | `PDFViewer`, `PDFDownloadLink` | None. FlashPDF ships no viewer or download helper. |
 
-Three differences cause most surprises:
+Four differences cause most surprises:
 
 - A `View` stacks its children in a flex column. A FlashPDF `div` is a block, which also stacks them. For a row, set `display: 'flex'`. FlashPDF follows CSS here, so a flex box is a row unless you set `flexDirection: 'column'`.
 - Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `em`, and `rem`.
-- `justifyContent`, `alignItems`, `flexWrap`, and `position` reject. Use `flex`, `width`, `gap`, and `textAlign`.
+- `justifyContent`, `alignItems`, `alignSelf`, `flexGrow`, `flexShrink`, and `flexBasis` work in a row as in react-pdf. In a column, `justifyContent` needs a `height` and items take no `flexGrow`. `flexWrap` and `position` reject.
+- A flex row that sets only `flex` and `width` keeps FlashPDF's earlier model, where an item with neither takes an equal share. Add `justifyContent: 'flex-start'` to size such items to their content, as react-pdf does.
 
 `Svg`, `Canvas`, `Note`, italic text, and lists have no equivalent.

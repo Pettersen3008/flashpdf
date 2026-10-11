@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- Flex alignment in rows and columns: `justify-content` (`flex-start`, `flex-end`, `center`, `space-between`, `space-around`, `space-evenly`), and `align-items` and `align-self` (`stretch`, `flex-start`, `flex-end`, `center`), plus `start`, `end`, and `normal`. Tailwind's `justify-between` and `items-center` work. A column needs a `height` or `min-height` for `justify-content`.
+- Flex item sizing in rows: `flex-grow`, `flex-shrink`, `flex-basis` in `pt`, `px`, `rem`, or `%`, and every `flex` shorthand form, resolved as CSS does. An item shrinks no further than its longest word or image unless `min-width` allows. `auto` margins on items take the free space, so `ml-auto` pushes an item right.
+- Box sizing: `width`, `min-width`, `max-width`, `height`, `min-height`, and `max-height` on blocks, paragraphs, headings, and `hr`; `box-sizing: border-box`; and `margin-left` and `margin-right: auto`, which centre a block with a `width` or `max-width`. A percent height resolves against the parent's fixed height. A box with a `height` or `max-height` moves whole to the next page when it does not fit, and content taller than it rejects with `ContentOverflow`.
+
+### Changed
+
+- A flex row keeps the earlier column model, where an item without `flex` or `width` takes an equal share, until the row or an item uses a property above, so existing documents render unchanged. `flex: auto` beside a `width`, a `flex` length basis, and `flex: none` without a width no longer reject; they switch the row to the CSS algorithm.
+- `flex-wrap: wrap` and `align-items: baseline` reject with a reason, as do `justify-content` and `align-items` outside a flex container, and `flex-grow` or `flex-basis` on a column item.
+- The binary protocol is version 10: `BoxStart` carries sizes, `box-sizing`, and auto margins, and new `FlexStart` and `FlexEnd` records carry a flex container. The JavaScript and WASM halves ship together, so this affects no public API.
+
 ### Changed
 
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.

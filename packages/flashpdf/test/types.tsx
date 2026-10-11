@@ -35,8 +35,14 @@ const _unsupported = <button>Print</button>;
 const _unknownProperty = <main potato={1}>Invoice</main>;
 // @ts-expect-error Grid is not part of FlashPDF's supported CSS subset.
 const _grid = <main style={{ display: "grid" }}>Invoice</main>;
-// @ts-expect-error Margin and padding take one to four lengths, never "auto".
-const _auto = <main style={{ margin: "auto" }}>Invoice</main>;
+// @ts-expect-error Padding takes one to four lengths, never "auto".
+const _auto = <main style={{ padding: "auto" }}>Invoice</main>;
+const _flex = (
+	<header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+		<div style={{ width: 60, height: 40, margin: "0 auto", boxSizing: "border-box" }} />
+		<p style={{ flex: "1 1 0%", maxWidth: "50%", alignSelf: "flex-end" }}>Due</p>
+	</header>
+);
 const _rich = (
 	<p>
 		Hello <b>World</b>

@@ -1,7 +1,13 @@
+use std::mem::discriminant;
+
 use crate::document::{
-    Block, BoxNode, Cell, Document, Element, ImageNode, Paragraph, Row, Spacer, Stack, Table,
+    Block, BoxNode, Cell, Document, Element, FlexNode, ImageNode, Paragraph, Row, Spacer, Stack,
+    Table,
 };
-use crate::{BoxStyle, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun, TextStyle};
+use crate::{
+    BoxSize, BoxStyle, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun,
+    TextStyle,
+};
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
 pub(crate) const MAX_COLUMNS: usize = 256;
@@ -23,6 +29,7 @@ pub enum Command<'a> {
     },
     BoxStart {
         style: BoxStyle,
+        size: BoxSize,
     },
     BoxEnd,
     Spacer(Pt),
@@ -34,6 +41,12 @@ pub enum Command<'a> {
         columns: &'a [ColumnWidth],
     },
     RowEnd,
+    /// A CSS flex container with exactly one child per item.
+    FlexStart {
+        style: Flex,
+        items: &'a [FlexItem],
+    },
+    FlexEnd,
     /// The first `header_rows` children repeat at the top of every page the table continues on,
     /// the last `footer_rows` after the last body row of every page.
     TableStart {
@@ -63,13 +76,15 @@ pub enum ColumnWidth {
 /// The protocol's decoded form owns data across input chunks.
 pub(crate) enum OwnedCommand {
     Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>),
-    BoxStart(BoxStyle),
+    BoxStart(BoxStyle, BoxSize),
     BoxEnd,
     Spacer(Pt),
     StackStart(Pt),
     StackEnd,
     RowStart(Vec<ColumnWidth>),
     RowEnd,
+    FlexStart(Flex, Vec<FlexItem>),
+    FlexEnd,
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
     Image(u16, ImageSize, Option<Pt>, Option<String>, String),
@@ -84,13 +99,21 @@ impl OwnedCommand {
                 runs,
                 links,
             },
-            Self::BoxStart(style) => Command::BoxStart { style: *style },
+            Self::BoxStart(style, size) => Command::BoxStart {
+                style: *style,
+                size: *size,
+            },
             Self::BoxEnd => Command::BoxEnd,
             Self::Spacer(value) => Command::Spacer(*value),
             Self::StackStart(gap) => Command::StackStart { gap: *gap },
             Self::StackEnd => Command::StackEnd,
             Self::RowStart(columns) => Command::RowStart { columns },
             Self::RowEnd => Command::RowEnd,
+            Self::FlexStart(style, items) => Command::FlexStart {
+                style: *style,
+                items,
+            },
+            Self::FlexEnd => Command::FlexEnd,
             Self::TableStart(header_rows, footer_rows, width) => Command::TableStart {
                 header_rows: *header_rows,
                 footer_rows: *footer_rows,
@@ -170,7 +193,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_block(&mut self) -> Result<Block<'a>, CommandParseError> {
-        if self.peek() == Some(Command::PageBreak) {
+        if matches!(self.peek(), Some(Command::PageBreak)) {
             self.index += 1;
             Ok(Block::PageBreak)
         } else {
@@ -219,10 +242,14 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 alt,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
-            Command::BoxStart { style } => {
+            Command::BoxStart { style, size } => {
                 self.check_depth(depth)?;
                 let children = self.parse_children(Command::BoxEnd, depth + 1)?;
-                Ok(Element::Box(BoxNode { style, children }))
+                Ok(Element::Box(BoxNode {
+                    style,
+                    size,
+                    children,
+                }))
             }
             Command::StackStart { gap } => {
                 self.check_depth(depth)?;
@@ -241,10 +268,28 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                         content: self.parse_element(depth + 1)?,
                     });
                 }
-                if self.next()? != Command::RowEnd {
+                if !matches!(self.next()?, Command::RowEnd) {
                     return Err(CommandParseError::InvalidRow);
                 }
                 Ok(Element::Row(Row { cells }))
+            }
+            Command::FlexStart { style, items } => {
+                self.check_depth(depth)?;
+                if items.is_empty() || items.len() > MAX_COLUMNS {
+                    return Err(CommandParseError::InvalidRow);
+                }
+                let mut children = Vec::with_capacity(items.len());
+                for _ in items {
+                    children.push(self.parse_element(depth + 1)?);
+                }
+                if !matches!(self.next()?, Command::FlexEnd) {
+                    return Err(CommandParseError::InvalidRow);
+                }
+                Ok(Element::Flex(FlexNode {
+                    style,
+                    items,
+                    children,
+                }))
             }
             Command::TableStart {
                 header_rows,
@@ -271,11 +316,13 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             Command::BoxEnd
             | Command::StackEnd
             | Command::RowEnd
+            | Command::FlexEnd
             | Command::TableEnd
             | Command::PageBreak => Err(CommandParseError::UnexpectedCommand),
         }
     }
 
+    /// Comparing variants rather than whole commands keeps `Command`'s `PartialEq` out of the WASM.
     fn parse_children(
         &mut self,
         end: Command<'_>,
@@ -283,7 +330,10 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     ) -> Result<Vec<Element<'a>>, CommandParseError> {
         let mut children = Vec::new();
         loop {
-            if self.peek() == Some(end) {
+            if self
+                .peek()
+                .is_some_and(|command| discriminant(&command) == discriminant(&end))
+            {
                 self.index += 1;
                 return Ok(children);
             }
@@ -324,6 +374,10 @@ fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
         Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {
             children.iter().all(|child| uniform_rows(child, columns))
         }
-        Element::Paragraph(_) | Element::Spacer(_) | Element::Table(_) | Element::Image(_) => false,
+        Element::Paragraph(_)
+        | Element::Spacer(_)
+        | Element::Table(_)
+        | Element::Image(_)
+        | Element::Flex(_) => false,
     }
 }
