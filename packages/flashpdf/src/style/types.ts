@@ -9,6 +9,11 @@ export type NormalizedStyle = StyleInput & {
 	borderRightColor?: string;
 	borderBottomColor?: string;
 	borderLeftColor?: string;
+	/** Absent means solid, as for a border written with only a width. */
+	borderTopStyle?: "solid" | "none";
+	borderRightStyle?: "solid" | "none";
+	borderBottomStyle?: "solid" | "none";
+	borderLeftStyle?: "solid" | "none";
 };
 
 export type Box = {

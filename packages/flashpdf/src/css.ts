@@ -8,7 +8,8 @@ export type { StyledNode } from "./css/cascade.js";
 export function stylesheet(source: string | TemplateStringsArray, ...values: unknown[]): string {
 	const css = typeof source === "string" ? source : String.raw(source, ...values);
 	for (const rule of parse(css))
-		for (const declarations of Object.values(rule.declarations())) {
+		// A rule in an unsupported @media query rejects in `render`, where it matches an element.
+		for (const declarations of rule.blocked ? [] : Object.values(rule.declarations())) {
 			// Custom properties and var() resolve only in an element's cascade, and Tailwind puts
 			// calc() and color-mix() in most utilities, so render checks those where a rule applies.
 			const known = Object.entries(declarations).filter(

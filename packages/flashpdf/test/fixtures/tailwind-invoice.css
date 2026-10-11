@@ -1,0 +1,118 @@
+/*! tailwindcss v4.3.3 | MIT License | https://tailwindcss.com */
+@layer properties;
+.m-2 {
+	margin: calc(0.25rem * 2);
+}
+.mt-4 {
+	margin-top: calc(0.25rem * 4);
+}
+.flex {
+	display: flex;
+}
+.w-1\/2 {
+	width: calc(1 / 2 * 100%);
+}
+.w-32 {
+	width: calc(0.25rem * 32);
+}
+.w-\[120px\] {
+	width: 120px;
+}
+.flex-1 {
+	flex: 1;
+}
+.flex-col {
+	flex-direction: column;
+}
+.gap-4 {
+	gap: calc(0.25rem * 4);
+}
+.border {
+	border-style: var(--tw-border-style);
+	border-width: 1px;
+}
+.border-b {
+	border-bottom-style: var(--tw-border-style);
+	border-bottom-width: 1px;
+}
+.border-gray-200 {
+	border-color: oklch(92.8% 0.006 264.531);
+}
+.bg-gray-100 {
+	background-color: oklch(96.7% 0.003 264.542);
+}
+.p-4 {
+	padding: calc(0.25rem * 4);
+}
+.px-4 {
+	padding-inline: calc(0.25rem * 4);
+}
+.py-2 {
+	padding-block: calc(0.25rem * 2);
+}
+.text-center {
+	text-align: center;
+}
+.text-right {
+	text-align: right;
+}
+.text-lg {
+	font-size: 1.125rem;
+	line-height: var(--tw-leading, calc(1.75 / 1.125));
+}
+.text-sm {
+	font-size: 0.875rem;
+	line-height: var(--tw-leading, calc(1.25 / 0.875));
+}
+.leading-6 {
+	--tw-leading: calc(0.25rem * 6);
+	line-height: calc(0.25rem * 6);
+}
+.font-bold {
+	--tw-font-weight: 700;
+	font-weight: 700;
+}
+.font-semibold {
+	--tw-font-weight: 600;
+	font-weight: 600;
+}
+.text-gray-600 {
+	color: oklch(44.6% 0.03 256.802);
+}
+.line-through {
+	text-decoration-line: line-through;
+}
+.underline {
+	text-decoration-line: underline;
+}
+@media (width >= 48rem) {
+	.md\:p-8 {
+		padding: calc(0.25rem * 8);
+	}
+}
+@property --tw-border-style {
+	syntax: "*";
+	inherits: false;
+	initial-value: solid;
+}
+@property --tw-leading {
+	syntax: "*";
+	inherits: false;
+}
+@property --tw-font-weight {
+	syntax: "*";
+	inherits: false;
+}
+@layer properties {
+	@supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or
+		((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
+		*,
+		::before,
+		::after,
+		::backdrop {
+			--tw-border-style: solid;
+			--tw-leading: initial;
+			--tw-font-weight: initial;
+		}
+	}
+}

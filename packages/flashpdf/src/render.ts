@@ -108,7 +108,11 @@ export function createRenderer(loadWasm: LoadWasm) {
 					throw new Error(`${position} must resolve to one element`);
 				writer.repeatStart(position);
 				compile(
-					resolveStyles(repeating, p.stylesheets as readonly string[] | undefined),
+					resolveStyles(
+						repeating,
+						p.stylesheets as readonly string[] | undefined,
+						width - margin * 2,
+					),
 					writer,
 					fonts,
 					undefined,
@@ -117,7 +121,11 @@ export function createRenderer(loadWasm: LoadWasm) {
 				);
 				writer.repeatEnd();
 			}
-			compile(resolveStyles(tree, p.stylesheets as readonly string[] | undefined), writer, fonts);
+			compile(
+				resolveStyles(tree, p.stylesheets as readonly string[] | undefined, width - margin * 2),
+				writer,
+				fonts,
+			);
 			writer.end();
 			consumed = true;
 			try {

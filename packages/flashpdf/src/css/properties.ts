@@ -9,6 +9,13 @@ export type RejectedProperty =
 	| "objectFit"
 	| "borderCollapse"
 	| "borderSpacing";
+type Side = "Top" | "Right" | "Bottom" | "Left";
+/** CSS names with no `Style` key: `border-style`, the logical shorthands, which normalize() expands
+ *  for horizontal left-to-right text, and the per-side border longhands, which it writes. */
+export type CssProperty =
+	| "borderStyle"
+	| `${"margin" | "padding"}${"Inline" | "Block"}`
+	| `border${Side}${"Width" | "Color" | "Style"}`;
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
 type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: string };
 const properties = {
@@ -34,6 +41,23 @@ const properties = {
 	borderRight: { css: "border-right" },
 	borderBottom: { css: "border-bottom" },
 	borderLeft: { css: "border-left" },
+	borderStyle: { css: "border-style" },
+	borderTopWidth: { css: "border-top-width" },
+	borderRightWidth: { css: "border-right-width" },
+	borderBottomWidth: { css: "border-bottom-width" },
+	borderLeftWidth: { css: "border-left-width" },
+	borderTopColor: { css: "border-top-color" },
+	borderRightColor: { css: "border-right-color" },
+	borderBottomColor: { css: "border-bottom-color" },
+	borderLeftColor: { css: "border-left-color" },
+	borderTopStyle: { css: "border-top-style" },
+	borderRightStyle: { css: "border-right-style" },
+	borderBottomStyle: { css: "border-bottom-style" },
+	borderLeftStyle: { css: "border-left-style" },
+	marginInline: { css: "margin-inline" },
+	marginBlock: { css: "margin-block" },
+	paddingInline: { css: "padding-inline" },
+	paddingBlock: { css: "padding-block" },
 	background: {},
 	backgroundColor: { css: "background-color" },
 	gap: {},
@@ -79,7 +103,7 @@ const properties = {
 		css: "border-spacing",
 		unsupported: "cells tile their row; use cell padding",
 	},
-} as const satisfies Record<StyleProperty | RejectedProperty, PropertyDefinition>;
+} as const satisfies Record<StyleProperty | RejectedProperty | CssProperty, PropertyDefinition>;
 
 type PropertyName = keyof typeof properties;
 const propertyEntries = Object.entries(properties) as [PropertyName, PropertyDefinition][];
@@ -88,6 +112,15 @@ const cssNames = new Map<string, PropertyName>(
 );
 // Tailwind's `underline` and `line-through`; text-decoration here takes only line values anyway.
 cssNames.set("text-decoration-line", "textDecoration");
+// Horizontal left-to-right text: inline runs from left to right, block from top to bottom.
+for (const box of ["margin", "padding"] as const)
+	for (const [logical, side] of [
+		["inline-start", "Left"],
+		["inline-end", "Right"],
+		["block-start", "Top"],
+		["block-end", "Bottom"],
+	] as const)
+		cssNames.set(`${box}-${logical}`, `${box}${side}`);
 export const inherited = new Set<string>(
 	propertyEntries.filter(([, definition]) => definition.inherited).map(([name]) => name),
 );
@@ -104,12 +137,12 @@ export const unsupported = Object.assign(
 			.filter(([, definition]) => definition.unsupported)
 			.map(([name, definition]) => [name, definition.unsupported]),
 	),
-) as Partial<Record<keyof Style | RejectedProperty, string>>;
+) as Partial<Record<keyof Style | RejectedProperty | CssProperty, string>>;
 
 export function property(
 	name: string,
 	context = "",
-): keyof Style | RejectedProperty | `--${string}` {
+): keyof Style | RejectedProperty | CssProperty | `--${string}` {
 	if (name.startsWith("--")) return name as `--${string}`;
 	// CSS property names are ASCII case-insensitive; camelCase is the JSX spelling, not CSS.
 	const result = cssNames.get(name.toLowerCase());

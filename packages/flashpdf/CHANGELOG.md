@@ -5,6 +5,7 @@
 ### Changed
 
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
+- A rule with an escaped selector, such as Tailwind's `.bg-black\/50`, now matches and validates instead of being skipped, so `stylesheet()` rejects one whose declarations the subset lacks.
 ### Fixed
 
 - With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.
@@ -23,6 +24,12 @@
 - `inherit` and `initial` on every supported property, and `currentcolor` as the element's own `color`.
 - `text-decoration-line`, with the values `text-decoration` takes, so Tailwind's `underline` and `line-through` work.
 - `rem` for `width` and image `height`, as minified Tailwind emits for `w-32`.
+- `calc()`, `min()`, `max()`, and `clamp()` over lengths and plain numbers, evaluated after `var()` substitution, so Tailwind's `calc(0.25rem * 4)` spacing renders. A percentage result works for `width`, `height`, and `line-height`; a percentage mixed with a length rejects with a reason.
+- Logical `margin-inline`, `margin-block`, `padding-inline`, `padding-block`, and their `-start` and `-end` longhands, mapped for horizontal left-to-right text. Tailwind's `px-*`, `py-*`, `mx-*`, and `my-*` use them.
+- `border-style` with `solid`, `none`, and `hidden`, and per-side `border-*-style`, `border-*-width`, and `border-*-color`. Other styles reject.
+- `@property`: `initial-value` is the default for an unset custom property, and `inherits: false` stops inheritance. Tailwind's `border` utility needs it for `--tw-border-style`.
+- Escaped selectors such as `.w-1\/2` and `.w-\[120px\]` match the unescaped class name.
+- `@media`: `print` and `all` apply, `screen` is skipped, and width conditions compare the page content width. Any other query rejects with a reason where a rule inside it matches an element.
 
 ### Fixed
 

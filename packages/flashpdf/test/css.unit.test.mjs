@@ -8,7 +8,8 @@ import { stylesheet } from "../dist/index.js";
 import { boxStyle, color, style } from "../dist/style.js";
 import { resolveTree } from "../dist/tree.js";
 
-const resolve = async (value, sheets) => resolveStyles(await resolveTree(value), sheets);
+const resolve = async (value, sheets, width) =>
+	resolveStyles(await resolveTree(value), sheets, width);
 
 test("given CSS outside the supported subset, when parsing a stylesheet, then rejects it with its source position", () => {
 	for (const [source, message] of [
@@ -32,7 +33,7 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 
 test("given at-rules and selectors outside the subset, when validating a stylesheet, then skips them instead of failing", () => {
 	const source = `@import "x.css"; @layer a, b; @media print { .a { line-height: 1 } }
-		.a:hover, a[href], .a > *, :root, .md\\:flex, .a + .b, . { line-height: 1; content: "}" }
+		.a:hover, a[href], .a > *, :root, .a::before, .a + .b, . { line-height: 1; content: "}" }
 		html, body button { -webkit-text-size-adjust: 100%; color: notacolor }
 		@layer utilities { .\\[class\\*\\=\\'size-\\'\\] { width: 1rem } }
 		.a { color: red }`;
@@ -269,7 +270,8 @@ test("given calc(), color-mix(), and custom property values, when validating a s
 		".a { --brand: notacolor; margin: calc(0.25rem * 2); background-color: color-mix(in oklab, #000 50%, transparent) }",
 	);
 	const [main] = await resolve(jsx("main", { className: "a", children: "x" }), [css]);
-	assert.throws(() => boxStyle(main.style, 12), /invalid length: calc\(0\.25rem/);
+	assert.deepEqual(boxStyle({ marginTop: main.style.marginTop }, 12)?.margin, [6, 0, 0, 0]);
+	assert.throws(() => boxStyle(main.style, 12), /unsupported color: color-mix\(in oklab/);
 });
 
 test("given oklch() and oklab() colours, when resolving them, then converts to clipped sRGB", () => {

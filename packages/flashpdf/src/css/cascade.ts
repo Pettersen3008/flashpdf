@@ -2,9 +2,10 @@ import type { NormalizedStyle } from "../style.js";
 import { point, style } from "../style.js";
 import type { ElementNode, Node, Tag, TextNode } from "../tree.js";
 import { label, locate } from "../tree.js";
+import { evaluateMath } from "./math.js";
 import { compareSpecificity, inline, matches, parse } from "./parser.js";
 import { inherited } from "./properties.js";
-import type { CascadedStyle, Identity, Rule } from "./types.js";
+import type { CascadedStyle, Identity, Registration, Rule } from "./types.js";
 
 export type StyledElement = Omit<ElementNode, "style" | "children"> & {
 	readonly style: NormalizedStyle;
@@ -104,12 +105,13 @@ function resolveFontSize(result: CascadedStyle, parent: NormalizedStyle) {
 	if (typeof result.fontSize !== "string" || /^\s*(?:inherit|initial)\s*$/i.test(result.fontSize))
 		return;
 	const parentSize = typeof parent.fontSize === "number" ? parent.fontSize : 12;
-	result.fontSize = point(result.fontSize, parentSize, true);
+	result.fontSize = point(evaluateMath("fontSize", result.fontSize, parentSize), parentSize, true);
 }
 
 function visit(
 	value: Node,
 	rules: Rule[],
+	properties: ReadonlyMap<string, Registration>,
 	ancestors: Identity[],
 	parent: CascadedStyle,
 	parentStyle: NormalizedStyle,
@@ -124,8 +126,12 @@ function visit(
 	let resolved: NormalizedStyle;
 	try {
 		for (const [key, item] of Object.entries(parent))
-			if (key.startsWith("--") || inherited.has(key))
+			if (key.startsWith("--") ? properties.get(key)?.inherits !== false : inherited.has(key))
 				(result as Record<string, unknown>)[key] = item;
+		// A registered `initial-value` is the value of a property nothing sets, ahead of any var() fallback.
+		for (const [name, { initial }] of properties)
+			if (initial !== undefined && !(name in result))
+				(result as Record<string, unknown>)[name] = initial;
 		cascade(result, uaStyles[value.tag]);
 		const matched = rules.filter((rule) => matches(rule.selector, identity, ancestors));
 		const own = inline(value.style);
@@ -143,24 +149,44 @@ function visit(
 					(budget ??= { expansions: 0 }),
 				);
 		resolveFontSize(result, parentStyle);
+		const em =
+			typeof result.fontSize === "number"
+				? result.fontSize
+				: typeof parentStyle.fontSize === "number"
+					? parentStyle.fontSize
+					: 12;
+		for (const [key, item] of Object.entries(result))
+			if (typeof item === "string" && !key.startsWith("--"))
+				(result as Record<string, unknown>)[key] = evaluateMath(key, item, em);
 		resolved = style(result, parentStyle);
 	} catch (error) {
 		throw locate(error, where);
 	}
 	ancestors.push(identity);
 	const children = value.children.map((child) =>
-		visit(child, rules, ancestors, result, resolved, chain ? `${self} > ${chain}` : self),
+		visit(
+			child,
+			rules,
+			properties,
+			ancestors,
+			result,
+			resolved,
+			chain ? `${self} > ${chain}` : self,
+		),
 	);
 	ancestors.pop();
 	return { ...value, style: resolved, where, children };
 }
 
+/** `width` is the page content width in points, which `@media` width conditions compare; the default is A4 inside the default 36 pt margins. */
 export function resolveStyles(
 	value: readonly Node[],
 	sheets: readonly string[] = [],
+	width = 523,
 ): readonly StyledNode[] {
-	const rules = sheets.flatMap(parse);
+	const properties = new Map<string, Registration>();
+	const rules = sheets.flatMap((sheet) => parse(sheet, { width, properties }));
 	for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
 	rules.sort((a, b) => compareSpecificity(a.specificity, b.specificity) || a.order - b.order);
-	return value.map((node) => visit(node, rules, [], {}, {}, ""));
+	return value.map((node) => visit(node, rules, properties, [], {}, {}, ""));
 }

@@ -29,7 +29,9 @@ export function boxStyle(s: NormalizedStyle, parent: number): Box | undefined {
 	const border = SIDES.map((side) => {
 		const width = s[`border${side}Width`];
 		const paint = s[`border${side}Color`];
-		return paint === "transparent" || width === undefined ? 0 : point(width, parent);
+		return paint === "transparent" || width === undefined || s[`border${side}Style`] === "none"
+			? 0
+			: point(width, parent);
 	}) as Box["border"];
 	const borderColor = SIDES.map((side) => {
 		const paint = s[`border${side}Color`];

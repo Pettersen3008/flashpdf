@@ -1,9 +1,11 @@
 import type { Style } from "../element.js";
+import { point } from "../style/length.js";
 import { tags } from "../tree.js";
 import { property } from "./properties.js";
 import type {
 	Declarations,
 	Identity,
+	Registration,
 	Rule,
 	SelectorPart,
 	SelectorPiece,
@@ -30,29 +32,87 @@ function declarations(source: string, context = ""): Declarations {
 	return result;
 }
 
-const PART = /^(?:[a-z][\w-]*)?(?:#[\w-]+|\.[\w-]+)*$/i;
-function selectorPart(part: string): SelectorPart {
-	return {
-		// HTML type selectors are case-insensitive; JSX tags are lowercase.
-		tag: part.match(/^[a-z][\w-]*/i)?.[0].toLowerCase() ?? "",
-		ids: part.match(/#[\w-]+/g)?.map((value) => value.slice(1)) ?? [],
-		classes: part.match(/\.[\w-]+/g)?.map((value) => value.slice(1)) ?? [],
-	};
+/** End of the escape at the backslash `index`: up to six hex digits and one whitespace, or one
+ *  other character. -1 for a backslash that ends the source or precedes a newline. */
+function escapeEnd(source: string, index: number) {
+	const next = source[index + 1];
+	if (next === undefined || next === "\n") return -1;
+	let end = index + 2;
+	if (/[\da-f]/i.test(next)) {
+		while (end < index + 7 && /[\da-f]/i.test(source[end] ?? "")) end++;
+		if (whitespace(source[end] ?? "")) end++;
+	}
+	return end;
 }
-/** Returns undefined for selector syntax outside the subset (`*`, pseudo-classes,
- *  attributes, escapes, sibling combinators) so the caller can skip the rule. A type
- *  selector FlashPDF never renders (`html`, `body`, `button`) can never match, so it
+/** End of the name at `start`: letters, digits, `_`, `-`, and escapes. A scanner, not a regex,
+ *  because a hex escape and the name characters after it overlap and would backtrack. */
+function nameEnd(source: string, start: number) {
+	let index = start;
+	while (index < source.length) {
+		if (source[index] === "\\") {
+			const end = escapeEnd(source, index);
+			if (end < 0) break;
+			index = end;
+		} else if (/[\w-]/.test(source[index]!)) index++;
+		else break;
+	}
+	return index;
+}
+/** CSS escapes: `\/` is `/`, `\32 ` is `2`; an invalid code point is U+FFFD. */
+function unescape(name: string) {
+	return name.replace(
+		/\\(?:([\da-f]{1,6})[ \t\n\r\f]?|([^\n]))/gi,
+		(_, hex: string | undefined, other: string | undefined) => {
+			if (other !== undefined) return other;
+			const code = Number.parseInt(hex!, 16);
+			return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+				? "\ufffd"
+				: String.fromCodePoint(code);
+		},
+	);
+}
+function skipSpace(source: string, index: number) {
+	while (whitespace(source[index] ?? "")) index++;
+	return index;
+}
+/** A type, then `#id` and `.class` names, ending at the first other character. Undefined if empty or escaped in the type. */
+function compound(source: string, start: number): [SelectorPart, number] | undefined {
+	const ids: string[] = [];
+	const classes: string[] = [];
+	let index = start;
+	if (/[a-z]/i.test(source[index] ?? "")) index = nameEnd(source, index);
+	// HTML type selectors are case-insensitive; JSX tags are lowercase.
+	const tag = source.slice(start, index).toLowerCase();
+	if (tag.includes("\\")) return undefined;
+	while (source[index] === "#" || source[index] === ".") {
+		const end = nameEnd(source, index + 1);
+		if (end === index + 1) return undefined;
+		(source[index] === "#" ? ids : classes).push(unescape(source.slice(index + 1, end)));
+		index = end;
+	}
+	return index === start ? undefined : [{ tag, ids, classes }, index];
+}
+/** Returns undefined for selector syntax outside the subset (`*`, pseudo-classes and
+ *  pseudo-elements, attributes, sibling combinators) so the caller can skip the rule. A
+ *  type selector FlashPDF never renders (`html`, `body`, `button`) can never match, so it
  *  is skipped too. */
 export function selector(source: string): SelectorPiece[] | undefined {
-	const pieces = normalizeSelector(source).split(/(>| )/).filter(Boolean);
-	if (
-		pieces.length % 2 === 0 ||
-		pieces.some((part, index) => (index % 2 ? part !== " " && part !== ">" : !PART.test(part)))
-	)
-		return undefined;
-	const compiled = pieces.map((part, index) =>
-		index % 2 === 0 ? selectorPart(part) : (part as " " | ">"),
-	);
+	const compiled: SelectorPiece[] = [];
+	let index = 0;
+	while (true) {
+		const found = compound(source, index);
+		if (!found) return undefined;
+		compiled.push(found[0]);
+		const after = skipSpace(source, found[1]);
+		if (after === source.length) break;
+		if (source[after] === ">") {
+			index = skipSpace(source, after + 1);
+			compiled.push(">");
+		} else if (after > found[1]) {
+			index = after;
+			compiled.push(" ");
+		} else return undefined;
+	}
 	return compiled.some(
 		(part) =>
 			typeof part !== "string" && part.tag && !(tags as readonly string[]).includes(part.tag),
@@ -145,23 +205,6 @@ function whitespace(character: string) {
 		character === "\f"
 	);
 }
-function normalizeSelector(selector: string) {
-	let result = "";
-	let pendingSpace = false;
-	for (const character of selector) {
-		if (whitespace(character)) {
-			pendingSpace = result.length > 0;
-		} else if (character === ">") {
-			result = result.trimEnd() + character;
-			pendingSpace = false;
-		} else {
-			if (pendingSpace && !result.endsWith(">")) result += " ";
-			result += character;
-			pendingSpace = false;
-		}
-	}
-	return result;
-}
 /** Index of the quote closing the string that opens at `start`. */
 function quoted(source: string, start: number) {
 	for (let index = start + 1; index < source.length; index++) {
@@ -184,37 +227,130 @@ function closing(source: string, open: number) {
 	}
 	throw invalid(source, open);
 }
-/** At-rules (`@layer`, `@media`, `@property`, `@import`, ...) are skipped whole. */
-function skipAtRule(source: string, start: number) {
+/** Index of the `{` or `;` that ends the at-rule prelude starting at `start`. */
+function preludeEnd(source: string, start: number) {
 	for (let index = start; index < source.length; index++) {
 		const character = source[index];
 		if (character === "\\") index++;
 		else if (character === '"' || character === "'") index = quoted(source, index);
-		else if (character === ";") return index + 1;
-		else if (character === "{") return closing(source, index);
+		else if (character === ";" || character === "{") return index;
 		else if (character === "}") break;
 	}
 	throw invalid(source, start);
 }
-export function parse(source: string): Rule[] {
-	const rules: Rule[] = [];
-	const clean = withoutComments(source);
-	let index = 0;
-	while (index < clean.length) {
+
+const COMPARE = {
+	">=": (width: number, limit: number) => width >= limit,
+	"<=": (width: number, limit: number) => width <= limit,
+	">": (width: number, limit: number) => width > limit,
+	"<": (width: number, limit: number) => width < limit,
+	"=": (width: number, limit: number) => width === limit,
+};
+const WIDTH = /^\(\s*(?:(min|max)-width\s*:|width\s*(?::|(>=|<=|>|<|=)))\s*([^()]+?)\s*\)$/;
+/** Whether an `@media` prelude matches a page `width` points wide: `print` and `all` match, `screen`
+ *  does not, and a width condition compares the width. With no `width`, a width condition counts as
+ *  matching, so `stylesheet()` validates the rules it guards. Throws for anything else. */
+function media(prelude: string, width: number | undefined): boolean {
+	return prelude
+		.toLowerCase()
+		.split(",")
+		.some((alternative) => {
+			const query = alternative.trim();
+			const modifier = /^(not|only)\s+/.exec(query);
+			const matched = query
+				.slice(modifier?.[0].length ?? 0)
+				.split(/\s+and\s+/)
+				.every((term) => {
+					if (term === "all" || term === "print") return true;
+					if (term === "screen") return false;
+					const feature = WIDTH.exec(term);
+					if (!feature)
+						throw new Error("only all, print, screen, and width conditions are supported");
+					const operator =
+						feature[2] ?? (feature[1] === "min" ? ">=" : feature[1] === "max" ? "<=" : "=");
+					const limit = point(feature[3], 12);
+					return width === undefined || COMPARE[operator as keyof typeof COMPARE](width, limit);
+				});
+			return modifier?.[1] === "not" ? !matched : matched;
+		});
+}
+
+function register(name: string, body: string): Registration {
+	const descriptors = new Map<string, string>();
+	for (const item of body.split(";")) {
+		const colon = item.indexOf(":");
+		if (colon > 0)
+			descriptors.set(item.slice(0, colon).trim().toLowerCase(), item.slice(colon + 1).trim());
+	}
+	const inherits = descriptors.get("inherits");
+	if (
+		!/^--[\w-]+$/.test(name) ||
+		!descriptors.has("syntax") ||
+		(inherits !== "true" && inherits !== "false")
+	)
+		throw new Error(`invalid @property ${name}: it needs syntax and inherits`);
+	return { inherits: inherits === "true", initial: descriptors.get("initial-value") || undefined };
+}
+
+export type ParseContext = {
+	/** The page content width in points that `@media` width conditions compare. */
+	width?: number | undefined;
+	/** Collects the stylesheet's `@property` rules by name. */
+	properties?: Map<string, Registration> | undefined;
+};
+const MAX_MEDIA_DEPTH = 16;
+
+/** Parses the rules in `clean[start, stop)`. `@media` blocks recurse and `@property` registers;
+ *  every other at-rule (`@layer`, `@supports`, `@import`, ...) is skipped whole. */
+function parseBlock(
+	clean: string,
+	start: number,
+	stop: number,
+	rules: Rule[],
+	context: ParseContext,
+	depth: number,
+	blocked?: string,
+) {
+	let index = start;
+	while (index < stop) {
 		if (whitespace(clean[index]!)) {
 			index++;
 			continue;
 		}
 		if (clean[index] === "@") {
-			index = skipAtRule(clean, index);
+			const name = /^@([\w-]+)/.exec(clean.slice(index, index + 32))?.[1]?.toLowerCase();
+			const open = preludeEnd(clean, index);
+			const end = clean[open] === ";" ? open + 1 : closing(clean, open);
+			if (clean[open] === "{" && name === "media") {
+				if (depth >= MAX_MEDIA_DEPTH)
+					throw new Error(
+						`@media nests deeper than ${MAX_MEDIA_DEPTH} levels at ${position(clean, index)}`,
+					);
+				const prelude = clean.slice(index + 6, open).trim();
+				let reason = blocked;
+				let applies = true;
+				try {
+					applies = media(prelude, context.width);
+				} catch (error) {
+					reason ??= `unsupported media query "${prelude}" (${(error as Error).message})`;
+				}
+				if (applies) parseBlock(clean, open + 1, end - 1, rules, context, depth + 1, reason);
+			} else if (clean[open] === "{" && name === "property" && depth === 0) {
+				const custom = clean.slice(index + 9, open).trim();
+				const registration = register(custom, clean.slice(open + 1, end - 1));
+				context.properties?.set(custom, registration);
+			}
+			index = end;
 			continue;
 		}
 		const open = clean.indexOf("{", index);
-		if (open <= index || clean.slice(index, open).includes("}")) throw invalid(clean, index);
+		if (open <= index || open >= stop || clean.slice(index, open).includes("}"))
+			throw invalid(clean, index);
 		const end = closing(clean, open);
 		const body = clean.slice(open + 1, end - 1);
 		const at = ` at ${position(clean, index)}`;
-		const selectors = clean.slice(index, open).split(",");
+		// An unescaped comma separates selectors; `\,` belongs to a class name.
+		const selectors = clean.slice(index, open).match(/(?:\\[\s\S]|[^,\\])+/g) ?? [];
 		index = end;
 		let cached: Declarations | undefined;
 		for (const raw of selectors) {
@@ -227,10 +363,22 @@ export function parse(source: string): Rule[] {
 				order: rules.length,
 				specificity: specificity(compiled),
 				where,
-				declarations: () => (cached ??= declarations(body, where)),
+				blocked,
+				declarations:
+					blocked === undefined
+						? () => (cached ??= declarations(body, where))
+						: () => {
+								throw new Error(`${blocked}${where}`);
+							},
 			});
 		}
 	}
+}
+
+export function parse(source: string, context: ParseContext = {}): Rule[] {
+	const rules: Rule[] = [];
+	const clean = withoutComments(source);
+	parseBlock(clean, 0, clean.length, rules, context, 0);
 	return rules;
 }
 
