@@ -116,12 +116,10 @@ pub struct Rgb {
 impl Rgb {
     pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
 
+    /// Three decimals, which still round back to the same 8-bit channel.
     pub(crate) fn normalized(self) -> [f32; 3] {
-        [
-            f32::from(self.r) / 255.0,
-            f32::from(self.g) / 255.0,
-            f32::from(self.b) / 255.0,
-        ]
+        [self.r, self.g, self.b]
+            .map(|channel| (f32::from(channel) * 1000.0 / 255.0).round() / 1000.0)
     }
 }
 

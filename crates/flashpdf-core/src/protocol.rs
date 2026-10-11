@@ -25,7 +25,8 @@ use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun};
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
-/// An open Stack, Box, Row or Table buffers its commands until it closes; this bounds that buffer.
+/// An open Stack, Box, Row or nested Table buffers its commands until it closes; a
+/// top-level Table buffers its header and footer rows, then one body row at a time.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 /// Total bytes of registered fonts per render.
 const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
@@ -69,12 +70,14 @@ pub struct Decoder {
     furniture: Option<(bool, bool)>,
 }
 
+/// A top-level `Table`'s `head` counts its `TableStart` and the header and footer
+/// rows it still buffers; at zero its body rows stream. A nested one has `None`.
 #[derive(Clone, Copy)]
 enum Frame {
     Stack,
     Box,
     Row { columns: usize, cells: usize },
-    Table,
+    Table { head: Option<usize> },
 }
 
 impl Decoder {
@@ -248,10 +251,15 @@ impl Decoder {
                 let footer_rows = cursor.u16()?;
                 let width = cursor.column()?;
                 cursor.done()?;
+                let head = self
+                    .frames
+                    .is_empty()
+                    .then(|| 1 + usize::from(header_rows) + usize::from(footer_rows));
                 self.open(
-                    Frame::Table,
+                    Frame::Table { head },
                     OwnedCommand::TableStart(header_rows, footer_rows, width),
-                )
+                )?;
+                self.stream_table()
             }
             Opcode::TableEnd => {
                 cursor.done()?;
@@ -598,7 +606,24 @@ impl Decoder {
         self.push_command(command)?;
         self.complete_child()?;
         if self.frames.is_empty() {
-            self.flush_block()?;
+            self.flush_block(crate::Renderer::push_owned)?;
+        }
+        self.stream_table()
+    }
+
+    /// Runs after a top-level table's `TableStart` and after each of its children:
+    /// hands the renderer the header and footer rows once, then each body row.
+    fn stream_table(&mut self) -> Result<(), ProtocolError> {
+        let [Frame::Table { head: Some(head) }] = self.frames.as_mut_slice() else {
+            return Ok(());
+        };
+        if *head == 0 {
+            return self.flush_block(crate::Renderer::push_table_row);
+        }
+        *head -= 1;
+        if *head == 0 {
+            self.block.push(OwnedCommand::TableEnd);
+            return self.flush_block(crate::Renderer::push_table_head);
         }
         Ok(())
     }
@@ -615,9 +640,12 @@ impl Decoder {
     fn close(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = self.frames.pop().ok_or(ProtocolError::InvalidNesting)?;
         match (&command, frame) {
+            (OwnedCommand::TableEnd, Frame::Table { head: Some(0) }) => {
+                return Ok(self.ensure_renderer()?.end_table()?);
+            }
             (OwnedCommand::StackEnd, Frame::Stack)
             | (OwnedCommand::BoxEnd, Frame::Box)
-            | (OwnedCommand::TableEnd, Frame::Table) => {}
+            | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
             (OwnedCommand::RowEnd, Frame::Row { columns, cells }) if columns == cells => {}
             (OwnedCommand::RowEnd, Frame::Row { .. }) => {
                 return Err(ProtocolError::RowCellCountMismatch)
@@ -637,7 +665,10 @@ impl Decoder {
         Ok(())
     }
 
-    fn flush_block(&mut self) -> Result<(), ProtocolError> {
+    fn flush_block(
+        &mut self,
+        push: fn(&mut crate::Renderer, &[OwnedCommand]) -> Result<(), crate::RenderError>,
+    ) -> Result<(), ProtocolError> {
         let furniture = self.furniture.take();
         self.body_started |= furniture.is_none();
         let block = std::mem::take(&mut self.block);
@@ -646,7 +677,7 @@ impl Decoder {
         if let Some((footer, first)) = furniture {
             return Ok(renderer.set_furniture(footer, first, block)?);
         }
-        let result = renderer.push_owned(&block).map_err(ProtocolError::from);
+        let result = push(renderer, &block).map_err(ProtocolError::from);
         self.block = block;
         self.block.clear();
         result

@@ -35,7 +35,7 @@ pub enum Command<'a> {
     },
     RowEnd,
     /// The first `header_rows` children repeat at the top of every page the table continues on,
-    /// the last `footer_rows` after the last body row of every page.
+    /// the next `footer_rows` after the last body row of every page. Body rows follow them.
     TableStart {
         header_rows: u16,
         footer_rows: u16,
@@ -319,7 +319,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
 
 /// A table child is a Row, or a Box/Stack group of them, and every Row has the
 /// same cell count; `columns` learns it from the first Row.
-fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
+pub(crate) fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
     match element {
         Element::Row(row) => *columns.get_or_insert(row.cells.len()) == row.cells.len(),
         Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {

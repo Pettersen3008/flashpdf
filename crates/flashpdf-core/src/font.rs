@@ -49,10 +49,9 @@ impl FontBook {
     pub(crate) fn mark_used(&mut self, id: FontId, text: &[u8]) {
         self.used[id.index()] = true;
         if let Font::Embedded(font) = &mut self.fonts[id.index()] {
-            font.used.extend(
-                text.chunks_exact(2)
-                    .map(|pair| u16::from_be_bytes([pair[0], pair[1]])),
-            );
+            for pair in text.chunks_exact(2) {
+                font.mark(u16::from_be_bytes([pair[0], pair[1]]));
+            }
         }
     }
 

@@ -5,7 +5,7 @@ use pdf_writer::{Content, Name, Str};
 use crate::font::font_name;
 use crate::geometry::Point;
 use crate::layout::{LayoutBuffer, Segment};
-use crate::{Pt, Rgb, TextAlign};
+use crate::{FontId, Pt, Rgb, TextAlign};
 
 /// A `/Link` annotation rectangle in page coordinates: `[x1, y1, x2, y2]`.
 pub(crate) struct PageLink {
@@ -18,10 +18,19 @@ pub(crate) enum PageTag {
     Figure(String),
 }
 
+/// The fill colour and font a page's content stream last set, so painting skips
+/// operators that would not change them. Both persist across `BT`/`ET`.
+#[derive(Default)]
+pub(crate) struct PaintState {
+    fill: Option<Rgb>,
+    font: Option<(FontId, Pt)>,
+}
+
 pub(crate) struct PdfPainter<'a> {
     content: &'a mut Content,
     links: &'a mut Vec<PageLink>,
     tags: Option<&'a mut Vec<PageTag>>,
+    state: &'a mut PaintState,
 }
 
 impl<'a> PdfPainter<'a> {
@@ -29,11 +38,13 @@ impl<'a> PdfPainter<'a> {
         content: &'a mut Content,
         links: &'a mut Vec<PageLink>,
         tags: Option<&'a mut Vec<PageTag>>,
+        state: &'a mut PaintState,
     ) -> Self {
         Self {
             content,
             links,
             tags,
+            state,
         }
     }
 
@@ -143,7 +154,7 @@ impl<'a> PdfPainter<'a> {
         }
     }
 
-    /// One text object per line; `Tf` and `rg` change only where the style does.
+    /// One text object per line; `Tf` and `rg` appear only where the page's state changes.
     /// Underlines, strike-throughs, and link rectangles follow per segment.
     fn paint_text(
         &mut self,
@@ -174,18 +185,8 @@ impl<'a> PdfPainter<'a> {
             let baseline = (origin.y - line.origin.y).get();
             let mut previous: Option<&Segment> = None;
             for segment in segments {
-                if previous.is_none_or(|last| last.color != segment.color) {
-                    self.set_fill(segment.color);
-                }
-                if previous
-                    .is_none_or(|last| last.font != segment.font || last.size != segment.size)
-                {
-                    let mut buffer = [0_u8; 4];
-                    self.content.set_font(
-                        Name(font_name(segment.font, &mut buffer)),
-                        segment.size.get(),
-                    );
-                }
+                self.set_fill(segment.color);
+                self.set_font(segment.font, segment.size);
                 match previous {
                     None => self.content.next_line(x.get(), baseline),
                     Some(last) => self.content.next_line((segment.x - last.x).get(), 0.0),
@@ -240,8 +241,20 @@ impl<'a> PdfPainter<'a> {
     }
 
     fn set_fill(&mut self, color: Rgb) {
-        let [r, g, b] = color.normalized();
-        self.content.set_fill_rgb(r, g, b);
+        if self.state.fill != Some(color) {
+            self.state.fill = Some(color);
+            let [r, g, b] = color.normalized();
+            self.content.set_fill_rgb(r, g, b);
+        }
+    }
+
+    fn set_font(&mut self, font: FontId, size: Pt) {
+        if self.state.font != Some((font, size)) {
+            self.state.font = Some((font, size));
+            let mut buffer = [0_u8; 4];
+            self.content
+                .set_font(Name(font_name(font, &mut buffer)), size.get());
+        }
     }
 }
 

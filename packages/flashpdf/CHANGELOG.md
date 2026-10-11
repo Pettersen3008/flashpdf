@@ -18,8 +18,11 @@
 - `@page` rules apply instead of being skipped. Page selectors such as `:first`, margin boxes such as `@top-center`, and properties other than `size` and the margins reject with a reason.
 - The binary protocol is version 8: the header carries four page margins. The JavaScript and WASM halves ship together, so this affects no public API.
 - The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
+- Content streams set `rg` and `Tf` only when the page's fill colour or font changes, not again for every line and table cell, and print colours with three decimals instead of float noise such as `0.13333334`. The 10,000-row invoice's uncompressed content shrinks from 3.25 MB to 1.96 MB and the PDF from 288 KB to 265 KB.
+- The binary protocol is version 9: a `TableStart`'s footer rows follow its header rows, before the body rows. The JavaScript and WASM halves ship together, so this affects no public API.
 ### Fixed
 
+- A table's body rows stream: the engine lays out and places each row as it arrives and keeps only the header, footer, and current row. Before, the whole table buffered, so 20,000 padded rows (30,000 plain) failed with `block exceeds 16 MiB`, and 10,000 rows grew WASM memory to 29 MB. 50,000 rows now render in 16 MB. A table inside a box with padding, a border, a background, or horizontal margins, a flex row, or a `break-inside: avoid` group still buffers whole.
 - With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.
 - Blocks that move whole, such as decorated boxes, rows, and table rows, reject when they do not fit between the header and footer, instead of painting over the footer and into the bottom margin.
 - Headers, footers, and repeated table headers count toward the 16 MiB painted-content cap as they paint, so a long footer on thousands of pages rejects with `DocumentTooLarge` instead of growing to gigabytes.

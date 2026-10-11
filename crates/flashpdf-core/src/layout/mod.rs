@@ -336,8 +336,10 @@ impl<'a> LayoutEngine<'a> {
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
         let area = area.with_width(table_width(table.width, area.width)?);
+        let (head, body) = table.rows.split_at(table.header_rows + table.footer_rows);
+        let (header, footer) = head.split_at(table.header_rows);
         let mut height = Pt::ZERO;
-        for row in &table.rows {
+        for row in header.iter().chain(body).chain(footer) {
             height += self.layout(row, area.translated(Pt::ZERO, height), output)?;
         }
         Ok(height)
