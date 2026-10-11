@@ -8,27 +8,38 @@ import {
 	boxStyle,
 	color,
 	decoration,
+	decorationColor,
 	dimension,
+	face,
 	font,
 	helvetica,
 	lineHeight,
 	point,
+	spacing,
+	transform,
 	type Box,
 	type FontSlots,
 	type LineHeight,
 	type NormalizedStyle,
+	type Transform,
 } from "./style.js";
 import { locate, rowOnly } from "./tree.js";
 
 type TextState = {
 	size: number;
-	align: "left" | "center" | "right";
+	align: "left" | "center" | "right" | "justify";
 	color: [number, number, number];
 	family: FontSlots;
 	bold: boolean;
+	italic: boolean;
 	underline: boolean;
 	lineThrough: boolean;
+	/** Undefined is the text colour. */
+	decorationColor: [number, number, number] | undefined;
 	lineHeight: LineHeight;
+	letterSpacing: number;
+	wordSpacing: number;
+	transform: Transform;
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
 };
@@ -42,14 +53,21 @@ const ROOT: Context = {
 	color: [0, 0, 0],
 	family: helvetica,
 	bold: false,
+	italic: false,
 	underline: false,
 	lineThrough: false,
+	decorationColor: undefined,
 	lineHeight: undefined,
+	letterSpacing: 0,
+	wordSpacing: 0,
+	transform: "none",
 	link: undefined,
 	inRow: false,
 };
 
-const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
+const INLINE_TAGS = new Set<string>(["span", "b", "strong", "em", "i", "cite", "a", "br"]);
+const INLINE_ONLY =
+	"accepts only text, <br>, and <span>, <b>, <strong>, <em>, <i>, <cite>, <a> without box styles";
 
 /** CSS collapsible whitespace only; U+00A0 is content. */
 function blank(text: string) {
@@ -82,7 +100,7 @@ function engineError(error: unknown): unknown {
 }
 
 function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): TextState {
-	const selected = font(style, current.family, current.bold, fonts);
+	const selected = font(style, current.family, current.bold, current.italic, fonts);
 	const decorated = style.textDecoration === undefined ? current : decoration(style.textDecoration);
 	const size =
 		style.fontSize === undefined ? current.size : point(style.fontSize, current.size, true);
@@ -92,18 +110,34 @@ function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): Text
 		color: style.color === undefined ? current.color : color(style.color),
 		family: selected.family,
 		bold: selected.weight,
+		italic: selected.italic,
 		underline: decorated.underline,
 		lineThrough: decorated.lineThrough,
+		decorationColor:
+			style.textDecorationColor === undefined
+				? current.decorationColor
+				: decorationColor(style.textDecorationColor),
 		lineHeight:
 			style.lineHeight === undefined ? current.lineHeight : lineHeight(style.lineHeight, size),
+		letterSpacing:
+			style.letterSpacing === undefined
+				? current.letterSpacing
+				: spacing(style.letterSpacing, size, "letterSpacing"),
+		wordSpacing:
+			style.wordSpacing === undefined
+				? current.wordSpacing
+				: spacing(style.wordSpacing, size, "wordSpacing"),
+		transform:
+			style.textTransform === undefined ? current.transform : transform(style.textTransform),
 		link: current.link,
 	};
 }
 
 function run(state: TextState, text: string, hardBreak = false): Run {
 	const height = state.lineHeight;
+	const decorated = state.underline || state.lineThrough;
 	return {
-		font: state.bold ? state.family.bold! : state.family.regular,
+		...face(state.family, state.bold, state.italic),
 		size: state.size,
 		lineHeight: height === undefined ? 0 : "pt" in height ? height.pt : height.factor * state.size,
 		color: state.color,
@@ -111,7 +145,11 @@ function run(state: TextState, text: string, hardBreak = false): Run {
 		break: hardBreak,
 		underline: state.underline,
 		lineThrough: state.lineThrough,
+		decorationColor: decorated ? state.decorationColor : undefined,
 		link: state.link,
+		letterSpacing: state.letterSpacing,
+		wordSpacing: state.wordSpacing,
+		transform: state.transform,
 	};
 }
 
@@ -126,7 +164,12 @@ function push(runs: Run[], next: Run) {
 		last.lineHeight === next.lineHeight &&
 		last.underline === next.underline &&
 		last.lineThrough === next.lineThrough &&
+		String(last.decorationColor) === String(next.decorationColor) &&
 		last.link === next.link &&
+		last.oblique === next.oblique &&
+		last.letterSpacing === next.letterSpacing &&
+		last.wordSpacing === next.wordSpacing &&
+		last.transform === next.transform &&
 		last.color.every((channel, index) => channel === next.color[index])
 	) {
 		last.text += next.text;
@@ -178,7 +221,30 @@ function writeParagraph(
 		runs.some(({ text }) => text.includes(PAGE_NUMBER) || text.includes(TOTAL_PAGES))
 	)
 		throw new Error("page tokens are only valid in a header or footer");
-	writer.paragraph(runs, state.align);
+	// A word may span runs, so each run sees the text before it.
+	let before = "";
+	const shown = runs.map((item) => {
+		const text = transformText(item.text, item.transform, before);
+		before = item.break ? "" : item.text;
+		return { ...item, text };
+	});
+	writer.paragraph(shown, state.align);
+}
+
+/** A letter starts a word unless a letter, digit, or mark precedes it, or an apostrophe,
+ *  period, colon, or middle dot inside a word, as in `don't` (Unicode word boundaries). */
+const WORD_START = /(?<![\p{L}\p{N}\p{M}\p{Pc}]|[\p{L}\p{N}]['’.:·])\p{L}/gu;
+
+/** Locale-independent, so output does not depend on the runtime's default language. */
+function transformText(text: string, value: Transform, before: string): string {
+	if (value === "uppercase") return text.toUpperCase();
+	if (value === "lowercase") return text.toLowerCase();
+	if (value === "none") return text;
+	return (before + text)
+		.replace(WORD_START, (letter: string, offset: number) =>
+			offset < before.length ? letter : letter.toUpperCase(),
+		)
+		.slice(before.length);
 }
 
 function pageBreak(
@@ -332,6 +398,9 @@ function element(
 		case "span":
 		case "b":
 		case "strong":
+		case "em":
+		case "i":
+		case "cite":
 		case "p":
 		case "h1":
 		case "h2":
@@ -345,10 +414,7 @@ function element(
 			const inner = { ...next, inRow: false, link: node.href ?? next.link };
 			const runs = collect(node.children, inner, fonts);
 			// A link around layout nodes (an image, a card) flows them as a block; every run inside links.
-			if (runs === undefined && node.tag !== "a")
-				throw new Error(
-					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles`,
-				);
+			if (runs === undefined && node.tag !== "a") throw new Error(`<${node.tag}> ${INLINE_ONLY}`);
 			box(writer, boxStyle(style, next.size), () =>
 				runs === undefined
 					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)

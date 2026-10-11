@@ -15,7 +15,21 @@ type Render = (props: Record<string, unknown>) => unknown;
 type Component = { render: Render; name: string };
 
 export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
-export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
+export const textTags = [
+	"p",
+	"span",
+	"b",
+	"strong",
+	"em",
+	"i",
+	"cite",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+] as const;
 export const tableTags = ["table", "thead", "tbody", "tfoot", "tr", "th", "td"] as const;
 export const tags = [...blockTags, ...textTags, ...tableTags, "a", "img", "hr", "br"] as const;
 export type BlockTag = (typeof blockTags)[number];
@@ -38,8 +52,6 @@ export type ElementNode = {
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
-	em: "italic faces are not supported yet; use <span>",
-	i: "italic faces are not supported yet; use <span>",
 	colgroup: "column widths come from the first row's <th>/<td> width or flex",
 	col: "column widths come from the first row's <th>/<td> width or flex",
 	caption: "captions are not supported; use a <p> before the table",

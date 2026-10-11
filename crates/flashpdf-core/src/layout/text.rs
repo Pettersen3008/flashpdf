@@ -3,9 +3,9 @@ use std::ops::Range;
 use crate::document::Paragraph;
 use crate::font::{Font, FontBook};
 use crate::geometry::{LayoutArea, Point};
-use crate::layout::output::{LayoutBuffer, PositionedLine, Segment};
+use crate::layout::output::{Gap, LayoutBuffer, PositionedLine, Segment};
 use crate::layout::LayoutError;
-use crate::{FontId, Pt, RenderError, Rgb, TextAlign};
+use crate::{FontId, Pt, RenderError, Rgb, TextAlign, Typography};
 
 struct RunMetrics<'a> {
     font: &'a Font,
@@ -15,6 +15,9 @@ struct RunMetrics<'a> {
     ascent: Pt,
     /// The run's line box below the baseline.
     depth: Pt,
+    typography: Typography,
+    /// Spaces carry a `Gap` for word spacing or justification.
+    gapped: bool,
 }
 
 impl RunMetrics<'_> {
@@ -22,14 +25,27 @@ impl RunMetrics<'_> {
         Pt(f32::from(advance) * self.size.get() / 1000.0)
     }
 
-    /// Appends the character's show-string code and returns its advance.
+    /// Appends the character's show-string code and returns its advance with letter spacing.
     fn encode(&self, character: char, out: &mut Vec<u8>) -> Result<Pt, LayoutError> {
         let advance = self.font.encode_into(character, out).map_err(text_error)?;
-        Ok(self.scaled(advance))
+        Ok(self.scaled(advance) + Pt(self.typography.letter_spacing))
     }
 
     fn advance(&self, code: &[u8]) -> Pt {
-        self.scaled(self.font.advance(code))
+        self.scaled(self.font.advance(code)) + Pt(self.typography.letter_spacing)
+    }
+
+    /// The word-spacing gap after a space that ends at byte `at`, with its width.
+    fn word_gap(&self, at: usize) -> Option<(Gap, Pt)> {
+        let spacing = self.typography.word_spacing;
+        self.gapped.then(|| {
+            let gap = Gap {
+                at: at as u32,
+                amount: spacing * 1000.0 / self.size.get(),
+                stretch: true,
+            };
+            (gap, Pt(spacing))
+        })
     }
 }
 
@@ -59,11 +75,14 @@ pub(crate) struct ParagraphLayouter<'a> {
     area: LayoutArea,
     height: Pt,
     segment_start: usize,
+    gap_start: usize,
     used: Pt,
     ascent: Pt,
     depth: Pt,
     has_word: bool,
     pieces: Vec<Piece>,
+    /// Gaps inside the pending word, with their widths.
+    gaps: Vec<(Gap, Pt)>,
     space: Option<Space>,
 }
 
@@ -98,6 +117,8 @@ impl<'a> ParagraphLayouter<'a> {
                 color: run.color,
                 ascent: Pt(ascent),
                 depth: Pt(line_height - ascent),
+                typography: run.typography,
+                gapped: run.typography.word_spacing != 0.0 || paragraph.align == TextAlign::Justify,
             });
         }
         let mut state = Self {
@@ -106,11 +127,13 @@ impl<'a> ParagraphLayouter<'a> {
             area,
             height: Pt::ZERO,
             segment_start: output.segments.len(),
+            gap_start: output.gaps.len(),
             used: Pt::ZERO,
             ascent: Pt::ZERO,
             depth: Pt::ZERO,
             has_word: false,
             pieces: Vec::new(),
+            gaps: Vec::new(),
             space: None,
         };
         let mut rest = paragraph.text;
@@ -130,7 +153,7 @@ impl<'a> ParagraphLayouter<'a> {
         }
         state.word(output)?;
         if state.has_word {
-            state.push_line(output);
+            state.push_line(output, false);
         }
         Ok(state.height)
     }
@@ -148,11 +171,12 @@ impl<'a> ParagraphLayouter<'a> {
                 self.word(output)?;
                 if self.has_word && self.space.is_none() {
                     let start = output.text.len();
-                    let width = self.runs[index].encode(' ', &mut output.text)?;
+                    let metrics = &self.runs[index];
+                    let width = metrics.encode(' ', &mut output.text)?;
                     self.space = Some(Space {
                         run: index,
                         text: start..output.text.len(),
-                        width,
+                        width: width + Pt(metrics.typography.word_spacing),
                     });
                 }
                 continue;
@@ -163,7 +187,14 @@ impl<'a> ParagraphLayouter<'a> {
                 self.word(output)?;
             }
             let start = output.text.len();
-            let width = self.runs[index].encode(character, &mut output.text)?;
+            let mut width = self.runs[index].encode(character, &mut output.text)?;
+            // CSS word spacing widens a no-break space too.
+            if character == '\u{a0}' {
+                if let Some((gap, extra)) = self.runs[index].word_gap(output.text.len()) {
+                    self.gaps.push((gap, extra));
+                    width += extra;
+                }
+            }
             let slot = piece.get_or_insert(Piece {
                 run: index,
                 start,
@@ -188,14 +219,16 @@ impl<'a> ParagraphLayouter<'a> {
             return Ok(());
         }
         let pieces = std::mem::take(&mut self.pieces);
+        let mut pending = std::mem::take(&mut self.gaps);
         let width = pieces
             .iter()
             .fold(Pt::ZERO, |total, piece| total + piece.width);
         let space = self.space.take();
         if width > self.area.width {
             if self.has_word {
-                self.push_line(output);
+                self.push_line(output, true);
             }
+            let mut gaps = pending.drain(..).peekable();
             for piece in &pieces {
                 let stride = self.runs[piece.run].font.stride();
                 let mut position = piece.start;
@@ -205,8 +238,14 @@ impl<'a> ParagraphLayouter<'a> {
                     if glyph > self.area.width {
                         return Err(LayoutError::TextTooWide);
                     }
-                    if self.used + glyph > self.area.width {
-                        self.push_line(output);
+                    // A gap before this glyph applies only when the line goes on.
+                    let gap = gaps.next_if(|(gap, _)| gap.at as usize == position);
+                    let lead = gap.map_or(Pt::ZERO, |(_, width)| width);
+                    if self.used + lead + glyph > self.area.width {
+                        self.push_line(output, true);
+                    } else if let Some((gap, width)) = gap {
+                        output.gaps.push(gap);
+                        self.used += width;
                     }
                     self.append(piece.run, code, glyph, output);
                     position += stride;
@@ -215,16 +254,22 @@ impl<'a> ParagraphLayouter<'a> {
         } else {
             let gap = space.as_ref().map_or(Pt::ZERO, |space| space.width);
             if self.has_word && self.used + gap + width > self.area.width {
-                self.push_line(output);
+                self.push_line(output, true);
             } else if let Some(space) = space {
+                if let Some((gap, _)) = self.runs[space.run].word_gap(space.text.end) {
+                    output.gaps.push(gap);
+                }
                 self.append(space.run, space.text, space.width, output);
             }
             for piece in &pieces {
                 self.append(piece.run, piece.start..piece.end, piece.width, output);
             }
+            output.gaps.extend(pending.drain(..).map(|(gap, _)| gap));
         }
         self.pieces = pieces;
         self.pieces.clear();
+        self.gaps = pending;
+        self.gaps.clear();
         self.has_word = true;
         Ok(())
     }
@@ -239,12 +284,19 @@ impl<'a> ParagraphLayouter<'a> {
         if !on_line || metrics.depth > self.depth {
             self.depth = metrics.depth;
         }
+        let Typography {
+            letter_spacing,
+            oblique,
+            ..
+        } = metrics.typography;
         match output.segments.last_mut() {
             Some(last)
                 if on_line
                     && last.font == metrics.id
                     && last.size == metrics.size
-                    && last.color == metrics.color =>
+                    && last.color == metrics.color
+                    && last.letter_spacing == letter_spacing
+                    && last.oblique == oblique =>
             {
                 last.text.end = text.end;
             }
@@ -254,6 +306,8 @@ impl<'a> ParagraphLayouter<'a> {
                 font: metrics.id,
                 size: metrics.size,
                 color: metrics.color,
+                letter_spacing,
+                oblique,
             }),
         }
         self.used += width;
@@ -264,10 +318,41 @@ impl<'a> ParagraphLayouter<'a> {
             self.ascent = self.runs[run].ascent;
             self.depth = self.runs[run].depth;
         }
-        self.push_line(output);
+        self.push_line(output, false);
     }
 
-    fn push_line(&mut self, output: &mut LayoutBuffer) {
+    /// Spreads the line's slack over its spaces and moves later segments right.
+    fn justify(&mut self, output: &mut LayoutBuffer) {
+        let segments = &mut output.segments[self.segment_start..];
+        let Some(end) = segments.last().map(|segment| segment.text.end) else {
+            return;
+        };
+        // A no-break space that ends the line has nothing after it to push right.
+        let inside = |gap: &Gap| gap.stretch && (gap.at as usize) < end;
+        let gaps = &mut output.gaps[self.gap_start..];
+        let count = gaps.iter().filter(|gap| inside(gap)).count();
+        let slack = (self.area.width - self.used).get();
+        if count == 0 || slack <= 0.0 {
+            return;
+        }
+        let extra = slack / count as f32;
+        let mut gaps = gaps.iter_mut().filter(|gap| inside(gap)).peekable();
+        let mut shift = 0.0;
+        for segment in segments {
+            segment.x += Pt(shift);
+            while let Some(gap) = gaps.next_if(|gap| gap.at as usize <= segment.text.end) {
+                gap.amount += extra * 1000.0 / segment.size.get();
+                shift += extra;
+            }
+        }
+        self.used = self.area.width;
+    }
+
+    /// A `wrapped` line is justified; the last line and one ending in a hard break are not.
+    fn push_line(&mut self, output: &mut LayoutBuffer, wrapped: bool) {
+        if wrapped && self.align == TextAlign::Justify {
+            self.justify(output);
+        }
         let top = self.area.origin.y + self.height;
         let height = self.ascent + self.depth;
         output.lines.push(PositionedLine {
@@ -284,6 +369,7 @@ impl<'a> ParagraphLayouter<'a> {
         });
         self.height += height;
         self.segment_start = output.segments.len();
+        self.gap_start = output.gaps.len();
         self.used = Pt::ZERO;
         self.ascent = Pt::ZERO;
         self.depth = Pt::ZERO;

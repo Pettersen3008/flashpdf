@@ -9,7 +9,7 @@ import { helvetica } from "../dist/style.js";
 import { resolveTree } from "../dist/tree.js";
 
 /** Records protocol calls instead of encoding them. */
-async function compiled(element) {
+async function compiled(element, fonts = new Map([["Helvetica", helvetica]])) {
 	const calls = [];
 	const writer = new Proxy(
 		{},
@@ -20,7 +20,7 @@ async function compiled(element) {
 					calls.push([method, ...args]),
 		},
 	);
-	compile(resolveStyles(await resolveTree(element)), writer, new Map([["Helvetica", helvetica]]));
+	compile(resolveStyles(await resolveTree(element)), writer, fonts);
 	return calls;
 }
 
@@ -33,7 +33,12 @@ const run = (font, text, extra = {}) => ({
 	break: false,
 	underline: false,
 	lineThrough: false,
+	decorationColor: undefined,
 	link: undefined,
+	oblique: false,
+	letterSpacing: 0,
+	wordSpacing: 0,
+	transform: "none",
 	...extra,
 });
 
@@ -76,7 +81,7 @@ test("given a padded span in a block, when compiling, then it stays a box beside
 test("given a padded span inside a paragraph, when compiling, then rejects with the element path", async () => {
 	await assert.rejects(
 		compiled(jsx("p", { children: jsx("span", { style: { padding: 2 }, children: "x" }) })),
-		/<p> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles on <p>/,
+		/<p> accepts only text, <br>, and <span>, <b>, <strong>, <em>, <i>, <cite>, <a> without box styles on <p>/,
 	);
 });
 
@@ -264,6 +269,86 @@ test("given a unitless line-height on a block, when a child changes font size, t
 		[
 			"paragraph",
 			[run(0, "a", { lineHeight: 18 }), run(0, "b", { size: 20, lineHeight: 30 })],
+			"left",
+		],
+	]);
+});
+
+test("given em, i, and cite, when compiling, then they default to the Helvetica-Oblique slot", async () => {
+	const calls = await compiled(
+		jsxs("p", {
+			children: [
+				jsx("em", { children: "a" }),
+				jsx("i", { children: "b" }),
+				jsx("cite", { children: "c" }),
+			],
+		}),
+	);
+	assert.deepEqual(calls, [["paragraph", [run(2, "abc")], "left"]]);
+});
+
+test("given bold italic text in a family with only regular and bold faces, when compiling, then the run slants the bold face", async () => {
+	const fonts = new Map([
+		["Helvetica", helvetica],
+		["Abel", { regular: 4, bold: 5 }],
+	]);
+	const calls = await compiled(
+		jsx("p", {
+			style: { fontFamily: "Abel", fontStyle: "italic", fontWeight: "bold" },
+			children: "x",
+		}),
+		fonts,
+	);
+	assert.deepEqual(calls, [["paragraph", [run(5, "x", { oblique: true })], "left"]]);
+});
+
+test("given capitalize over a word split across runs, when compiling, then only word starts are uppercased", async () => {
+	const calls = await compiled(
+		jsxs("p", {
+			style: { textTransform: "capitalize" },
+			children: ["don't stop hel", jsx("b", { children: "lo" }), " e-mail"],
+		}),
+	);
+	const capitalize = { transform: "capitalize" };
+	assert.deepEqual(calls, [
+		[
+			"paragraph",
+			[
+				run(0, "Don't Stop Hel", capitalize),
+				run(1, "lo", capitalize),
+				run(0, " E-Mail", capitalize),
+			],
+			"left",
+		],
+	]);
+});
+
+test("given letter-spacing in em on a parent, when a child changes font size, then the child inherits the parent's points", async () => {
+	const calls = await compiled(
+		jsx("p", {
+			style: { letterSpacing: "0.5em", wordSpacing: "-1pt" },
+			children: jsx("span", { style: { fontSize: 24 }, children: "x" }),
+		}),
+	);
+	assert.deepEqual(calls, [
+		["paragraph", [run(0, "x", { size: 24, letterSpacing: 6, wordSpacing: -1 })], "left"],
+	]);
+});
+
+test("given a text-decoration shorthand without a colour inside one with a colour, when compiling, then it resets the decoration colour", async () => {
+	const calls = await compiled(
+		jsxs("p", {
+			style: { textDecoration: "underline red" },
+			children: ["a", jsx("span", { style: { textDecoration: "line-through" }, children: "b" })],
+		}),
+	);
+	assert.deepEqual(calls, [
+		[
+			"paragraph",
+			[
+				run(0, "a", { underline: true, decorationColor: [255, 0, 0] }),
+				run(0, "b", { lineThrough: true }),
+			],
 			"left",
 		],
 	]);

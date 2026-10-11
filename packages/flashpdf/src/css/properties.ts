@@ -4,7 +4,6 @@ export type RejectedProperty =
 	| "minWidth"
 	| "maxWidth"
 	| "borderRadius"
-	| "letterSpacing"
 	| "verticalAlign"
 	| "objectFit"
 	| "borderCollapse"
@@ -40,12 +39,18 @@ const properties = {
 	fontSize: { css: "font-size", inherited: true },
 	fontFamily: { css: "font-family", inherited: true },
 	fontWeight: { css: "font-weight", inherited: true },
+	fontStyle: { css: "font-style", inherited: true },
 	textAlign: { css: "text-align", inherited: true },
+	textTransform: { css: "text-transform", inherited: true },
 	// CSS propagates decoration to descendants rather than inheriting it; the effect is the same here.
 	textDecoration: { css: "text-decoration", inherited: true },
+	textDecorationColor: { css: "text-decoration-color", inherited: true },
 	color: { inherited: true },
 	// Inherits through the compiler's text state: a factor stays a factor, a length stays a length.
 	lineHeight: { css: "line-height" },
+	// Inherit through the text state too, so `em` resolves once, against the declaring element.
+	letterSpacing: { css: "letter-spacing" },
+	wordSpacing: { css: "word-spacing" },
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
@@ -58,10 +63,6 @@ const properties = {
 		unsupported: "only width on a flex row child is implemented",
 	},
 	borderRadius: { css: "border-radius", unsupported: "box corners are square" },
-	letterSpacing: {
-		css: "letter-spacing",
-		unsupported: "text shaping is not implemented",
-	},
 	objectFit: {
 		css: "object-fit",
 		unsupported: "size an image with width and height; it always scales to fill them",

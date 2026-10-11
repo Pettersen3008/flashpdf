@@ -1,5 +1,5 @@
 import { asError, Binary } from "./binary.js";
-import type { Box } from "./style.js";
+import type { Box, Transform } from "./style.js";
 
 export type Column = { kind: 0 | 1 | 2; value: number };
 /** An image dimension: 1 is points, 2 is percent of the container width. */
@@ -15,8 +15,21 @@ export type Run = {
 	break: boolean;
 	underline: boolean;
 	lineThrough: boolean;
+	/** Undefined is the text colour. */
+	decorationColor: readonly [number, number, number] | undefined;
 	link: string | undefined;
+	/** Slant the upright face: the family has no italic face for this weight. */
+	oblique: boolean;
+	letterSpacing: number;
+	wordSpacing: number;
+	/** Applied by the compiler before writing; not part of the protocol. */
+	transform: Transform;
 };
+
+/** Run flag bits 5 to 7: slant, then an f32 letter and word spacing follow. */
+function typography(run: Run): number {
+	return (run.oblique ? 32 : 0) | (run.letterSpacing ? 64 : 0) | (run.wordSpacing ? 128 : 0);
+}
 
 const opcode = {
 	spacer: 2,
@@ -81,7 +94,7 @@ export class ProtocolWriter {
 	}
 
 	paragraph(runs: readonly Run[], align: string) {
-		const alignment = align === "center" ? 1 : align === "right" ? 2 : 0;
+		const alignment = ["left", "center", "right", "justify"].indexOf(align);
 		if (this.repeating) {
 			const [only] = runs;
 			if (this.repeatWritten || runs.length !== 1 || only!.break)
@@ -94,6 +107,8 @@ export class ProtocolWriter {
 				this.binary.u8(alignment);
 				for (const channel of only!.color) this.binary.u8(channel);
 				this.binary.u8(only!.font);
+				this.binary.u16(typography(only!));
+				this.spacing(only!);
 				this.binary.text(only!.text);
 			});
 			return;
@@ -113,16 +128,20 @@ export class ProtocolWriter {
 					this.binary.f32(run.size);
 					for (const channel of run.color) this.binary.u8(channel);
 					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-					// 4 an f32 line height follows.
-					this.binary.u8(
+					// 4 an f32 line height follows, 5 to 7 typography, 8 a decoration colour follows.
+					this.binary.u16(
 						(run.break ? 1 : 0) |
 							(run.underline ? 2 : 0) |
 							(run.lineThrough ? 4 : 0) |
 							(run.link === undefined ? 0 : 8) |
-							(run.lineHeight ? 16 : 0),
+							(run.lineHeight ? 16 : 0) |
+							typography(run) |
+							(run.decorationColor ? 256 : 0),
 					);
 					if (run.link !== undefined) this.binary.u16(links.indexOf(run.link));
 					if (run.lineHeight) this.binary.f32(run.lineHeight);
+					this.spacing(run);
+					for (const channel of run.decorationColor ?? []) this.binary.u8(channel);
 					this.binary.text(run.text);
 				}
 			});
@@ -253,6 +272,11 @@ export class ProtocolWriter {
 
 	end() {
 		this.binary.record(opcode.end);
+	}
+
+	private spacing(run: Run) {
+		if (run.letterSpacing) this.binary.f32(run.letterSpacing);
+		if (run.wordSpacing) this.binary.f32(run.wordSpacing);
 	}
 
 	private body() {

@@ -2,7 +2,7 @@ import { point } from "./length.js";
 
 const BORDER_STYLE = /^(?:none|hidden|dotted|dashed|solid|double|groove|ridge|inset|outset)$/;
 // Splits on whitespace outside parentheses so `rgb(0, 0, 0)` stays one token.
-const TOKEN = /[^\s()]+(?:\([^()]*\))?/g;
+export const TOKEN = /[^\s()]+(?:\([^()]*\))?/g;
 
 /** Only the width is matched by shape; whatever is left over is handed to
  *  `color`, so an unpaintable colour reports itself instead of being ignored. */

@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use crate::font::Stroke;
 use crate::geometry::Point;
 use crate::{BoxStyle, FontId, Pt, Rgb, TextAlign};
 
@@ -21,6 +22,20 @@ pub(crate) struct Segment {
     pub(crate) font: FontId,
     pub(crate) size: Pt,
     pub(crate) color: Rgb,
+    /// `Tc`, in points.
+    pub(crate) letter_spacing: f32,
+    pub(crate) oblique: bool,
+}
+
+/// Extra advance before the code starting at byte `at` of `LayoutBuffer::text`,
+/// in 1/1000 em of its segment, as a `TJ` adjustment with the sign flipped.
+/// Inside a segment it is painted; at a segment start it is already in `x`.
+#[derive(Clone, Copy)]
+pub(crate) struct Gap {
+    pub(crate) at: u32,
+    pub(crate) amount: f32,
+    /// After a space or no-break space, so `text-align: justify` widens it.
+    pub(crate) stretch: bool,
 }
 
 pub(crate) struct PositionedBox {
@@ -31,10 +46,11 @@ pub(crate) struct PositionedBox {
 }
 
 /// Paint attributes of the segment at the same index. The text layouter owns
-/// `Segment`, so these ride beside it instead of inside it.
+/// `Segment`, so these ride beside it instead of inside it. Strokes are in 1/1000 em.
 pub(crate) struct Decoration {
-    pub(crate) underline: bool,
-    pub(crate) line_through: bool,
+    pub(crate) underline: Option<Stroke>,
+    pub(crate) line_through: Option<Stroke>,
+    pub(crate) color: Rgb,
     /// Index into `LayoutBuffer::links`.
     pub(crate) link: Option<usize>,
     /// Font ascent and (positive) descent at the segment size, for the link rectangle.
@@ -59,6 +75,8 @@ pub(crate) struct LayoutBuffer {
     pub(crate) segments: Vec<Segment>,
     pub(crate) decorations: Vec<Decoration>,
     pub(crate) text: Vec<u8>,
+    /// Sorted by `at`.
+    pub(crate) gaps: Vec<Gap>,
     pub(crate) boxes: Vec<PositionedBox>,
     pub(crate) images: Vec<PositionedImage>,
     pub(crate) links: Vec<String>,
@@ -70,6 +88,7 @@ impl LayoutBuffer {
         self.segments.clear();
         self.decorations.clear();
         self.text.clear();
+        self.gaps.clear();
         self.boxes.clear();
         self.images.clear();
         self.links.clear();

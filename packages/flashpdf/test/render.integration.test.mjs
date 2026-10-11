@@ -704,3 +704,26 @@ test("given two stylesheets of equal specificity, when rendering, then the later
 	assert.match(string(pdf), /0 0 1 rg/);
 	assert.doesNotMatch(string(pdf), /1 0 0 rg/);
 });
+
+test("given em text in a family with and without an italic face, when rendered, then it uses that face or slants the upright one", async () => {
+	const doc = jsx("p", { style: { fontFamily: "Abel" }, children: jsx("em", { children: "x" }) });
+	const slanted = string(await render(doc, { fonts: [{ family: "Abel", regular: font }] }));
+	assert.match(slanted, /\n1 0 0\.25 1 [\d.]+ [\d.]+ Tm\n/);
+	const italic = { fonts: [{ family: "Abel", regular: font, italic: font }] };
+	const faced = string(await render(doc, italic));
+	assert.doesNotMatch(faced, / Tm\n/);
+	assert.match(faced, /\/F6 12 Tf/);
+});
+
+test("given letter-spaced, word-spaced, justified text, when rendered, then the PDF sets Tc and widens spaces in TJ", async () => {
+	const pdf = string(
+		await render(
+			jsx("p", {
+				style: { textAlign: "justify", letterSpacing: "1pt", wordSpacing: "2pt" },
+				children: "word ".repeat(60),
+			}),
+		),
+	);
+	assert.match(pdf, /\n1 Tc\n/);
+	assert.match(pdf, /\(word \) -[\d.]+ \(word \)/);
+});

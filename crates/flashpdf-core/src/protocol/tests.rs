@@ -33,7 +33,7 @@ fn columns(values: &[(u8, f32)]) -> Vec<u8> {
 }
 
 /// `(font, size, colour, flags, text)`.
-type Run<'a> = (u8, f32, [u8; 3], u8, &'a [u8]);
+type Run<'a> = (u8, f32, [u8; 3], u16, &'a [u8]);
 
 fn paragraph(align: u8, runs: &[Run<'_>]) -> Vec<u8> {
     let runs: Vec<LinkedRun<'_>> = runs
@@ -44,7 +44,7 @@ fn paragraph(align: u8, runs: &[Run<'_>]) -> Vec<u8> {
 }
 
 /// `(font, size, colour, flags, link index, text)`; a link index sets flag bit 3.
-type LinkedRun<'a> = (u8, f32, [u8; 3], u8, Option<u16>, &'a [u8]);
+type LinkedRun<'a> = (u8, f32, [u8; 3], u16, Option<u16>, &'a [u8]);
 
 /// `links` is the URI table the runs' link indices point into.
 fn linked_paragraph(align: u8, links: &[&[u8]], runs: &[LinkedRun<'_>]) -> Vec<u8> {
@@ -58,7 +58,7 @@ fn linked_paragraph(align: u8, links: &[&[u8]], runs: &[LinkedRun<'_>]) -> Vec<u
         payload.push(*font);
         payload.extend(size.to_le_bytes());
         payload.extend(color);
-        payload.push(*flags | if link.is_some() { 8 } else { 0 });
+        payload.extend((*flags | if link.is_some() { 8 } else { 0 }).to_le_bytes());
         if let Some(link) = link {
             payload.extend(link.to_le_bytes());
         }
@@ -142,7 +142,7 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
 fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
     let mut bytes = header(VERSION, 595.0, 842.0, 36.0);
     let mut footer = 10.0_f32.to_le_bytes().to_vec();
-    footer.extend([0, 0, 0, 0, 0]);
+    footer.extend([0, 0, 0, 0, 0, 0, 0]);
     footer.extend(text("Page \u{1e} of \u{1f}".as_bytes()));
     bytes.extend(record(8, &footer));
     bytes.extend(plain(b"First"));
@@ -190,10 +190,10 @@ fn push_error(bytes: &[u8]) -> String {
 fn given_embedded_regular_and_bold_fonts_when_decoding_then_pdf_embeds_both() {
     let font_bytes = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
     let mut decoder = Decoder::default();
-    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 2);
-    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 3);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 4);
+    assert_eq!(decoder.add_font(font_bytes.to_vec()).unwrap(), 5);
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
-    for slot in [2, 3] {
+    for slot in [4, 5] {
         bytes.extend(paragraph(0, &[(slot, 10.0, [0, 0, 0], 0, b"Font")]));
     }
     bytes.extend(record(255, &[]));
@@ -313,22 +313,22 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     let mut bad_length = header(VERSION, 120.0, 60.0, 10.0);
     let mut payload = vec![0, 0, 0, 1, 0, 0];
     payload.extend(10.0_f32.to_le_bytes());
-    payload.extend([0, 0, 0, 0]);
+    payload.extend([0, 0, 0, 0, 0]);
     payload.extend(4_u32.to_le_bytes());
     payload.push(b'x');
     bad_length.extend(record(9, &payload));
     assert_eq!(push_error(&bad_length), "truncated record");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
-    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 32, b"x")]));
+    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 512, b"x")]));
     assert_eq!(push_error(&bad_flags), "invalid run flags");
 
     let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);
-    bad_align.extend(paragraph(3, &[(0, 10.0, [0, 0, 0], 0, b"x")]));
+    bad_align.extend(paragraph(4, &[(0, 10.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&bad_align), "invalid text alignment");
 
     let mut unknown_font = header(VERSION, 120.0, 60.0, 10.0);
-    unknown_font.extend(paragraph(0, &[(2, 10.0, [0, 0, 0], 0, b"x")]));
+    unknown_font.extend(paragraph(0, &[(4, 10.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&unknown_font), "unknown font");
 
     let mut invalid_metadata = header(VERSION, 120.0, 60.0, 10.0);
@@ -341,11 +341,35 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
 
     let mut duplicate_header = header(VERSION, 120.0, 60.0, 10.0);
     let mut line = 10.0_f32.to_le_bytes().to_vec();
-    line.extend([0, 0, 0, 0, 0]);
+    line.extend([0, 0, 0, 0, 0, 0, 0]);
     line.extend(text(b"Header"));
     duplicate_header.extend(record(13, &line));
     duplicate_header.extend(record(13, &line));
     assert_eq!(push_error(&duplicate_header), "InvalidLayout");
+}
+
+#[test]
+fn given_spacing_beyond_a_page_side_or_header_decoration_flags_when_decoding_then_rejects() {
+    for (flag, value, error) in [
+        (64_u16, f32::NAN, "invalid letter spacing"),
+        (128, -14_401.0, "invalid word spacing"),
+    ] {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        let mut payload = vec![0, 0, 0, 1, 0, 0];
+        payload.extend(10.0_f32.to_le_bytes());
+        payload.extend([0, 0, 0]);
+        payload.extend(flag.to_le_bytes());
+        payload.extend(value.to_le_bytes());
+        payload.extend(text(b"x"));
+        bytes.extend(record(9, &payload));
+        assert_eq!(push_error(&bytes), error);
+    }
+    let mut underlined_header = header(VERSION, 120.0, 60.0, 10.0);
+    let mut line = 10.0_f32.to_le_bytes().to_vec();
+    line.extend([0, 0, 0, 0, 0, 2, 0]);
+    line.extend(text(b"Header"));
+    underlined_header.extend(record(13, &line));
+    assert_eq!(push_error(&underlined_header), "invalid header flags");
 }
 
 #[test]

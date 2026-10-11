@@ -8,7 +8,7 @@ use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
 use crate::paint::{image_name, PageLink, PageTag};
-use crate::{FontId, Page, HELVETICA_BOLD};
+use crate::{FontId, Page};
 
 #[derive(Default)]
 pub(crate) struct Metadata {
@@ -225,13 +225,15 @@ pub(crate) fn finish_pdf(
 
     for refs in &font_refs {
         match &fonts[refs.slot.index()] {
-            Font::Helvetica { .. } => {
+            Font::Helvetica { bold, oblique } => {
+                let name: &[u8] = match (bold, oblique) {
+                    (false, false) => b"Helvetica",
+                    (true, false) => b"Helvetica-Bold",
+                    (false, true) => b"Helvetica-Oblique",
+                    (true, true) => b"Helvetica-BoldOblique",
+                };
                 pdf.type1_font(refs.font)
-                    .base_font(Name(if refs.slot == HELVETICA_BOLD {
-                        b"Helvetica-Bold"
-                    } else {
-                        b"Helvetica"
-                    }))
+                    .base_font(Name(name))
                     .encoding_predefined(Name(b"WinAnsiEncoding"));
             }
             Font::Embedded(font) => write_embedded(

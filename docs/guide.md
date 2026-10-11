@@ -35,9 +35,9 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| `unsupported element <em>` or `<i>` | Only regular and bold faces exist, so there is no italic. | Use `<b>` or a `<span>` with a colour. |
-| `unsupported style property: fontStyle`, `unsupported CSS property: font-style` | Same. | Delete the declaration. |
-| `unsupported CSS property: letter-spacing (text shaping is not implemented)` | Text has no shaping, so no tracking. | Delete the declaration. A rule that matches no rendered element is ignored. |
+| `invalid fontStyle: oblique 10deg` | `oblique` takes no angle. Italic text uses the family's `italic` file, or slants the upright face when there is none. | Use `fontStyle: 'italic'`. Register an `italic` file for true italics. |
+| `invalid letterSpacing: 5%` | Spacing takes a length, not a percentage. | Use `em`, such as `0.05em`. |
+| `text-decoration: wavy is not supported; lines are solid` | Decoration lines are solid. | Drop the style keyword. |
 | `PageOverflow: use document margins or split this decorated box` | A box with padding, a border, or a background cannot split across pages. A decorated root holding more than one page of content overflows. | Move the root's padding to the `margin` option. Drop its border and background, and decorate the cards inside it instead. |
 | `PageOverflow: the table is taller than a page` or `the image is taller than the page` | An atomic block has to fit one page. | Remove `break-inside: avoid` from the table, or reduce the image height. |
 | `Helvetica has no glyph for "−" (U+2212)` | The default font covers WinAnsi only. `Intl.NumberFormat` writes U+2212 for negatives in `nb-NO` and U+202F as the group separator in `fr-FR`. | Embed a TTF that has the glyph, or replace it: `text.replace(/−/g, '-').replace(/ /g, ' ')`. |
@@ -122,11 +122,11 @@ const qr = new Uint8Array(await QRCode.toBuffer('https://pay.example.com/invoice
 | `Page style={{ padding }}` | `margin`, in points, on all four sides. |
 | A second `Page`, or `break` | `breakBefore: 'page'` on a direct child of the root. |
 | `View` | `div`, `section`, `article`, `header`, `footer`, or `main`. |
-| `Text` | `p`, `span`, `b`, `strong`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span` or `b` inside a `p`. |
+| `Text` | `p`, `span`, `b`, `strong`, `em`, `i`, or `h1` to `h6`. A bare string inside a block also works. A nested `Text` becomes a `span`, `b`, or `em` inside a `p`. |
 | `Image src={url}` | `img src={bytes} alt="…"`. You read or fetch the PNG or JPEG bytes. |
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
-| `Font.register` | `fonts: [{ family, regular, bold }]` with TTF bytes. Regular and bold only. |
+| `Font.register` | `fonts: [{ family, regular, bold, italic, boldItalic }]` with TTF bytes. Only `regular` is required. |
 | `fixed` header or footer | The `header` and `footer` options, one text line each. |
 | `render={({ pageNumber, totalPages }) => …}` | `<PageNumber />` and `<TotalPages />` inside `header` or `footer`. |
 | `wrap={false}` | `breakInside: 'avoid'`. |
@@ -139,4 +139,4 @@ Three differences cause most surprises:
 - Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `em`, and `rem`.
 - `justifyContent`, `alignItems`, `flexWrap`, and `position` reject. Use `flex`, `width`, `gap`, and `textAlign`.
 
-`Svg`, `Canvas`, `Note`, italic text, and lists have no equivalent.
+`Svg`, `Canvas`, `Note`, and lists have no equivalent.

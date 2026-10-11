@@ -191,6 +191,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     color: style.color,
                     hard_break: false,
                     decoration: Default::default(),
+                    typography: style.typography,
                 }],
                 links: &[],
             })),

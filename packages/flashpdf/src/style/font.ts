@@ -9,7 +9,20 @@ export function bold(value: unknown): boolean {
 	return weight >= 600;
 }
 
-export const helvetica: FontSlots = { regular: 0, bold: 1 };
+export const helvetica: FontSlots = { regular: 0, bold: 1, italic: 2, boldItalic: 3 };
+
+export function italic(value: unknown): boolean {
+	if (value !== "normal" && value !== "italic" && value !== "oblique")
+		throw new Error(`invalid fontStyle: ${String(value)} (use normal, italic, or oblique)`);
+	return value !== "normal";
+}
+
+/** The face slot for a weight and style; `oblique` asks the engine to slant an upright face. */
+export function face(family: FontSlots, bold: boolean, slanted: boolean) {
+	const own = slanted ? (bold ? family.boldItalic : family.italic) : undefined;
+	if (own !== undefined) return { font: own, oblique: false };
+	return { font: bold ? family.bold! : family.regular, oblique: slanted };
+}
 
 // Generic families and the two names browsers map to Helvetica anyway fall back to the built-in face.
 const GENERIC = new Set([
@@ -38,6 +51,7 @@ export function font(
 	s: NormalizedStyle,
 	inherited: FontSlots,
 	inheritedBold: boolean,
+	inheritedItalic: boolean,
 	fonts: ReadonlyMap<string, FontSlots>,
 ) {
 	const requested = s.fontFamily;
@@ -50,7 +64,8 @@ export function font(
 		if (!family) throw new Error(`unregistered font family: ${String(requested)}`);
 	}
 	const weight = s.fontWeight === undefined ? inheritedBold : bold(s.fontWeight);
-	if (weight && family.bold === undefined)
+	const slanted = s.fontStyle === undefined ? inheritedItalic : italic(s.fontStyle);
+	if (weight && face(family, true, slanted).font === undefined)
 		throw new Error(`font family has no bold face: ${s.fontFamily ?? "inherited"}`);
-	return { family, weight };
+	return { family, weight, italic: slanted };
 }

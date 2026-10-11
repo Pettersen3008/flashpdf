@@ -77,7 +77,7 @@ test("given a font-family list, when selecting a font, then uses the first regis
 		["Helvetica", helvetica],
 		["Inter", inter],
 	]);
-	const pick = (fontFamily) => font({ fontFamily }, helvetica, false, fonts).family;
+	const pick = (fontFamily) => font({ fontFamily }, helvetica, false, false, fonts).family;
 	assert.equal(pick("'Missing', \"Inter\", sans-serif"), inter);
 	assert.equal(pick("Missing, system-ui, sans-serif"), helvetica);
 	assert.equal(pick("Arial"), helvetica);
@@ -92,4 +92,15 @@ test("given a font weight outside normal, bold, and 1 to 1000, when normalizing,
 
 test("given a width with more digits than a float holds, when normalizing, then rejects it", () => {
 	assert.throws(() => style({ width: `${"9".repeat(45)}pt` }), /invalid width: 9+pt/);
+});
+
+test("given an oblique angle, a percent spacing, a wavy line, or another transform, when normalizing, then rejects naming the value", () => {
+	for (const [value, message] of [
+		[{ fontStyle: "oblique 10deg" }, /invalid fontStyle: oblique 10deg/],
+		[{ letterSpacing: "10%" }, /invalid letterSpacing: 10%/],
+		[{ wordSpacing: "20000pt" }, /invalid wordSpacing: 20000pt/],
+		[{ textDecoration: "underline wavy" }, /text-decoration: wavy is not supported/],
+		[{ textTransform: "full-width" }, /invalid textTransform: full-width/],
+	])
+		assert.throws(() => style(value), message);
 });

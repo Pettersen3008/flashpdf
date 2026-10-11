@@ -162,7 +162,7 @@ fn given_mutated_fonts_when_parsing_and_rendering_then_never_panics() {
         }
         let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
         let style = TextStyle {
-            font: super::FontId::new(2),
+            font: super::FontId::new(4),
             ..TextStyle::plain(Pt(12.0))
         };
         let _ = renderer.push(&[Command::Text {
@@ -309,6 +309,7 @@ fn run(len: usize, bold: bool, size: f32, hard_break: bool) -> TextRun {
         color: Rgb::BLACK,
         hard_break,
         decoration: Default::default(),
+        typography: super::Typography::NORMAL,
     }
 }
 
@@ -655,8 +656,16 @@ fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint
 #[test]
 fn given_bold_helvetica_when_measuring_then_uses_bold_widths() {
     assert_ne!(
-        super::font::Font::Helvetica { bold: false }.advance(b"A"),
-        super::font::Font::Helvetica { bold: true }.advance(b"A"),
+        super::font::Font::Helvetica {
+            bold: false,
+            oblique: false
+        }
+        .advance(b"A"),
+        super::font::Font::Helvetica {
+            bold: true,
+            oblique: false
+        }
+        .advance(b"A"),
     );
 }
 
@@ -758,7 +767,7 @@ fn abel_text(text: &str) -> Result<Vec<u8>, RenderError> {
     renderer.push(&[Command::Text {
         text,
         style: TextStyle {
-            font: super::FontId::new(2),
+            font: super::FontId::new(4),
             ..TextStyle::plain(Pt(12.0))
         },
     }])?;
@@ -774,7 +783,7 @@ fn given_abel_and_text_outside_winansi_when_rendered_then_emits_a_subset_type0_f
     let pdf = lopdf::Document::load_mem(&bytes).unwrap();
     assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), text);
     let page = *pdf.get_pages().values().next().unwrap();
-    let font = &pdf.get_page_fonts(page).unwrap()[b"F3".as_slice()];
+    let font = &pdf.get_page_fonts(page).unwrap()[b"F5".as_slice()];
     assert_eq!(font.get(b"Subtype").unwrap().as_name().unwrap(), b"Type0");
     assert_eq!(
         font.get(b"Encoding").unwrap().as_name().unwrap(),
@@ -970,4 +979,153 @@ fn given_a_long_footer_and_many_page_breaks_when_finishing_then_rejects_past_the
         .unwrap();
     renderer.push(&vec![Command::PageBreak; 300]).unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::DocumentTooLarge));
+}
+
+fn operations(pdf: &lopdf::Document) -> Vec<lopdf::content::Operation> {
+    let page = *pdf.get_pages().values().next().unwrap();
+    pdf.get_and_decode_page_content(page).unwrap().operations
+}
+
+/// Numeric operands of every `name` operation, or of its array operand for `TJ`.
+fn operands(pdf: &lopdf::Document, name: &str) -> Vec<Vec<f32>> {
+    operations(pdf)
+        .iter()
+        .filter(|operation| operation.operator == name)
+        .map(|operation| {
+            let items = match operation.operands.first() {
+                Some(lopdf::Object::Array(items)) => items.as_slice(),
+                _ => operation.operands.as_slice(),
+            };
+            items
+                .iter()
+                .filter_map(|item| item.as_float().ok())
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn given_justified_text_that_wraps_when_rendered_then_only_the_wrapped_line_stretches_its_spaces() {
+    let runs = [run(24, false, 10.0, false)];
+    let pdf = parsed(&[Command::Paragraph {
+        links: &[],
+        align: TextAlign::Justify,
+        text: "aaaa aaaa aaaa aaaa aaaa",
+        runs: &runs,
+    }]);
+    // Four words take 97.3pt of 100, so each of the three spaces gains 0.9pt: 90/1000 em at 10pt.
+    let stretched = operands(&pdf, "TJ");
+    assert_eq!(stretched.len(), 1);
+    assert_eq!(stretched[0].len(), 3);
+    assert!(stretched[0].iter().all(|gap| (gap + 90.0).abs() < 0.01));
+    assert_eq!(operands(&pdf, "Tj").len(), 1);
+}
+
+#[test]
+fn given_letter_spacing_when_wrapping_then_measures_it_after_every_glyph_and_paints_it_as_tc() {
+    let style = TextStyle {
+        typography: super::Typography {
+            letter_spacing: 1.0,
+            ..super::Typography::NORMAL
+        },
+        ..TextStyle::plain(Pt(10.0))
+    };
+    // Ten 9.44pt W fit 100pt, but not at 10.44pt each.
+    let pdf = parsed(&[Command::Text {
+        text: "WWWWWWWWWW",
+        style,
+    }]);
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "WWWWWWWWW\nW");
+    assert_eq!(operands(&pdf, "Tc"), [[1.0], [0.0], [1.0], [0.0]]);
+}
+
+#[test]
+fn given_word_spacing_in_an_embedded_font_when_rendered_then_widens_each_space_with_a_tj_adjustment(
+) {
+    let font = super::EmbeddedFont::parse(ABEL.to_vec()).unwrap();
+    let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
+    let style = TextStyle {
+        font: super::FontId::new(4),
+        typography: super::Typography {
+            word_spacing: 3.0,
+            ..super::Typography::NORMAL
+        },
+        ..TextStyle::plain(Pt(12.0))
+    };
+    renderer
+        .push(&[Command::Text {
+            text: "a b c",
+            style,
+        }])
+        .unwrap();
+    let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
+    // Tw skips two-byte codes, so 3pt at 12pt is a -250 adjustment after each space.
+    assert_eq!(operands(&pdf, "TJ"), [[-250.0, -250.0]]);
+    assert!(operands(&pdf, "Tw").is_empty());
+}
+
+#[test]
+fn given_a_slanted_run_when_rendered_then_skews_its_text_matrix_by_a_quarter() {
+    let style = TextStyle {
+        typography: super::Typography {
+            oblique: true,
+            ..super::Typography::NORMAL
+        },
+        ..TextStyle::plain(Pt(10.0))
+    };
+    let pdf = parsed(&[Command::Text { text: "x", style }]);
+    assert_eq!(operands(&pdf, "Tm"), [[1.0, 0.0, 0.25, 1.0, 10.0, 42.82]]);
+    assert!(operands(&pdf, "Td").is_empty());
+}
+
+#[test]
+fn given_the_oblique_helvetica_slots_when_rendered_then_names_the_standard_oblique_faces() {
+    for (font, name) in [
+        (super::HELVETICA_OBLIQUE, "Helvetica-Oblique"),
+        (super::HELVETICA_BOLD_OBLIQUE, "Helvetica-BoldOblique"),
+    ] {
+        let pdf = parsed(&[Command::Text {
+            text: "x",
+            style: TextStyle {
+                font,
+                ..TextStyle::plain(Pt(10.0))
+            },
+        }]);
+        let page = *pdf.get_pages().values().next().unwrap();
+        let fonts = pdf.get_page_fonts(page).unwrap();
+        let base_font = fonts.values().next().unwrap().get(b"BaseFont").unwrap();
+        assert_eq!(base_font.as_name().unwrap(), name.as_bytes());
+    }
+}
+
+#[test]
+fn given_an_underlined_struck_run_with_a_decoration_colour_when_painted_then_strokes_use_helvetica_afm_metrics_in_that_colour(
+) {
+    let runs = [TextRun {
+        decoration: super::RunDecoration {
+            underline: true,
+            line_through: true,
+            color: Some(Rgb { r: 255, g: 0, b: 0 }),
+            link: None,
+        },
+        ..run(1, false, 10.0, false)
+    }];
+    let pdf = parsed(&[Command::Paragraph {
+        links: &[],
+        align: TextAlign::Left,
+        text: "x",
+        runs: &runs,
+    }]);
+    let baseline = operands(&pdf, "Td")[0][1];
+    let strokes = operands(&pdf, "re");
+    assert_eq!(strokes.len(), 2);
+    // AFM UnderlinePosition -100 and thickness 50; the strike sits at half the 523 x-height.
+    let expected = [(baseline - 1.25, 0.5), (baseline + 2.37, 0.5)];
+    for (stroke, (y, height)) in strokes.iter().zip(expected) {
+        assert!(
+            (stroke[1] - y).abs() < 0.001 && stroke[3] == height,
+            "{stroke:?}"
+        );
+    }
+    assert_eq!(operands(&pdf, "rg").last().unwrap(), &[1.0, 0.0, 0.0]);
 }

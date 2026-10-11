@@ -24,6 +24,23 @@ export function point(value: unknown, parent = 12, positive = false): number {
 	return number(Number(match[1]) * scale, positive);
 }
 
+/** `letter-spacing` or `word-spacing` in points, either sign, bounded by the largest page side. */
+export function spacing(value: unknown, size: number, name: string): number {
+	if (value === "normal") return 0;
+	const negative =
+		typeof value === "number" ? value < 0 : typeof value === "string" && /^\s*-/.test(value);
+	const magnitude =
+		typeof value === "number" ? Math.abs(value) : String(value).trim().replace(/^-/, "");
+	let amount: number;
+	try {
+		amount = point(magnitude, size) * (negative ? -1 : 1);
+	} catch {
+		throw new Error(`invalid ${name}: ${String(value)} (use normal or a length)`);
+	}
+	if (Math.abs(amount) > 14_400) throw new Error(`invalid ${name}: ${String(value)}`);
+	return amount;
+}
+
 const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|%)$/;
 /** A `width` or img `height`: points (kind 1) or percent of the container width (kind 2). */
 export function dimension(

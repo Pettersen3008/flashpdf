@@ -13,8 +13,19 @@ use crate::pdf::deflate;
 use crate::{FontId, RenderError};
 
 pub(crate) enum Font {
-    Helvetica { bold: bool },
+    /// The obliques share the upright widths, as their AFM files do.
+    Helvetica {
+        bold: bool,
+        oblique: bool,
+    },
     Embedded(Box<EmbeddedFont>),
+}
+
+/// Centre offset above the baseline and thickness of a decoration line, in 1/1000 em.
+#[derive(Clone, Copy)]
+pub(crate) struct Stroke {
+    pub(crate) offset: f32,
+    pub(crate) thickness: f32,
 }
 
 pub(crate) struct FontBook {
@@ -24,10 +35,9 @@ pub(crate) struct FontBook {
 
 impl FontBook {
     pub(crate) fn new(embedded: Vec<EmbeddedFont>) -> Self {
-        let mut fonts = vec![
-            Font::Helvetica { bold: false },
-            Font::Helvetica { bold: true },
-        ];
+        let mut fonts: Vec<Font> = [(false, false), (true, false), (false, true), (true, true)]
+            .map(|(bold, oblique)| Font::Helvetica { bold, oblique })
+            .into();
         fonts.extend(
             embedded
                 .into_iter()
@@ -77,7 +87,7 @@ impl Font {
         out: &mut Vec<u8>,
     ) -> Result<u16, RenderError> {
         match self {
-            Self::Helvetica { bold } => {
+            Self::Helvetica { bold, .. } => {
                 let byte = crate::win_ansi::encode(character)?;
                 out.push(byte);
                 Ok(helvetica::width(*bold, byte))
@@ -103,7 +113,7 @@ impl Font {
     /// Advance of one code produced by `encode_into`.
     pub(crate) fn advance(&self, code: &[u8]) -> u16 {
         match self {
-            Self::Helvetica { bold } => helvetica::width(*bold, code[0]),
+            Self::Helvetica { bold, .. } => helvetica::width(*bold, code[0]),
             Self::Embedded(font) => font.advance(u16::from_be_bytes([code[0], code[1]])),
         }
     }
@@ -113,6 +123,24 @@ impl Font {
         match self {
             Self::Helvetica { .. } => (718.0, -207.0, 0.0),
             Self::Embedded(font) => (font.ascent, font.descent, font.line_gap),
+        }
+    }
+
+    /// Underline and line-through strokes: Helvetica's AFM underline and half its
+    /// x-height, or the embedded font's `post` and `OS/2` values.
+    pub(crate) fn strokes(&self) -> (Stroke, Stroke) {
+        match self {
+            Self::Helvetica { bold, .. } => (
+                Stroke {
+                    offset: -100.0,
+                    thickness: 50.0,
+                },
+                Stroke {
+                    offset: if *bold { 266.0 } else { 262.0 },
+                    thickness: 50.0,
+                },
+            ),
+            Self::Embedded(font) => (font.underline, font.strikeout),
         }
     }
 }

@@ -138,6 +138,8 @@ pub struct FontId(u8);
 impl FontId {
     pub const HELVETICA: Self = Self(0);
     pub const HELVETICA_BOLD: Self = Self(1);
+    pub const HELVETICA_OBLIQUE: Self = Self(2);
+    pub const HELVETICA_BOLD_OBLIQUE: Self = Self(3);
 
     pub(crate) const fn new(value: u8) -> Self {
         Self(value)
@@ -152,14 +154,19 @@ impl FontId {
     }
 }
 
-/// Font slots 0 and 1 preserve the regular and bold Helvetica fallback.
+/// Font slots 0 to 3 are the built-in Helvetica faces; embedded fonts follow.
 pub const HELVETICA: FontId = FontId::HELVETICA;
 pub const HELVETICA_BOLD: FontId = FontId::HELVETICA_BOLD;
+pub const HELVETICA_OBLIQUE: FontId = FontId::HELVETICA_OBLIQUE;
+pub const HELVETICA_BOLD_OBLIQUE: FontId = FontId::HELVETICA_BOLD_OBLIQUE;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TextAlign {
     Left,
     Center,
     Right,
+    /// Stretches the spaces of every wrapped line; the last line and a line
+    /// ending in a hard break stay left-aligned.
+    Justify,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -168,6 +175,7 @@ pub struct TextStyle {
     pub align: TextAlign,
     pub color: Rgb,
     pub font: FontId,
+    pub typography: Typography,
 }
 
 impl TextStyle {
@@ -177,8 +185,28 @@ impl TextStyle {
             align: TextAlign::Left,
             color: Rgb::BLACK,
             font: FontId::HELVETICA,
+            typography: Typography::NORMAL,
         }
     }
+}
+
+/// Spacing and slant of a run; `NORMAL` changes nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Typography {
+    /// CSS `letter-spacing` in points, added after every character.
+    pub letter_spacing: f32,
+    /// CSS `word-spacing` in points, added after every space and no-break space.
+    pub word_spacing: f32,
+    /// Slants the upright face, for italic text in a family without an italic face.
+    pub oblique: bool,
+}
+
+impl Typography {
+    pub const NORMAL: Self = Self {
+        letter_spacing: 0.0,
+        word_spacing: 0.0,
+        oblique: false,
+    };
 }
 
 /// One styled slice of a paragraph's text; `len` bytes follow the previous run's.
@@ -193,6 +221,7 @@ pub struct TextRun {
     /// Ends the line after this run without adding a space.
     pub hard_break: bool,
     pub decoration: RunDecoration,
+    pub typography: Typography,
 }
 
 /// Underline, strike-through, and link of a run; painted per line segment.
@@ -200,6 +229,8 @@ pub struct TextRun {
 pub struct RunDecoration {
     pub underline: bool,
     pub line_through: bool,
+    /// CSS `text-decoration-color`; `None` is the run's colour.
+    pub color: Option<Rgb>,
     /// Index into the paragraph's URI table.
     pub link: Option<u16>,
 }

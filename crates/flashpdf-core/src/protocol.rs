@@ -33,7 +33,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 7;
+const VERSION: u16 = 8;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -82,7 +82,7 @@ impl Decoder {
         if self.page.is_some() {
             return Err(ProtocolError::FontsAfterDocument);
         }
-        if self.fonts.len() >= 254 {
+        if self.fonts.len() >= 252 {
             return Err(ProtocolError::TooManyFonts);
         }
         self.font_bytes = self
@@ -92,7 +92,7 @@ impl Decoder {
             .ok_or(ProtocolError::FontsTooLarge)?;
         self.fonts
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
-        Ok((self.fonts.len() + 1) as u8)
+        Ok((self.fonts.len() + 3) as u8)
     }
 
     /// Images register at any point before the record that paints them, and are
@@ -263,6 +263,12 @@ impl Decoder {
                 let align = cursor.align()?;
                 let color = cursor.rgb()?;
                 let font = self.font(cursor.take(1)?[0])?;
+                // Only the run flags for slant and spacing; a header has no breaks, decoration, or links.
+                let flags = cursor.u16()?;
+                if flags & !0xe0 != 0 {
+                    return Err(ProtocolError::InvalidValue("header flags"));
+                }
+                let typography = cursor.typography(flags)?;
                 let text = cursor.text(true)?.to_owned();
                 cursor.done()?;
                 if self.body_started || !self.frames.is_empty() {
@@ -273,6 +279,7 @@ impl Decoder {
                     align,
                     color,
                     font,
+                    typography,
                 };
                 let renderer = self.ensure_renderer()?;
                 if matches!(opcode, Opcode::Header) {
@@ -392,9 +399,9 @@ impl Decoder {
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
                     // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-                    // 4 an f32 line height follows.
-                    let flags = cursor.take(1)?[0];
-                    if flags > 0x1f {
+                    // 4 an f32 line height follows, 5 to 7 typography, 8 a decoration colour follows.
+                    let flags = cursor.u16()?;
+                    if flags > 0x1ff {
                         return Err(ProtocolError::InvalidValue("run flags"));
                     }
                     let link = if flags & 8 != 0 {
@@ -410,6 +417,12 @@ impl Decoder {
                     } else {
                         None
                     };
+                    let typography = cursor.typography(flags)?;
+                    let decoration_color = if flags & 256 != 0 {
+                        Some(cursor.rgb()?)
+                    } else {
+                        None
+                    };
                     let run = cursor.text(false)?;
                     text.push_str(run);
                     runs.push(TextRun {
@@ -422,8 +435,10 @@ impl Decoder {
                         decoration: RunDecoration {
                             underline: flags & 2 != 0,
                             line_through: flags & 4 != 0,
+                            color: decoration_color,
                             link,
                         },
+                        typography,
                     });
                 }
                 cursor.done()?;
@@ -512,13 +527,13 @@ impl Decoder {
     /// Slots 0 and 1 are Helvetica; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
-        if self.pdfa && font.index() < 2 {
+        if self.pdfa && font.index() < 4 {
             return Err(ProtocolError::PdfAFont);
         }
         let count = self
             .renderer
             .as_ref()
-            .map_or(self.fonts.len() + 2, crate::Renderer::font_count);
+            .map_or(self.fonts.len() + 4, crate::Renderer::font_count);
         if font.index() < count {
             Ok(font)
         } else {

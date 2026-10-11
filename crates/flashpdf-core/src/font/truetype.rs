@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use pdf_writer::Rect;
 
-use super::{cmap, subset};
+use super::{cmap, subset, Stroke};
 
 pub(super) const INVALID: &str = "invalid TrueType font";
 
@@ -20,6 +20,8 @@ pub(crate) struct EmbeddedFont {
     pub(crate) line_gap: f32,
     pub(crate) cap_height: f32,
     pub(crate) stem_v: f32,
+    pub(crate) underline: Stroke,
+    pub(crate) strikeout: Stroke,
 }
 
 impl EmbeddedFont {
@@ -79,6 +81,32 @@ impl EmbeddedFont {
             .filter(|value| *value > 0.0)
             .unwrap_or(ascent);
         let weight = os2.and_then(|os2| be_u16(os2, 4).ok()).unwrap_or(400);
+        // `post` gives the underline centre, as FreeType reads it; OS/2 gives the strikeout top.
+        // A missing or zero-thickness value falls back to Helvetica's.
+        let stroke = |table: Option<&[u8]>, position: usize, size: usize, top: bool| {
+            let (position, size) = table
+                .and_then(|table| Some((be_i16(table, position).ok()?, be_i16(table, size).ok()?)))
+                .filter(|(_, size)| *size > 0)?;
+            let thickness = f32::from(size) * scale;
+            let offset = f32::from(position) * scale;
+            Some(Stroke {
+                offset: if top {
+                    offset - thickness / 2.0
+                } else {
+                    offset
+                },
+                thickness,
+            })
+        };
+        let post = ttf_table(&bytes, b"post").ok();
+        let underline = stroke(post, 8, 10, false).unwrap_or(Stroke {
+            offset: -100.0,
+            thickness: 50.0,
+        });
+        let strikeout = stroke(os2, 28, 26, true).unwrap_or(Stroke {
+            offset: 262.0,
+            thickness: 50.0,
+        });
         let name = ttf_table(&bytes, b"name")
             .ok()
             .and_then(postscript_name)
@@ -96,6 +124,8 @@ impl EmbeddedFont {
             cap_height,
             // ponytail: PDF has no true stem width without outlines; this is the common weight-class heuristic.
             stem_v: (50.0 + (f32::from(weight) / 65.0).powi(2)).round(),
+            underline,
+            strikeout,
         })
     }
 
@@ -241,6 +271,18 @@ mod tests {
         assert_eq!(font.cap_height.round(), 700.0);
         assert_eq!(font.stem_v, 88.0);
         assert!(font.descent < 0.0 && font.line_gap >= 0.0);
+    }
+
+    #[test]
+    fn given_abel_when_parsing_then_centres_the_underline_on_post_and_the_strikeout_below_the_os2_top(
+    ) {
+        let font = EmbeddedFont::parse(abel()).unwrap();
+        // post: -369 and 82 units; OS/2: a 102-unit stroke whose top is at 512, of 2048.
+        let round = |value: f32| (value * 100.0).round() / 100.0;
+        assert_eq!(round(font.underline.offset), -180.18);
+        assert_eq!(round(font.underline.thickness), 40.04);
+        assert_eq!(round(font.strikeout.offset), 225.1);
+        assert_eq!(round(font.strikeout.thickness), 49.8);
     }
 
     /// Glyph lengths from a font program's `loca`, checking the directory is well formed.

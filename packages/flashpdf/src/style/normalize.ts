@@ -1,4 +1,5 @@
 import { parseBorder } from "./border.js";
+import { decoration } from "./decoration.js";
 import { edgeValues, SIDES } from "./length.js";
 import type { NormalizedStyle } from "./types.js";
 
@@ -17,6 +18,10 @@ export function normalize(value: Record<string, unknown>): NormalizedStyle {
 			}
 		} else if (key === "borderWidth" || key === "borderColor") {
 			for (const side of SIDES) result[`border${side}${key.slice(6)}`] = item;
+		} else if (key === "textDecoration") {
+			// The shorthand resets the colour, so a later `text-decoration: underline` drops an earlier one.
+			result.textDecoration = item;
+			result.textDecorationColor = decoration(item).color ?? "currentcolor";
 		} else if (key === "background") result.backgroundColor = item;
 		else result[key] = item;
 	}

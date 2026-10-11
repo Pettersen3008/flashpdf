@@ -5,10 +5,10 @@ use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout};
 use crate::image::Image;
-use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
+use crate::layout::{table_width, Gap, LayoutBuffer, LayoutEngine};
 use crate::paint::{PageLink, PageTag, PdfPainter};
 use crate::pdf::{finish_pdf, Metadata};
-use crate::{Command, Page, Pt, RenderError, TextStyle};
+use crate::{Command, Page, Pt, RenderError, TextStyle, Typography};
 
 /// Total content-stream bytes a document may paint before `finish`.
 pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
@@ -169,7 +169,7 @@ impl Renderer {
             }
         }
         let placeholder = digit.to_string().repeat(10);
-        let (_, text_width) = footer_line(template, &placeholder, &placeholder, font, style)?;
+        let (_, _, text_width) = footer_line(template, &placeholder, &placeholder, font, style)?;
         if text_width > self.page.content_width() {
             return Err(RenderError::TextTooWide);
         }
@@ -382,7 +382,7 @@ impl Renderer {
                 let mut page_buffer = itoa::Buffer::new();
                 let mut total_buffer = itoa::Buffer::new();
                 let font = self.fonts.get(furniture.style.font).unwrap();
-                let (text, width) = footer_line(
+                let (text, gaps, width) = footer_line(
                     &furniture.template,
                     page_buffer.format(index as i32 + 1),
                     total_buffer.format(total),
@@ -396,6 +396,7 @@ impl Renderer {
                 }
                 PdfPainter::new(content, links, None).paint_line(
                     &text,
+                    &gaps,
                     furniture.style,
                     crate::geometry::Point {
                         x: self.page.margin(),
@@ -450,27 +451,44 @@ fn splittable(element: &Element<'_>) -> bool {
     }
 }
 
+/// The line's show string, word-spacing gaps, and width. Spaces stay as written.
 fn footer_line(
     text: &str,
     page_number: &str,
     total_pages: &str,
     font: &crate::font::Font,
     style: TextStyle,
-) -> Result<(Vec<u8>, Pt), RenderError> {
+) -> Result<(Vec<u8>, Vec<Gap>, Pt), RenderError> {
+    let Typography {
+        letter_spacing,
+        word_spacing,
+        ..
+    } = style.typography;
     let mut bytes = Vec::new();
+    let mut gaps = Vec::new();
     let mut width = 0_u32;
+    let mut glyphs = 0_u32;
+    let mut push = |character: char| -> Result<(), RenderError> {
+        width += u32::from(font.encode_into(character, &mut bytes)?);
+        glyphs += 1;
+        if word_spacing != 0.0 && matches!(character, ' ' | '\u{a0}') {
+            gaps.push(Gap {
+                at: bytes.len() as u32,
+                amount: word_spacing * 1000.0 / style.size.get(),
+                stretch: false,
+            });
+        }
+        Ok(())
+    };
     for character in text.chars() {
-        let token = match character {
-            crate::PAGE_NUMBER => page_number,
-            crate::TOTAL_PAGES => total_pages,
-            _ => {
-                width += u32::from(font.encode_into(character, &mut bytes)?);
-                continue;
-            }
-        };
-        for digit in token.chars() {
-            width += u32::from(font.encode_into(digit, &mut bytes)?);
+        match character {
+            crate::PAGE_NUMBER => page_number.chars().try_for_each(&mut push)?,
+            crate::TOTAL_PAGES => total_pages.chars().try_for_each(&mut push)?,
+            _ => push(character)?,
         }
     }
-    Ok((bytes, Pt(width as f32 * style.size.get() / 1000.0)))
+    let width = width as f32 * style.size.get() / 1000.0
+        + glyphs as f32 * letter_spacing
+        + gaps.len() as f32 * word_spacing;
+    Ok((bytes, gaps, Pt(width)))
 }

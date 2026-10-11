@@ -8,7 +8,14 @@ import { registerFonts } from "./fonts.js";
 import { ProtocolWriter } from "./protocol.js";
 import { pageOverflow, resolveTree } from "./tree.js";
 
-export type EmbeddedFont = { family: string; regular: Uint8Array; bold?: Uint8Array | undefined };
+/** A family without an italic face for a weight slants its upright face instead. */
+export type EmbeddedFont = {
+	family: string;
+	regular: Uint8Array;
+	bold?: Uint8Array | undefined;
+	italic?: Uint8Array | undefined;
+	boldItalic?: Uint8Array | undefined;
+};
 export type PdfMetadata = {
 	title?: string | undefined;
 	author?: string | undefined;

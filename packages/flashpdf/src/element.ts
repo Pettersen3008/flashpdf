@@ -1,5 +1,7 @@
 export type Length = number | "0" | `${number}${"pt" | "px" | "em" | "rem"}`;
 export type Width = number | `${number}${"pt" | "px" | "%"}`;
+export type SignedLength = Length | `-${Length}`;
+type TextDecorationLine = "none" | "underline" | "line-through" | "underline line-through";
 export type Edges =
 	| Length
 	| `${Length} ${Length}`
@@ -38,8 +40,17 @@ export type Style = {
 	lineHeight?: number | "normal" | `${number}` | `${number}%` | Length;
 	fontFamily?: string;
 	fontWeight?: number | "normal" | "bold";
-	textAlign?: "left" | "center" | "right";
-	textDecoration?: "none" | "underline" | "line-through" | "underline line-through";
+	/** `oblique` uses the italic face too; a family without one is slanted. */
+	fontStyle?: "normal" | "italic" | "oblique";
+	/** Added after every character; negative values tighten. */
+	letterSpacing?: "normal" | SignedLength;
+	/** Added after every space and no-break space. */
+	wordSpacing?: "normal" | SignedLength;
+	textAlign?: "left" | "center" | "right" | "justify";
+	textTransform?: "none" | "uppercase" | "lowercase" | "capitalize";
+	/** Lines, optionally followed by a colour, as in `underline red`. */
+	textDecoration?: TextDecorationLine | `${TextDecorationLine} ${string}`;
+	textDecorationColor?: string;
 	color?: string;
 	breakBefore?: "auto" | "page";
 	breakAfter?: "auto" | "page";
