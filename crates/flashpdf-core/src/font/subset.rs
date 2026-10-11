@@ -85,21 +85,23 @@ pub(super) fn subset(font: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
             .unwrap_or(&[0; 28][..]),
     );
 
-    let mut tables = vec![
-        (b"glyf", new_glyf),
-        (b"head", new_head),
-        (b"hhea", new_hhea),
-        (b"hmtx", new_hmtx),
-        (b"loca", new_loca),
-        (b"maxp", new_maxp),
-        (b"post", post),
-    ];
-    tables.extend(
-        [b"cvt ", b"fpgm", b"prep"]
-            .into_iter()
-            .filter_map(|tag| Some((tag, table(tag)?.to_vec()))),
-    );
-    tables.sort_by_key(|(tag, _)| *tag);
+    // The directory must be sorted by tag.
+    let optional = |tag: &[u8; 4]| table(tag).map(<[u8]>::to_vec);
+    let tables: Vec<(&[u8; 4], Vec<u8>)> = [
+        (b"cvt ", optional(b"cvt ")),
+        (b"fpgm", optional(b"fpgm")),
+        (b"glyf", Some(new_glyf)),
+        (b"head", Some(new_head)),
+        (b"hhea", Some(new_hhea)),
+        (b"hmtx", Some(new_hmtx)),
+        (b"loca", Some(new_loca)),
+        (b"maxp", Some(new_maxp)),
+        (b"post", Some(post)),
+        (b"prep", optional(b"prep")),
+    ]
+    .into_iter()
+    .filter_map(|(tag, data)| Some((tag, data?)))
+    .collect();
     let selector = tables.len().ilog2() as u16;
     let search_range = 16_u16 << selector;
     let mut out = vec![0, 1, 0, 0];
