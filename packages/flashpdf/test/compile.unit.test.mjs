@@ -140,8 +140,9 @@ test("given a table with thead and tbody, when compiling, then emits the contain
 		{ kind: 1, value: 1 },
 		{ kind: 0, value: 80 },
 	];
+	const top = { align: 0, rows: 1 };
 	const row = (font, ...texts) => [
-		["rowStart", columns],
+		["rowStart", columns, [top, top]],
 		...texts.flatMap((text) => [
 			["stackStart", 0],
 			["paragraph", [run(font, text)], "left"],
@@ -169,6 +170,182 @@ test("given rows with different cell counts, when compiling, then rejects naming
 		),
 		/^Error: <tr> has 1 cells but the table has 2 columns on <tr\.short> in <table>$/,
 	);
+});
+
+test("given a totals row whose label spans three columns, when compiling, then each column takes its width from its first cell without colSpan", async () => {
+	const cell = (text, props = {}) => jsx("td", { ...props, children: text });
+	const calls = await compiled(
+		jsxs("table", {
+			children: [
+				jsxs("tr", {
+					children: [
+						cell("Item", { colSpan: 2 }),
+						cell("Qty", { style: { width: "40pt" } }),
+						cell("Total", { style: { width: "60pt" } }),
+					],
+				}),
+				jsxs("tr", {
+					children: [
+						cell("Coffee", { style: { width: "50%" } }),
+						cell("Beans"),
+						cell("2", { style: { width: "90pt" } }),
+						cell("$8"),
+					],
+				}),
+				jsxs("tr", { children: [cell("Subtotal", { colSpan: 3 }), cell("$8")] }),
+			],
+		}),
+	);
+	const top = { align: 0, rows: 1 };
+	assert.deepEqual(
+		calls.filter(([method]) => method === "rowStart"),
+		[
+			[top, "join", top, top],
+			[top, top, top, top],
+			[top, "join", "join", top],
+		].map((slots) => [
+			"rowStart",
+			[
+				{ kind: 2, value: 50 },
+				{ kind: 1, value: 1 },
+				{ kind: 0, value: 40 },
+				{ kind: 0, value: 60 },
+			],
+			slots,
+		]),
+	);
+});
+
+test("given a cell spanning two rows beside striped rows, when compiling, then both rows sit in one stack and each row's background moves into its own cells", async () => {
+	const calls = await compiled(
+		jsx("table", {
+			children: jsxs("tbody", {
+				children: [
+					jsxs("tr", {
+						style: { background: "#ff0000" },
+						children: [
+							jsx("td", { rowSpan: 2, children: "a" }),
+							jsx("td", { style: { verticalAlign: "bottom" }, children: "b" }),
+						],
+					}),
+					jsx("tr", {
+						style: { background: "#0000ff", verticalAlign: "middle" },
+						children: jsx("td", { children: "c" }),
+					}),
+				],
+			}),
+		}),
+	);
+	const filled = (background) => [
+		"boxStart",
+		{
+			margin: [0, 0, 0, 0],
+			padding: [0, 0, 0, 0],
+			border: [0, 0, 0, 0],
+			borderColor: [
+				[0, 0, 0],
+				[0, 0, 0],
+				[0, 0, 0],
+				[0, 0, 0],
+			],
+			background,
+		},
+	];
+	const columns = [
+		{ kind: 1, value: 1 },
+		{ kind: 1, value: 1 },
+	];
+	const text = (value) => [["stackStart", 0], ["paragraph", [run(0, value)], "left"], ["stackEnd"]];
+	assert.deepEqual(calls, [
+		["tableStart", 0, 0, { kind: 1, value: 1 }],
+		["stackStart", 0],
+		[
+			"rowStart",
+			columns,
+			[
+				{ align: 0, rows: 2 },
+				{ align: 2, rows: 1 },
+			],
+		],
+		filled([255, 0, 0]),
+		...text("a"),
+		["boxEnd"],
+		filled([255, 0, 0]),
+		...text("b"),
+		["boxEnd"],
+		["rowEnd"],
+		["rowStart", columns, ["covered", { align: 1, rows: 1 }]],
+		filled([0, 0, 255]),
+		...text("c"),
+		["boxEnd"],
+		["rowEnd"],
+		["stackEnd"],
+		["tableEnd"],
+	]);
+});
+
+test("given collapsed 1pt cell borders under a 2pt header rule, when compiling, then each cell draws half of every shared edge and all of each outer edge", async () => {
+	const grey = "1pt solid #808080";
+	const cell = (tag, text) => jsx(tag, { style: { border: grey }, children: text });
+	const calls = await compiled(
+		jsxs("table", {
+			style: { borderCollapse: "collapse" },
+			children: [
+				jsx("thead", {
+					children: jsxs("tr", {
+						style: { borderBottom: "2pt solid black" },
+						children: [cell("th", "a"), cell("th", "b")],
+					}),
+				}),
+				jsx("tbody", { children: jsxs("tr", { children: [cell("td", "c"), cell("td", "d")] }) }),
+			],
+		}),
+	);
+	const black = [0, 0, 0];
+	const gray = [128, 128, 128];
+	// The row's rule merges into its cells, so the row emits no box of its own.
+	assert.deepEqual(
+		calls
+			.filter(([method]) => method === "boxStart")
+			.map(([, { border, borderColor }]) => ({ border, borderColor })),
+		[
+			{ border: [1, 0.5, 1, 1], borderColor: [gray, gray, black, gray] },
+			{ border: [1, 1, 1, 0.5], borderColor: [gray, gray, black, gray] },
+			{ border: [1, 0.5, 1, 1], borderColor: [black, gray, gray, gray] },
+			{ border: [1, 1, 1, 0.5], borderColor: [black, gray, gray, gray] },
+		],
+	);
+});
+
+test("given table input outside the supported subset, when compiling, then rejects with the reason", async () => {
+	const table = (...rows) => jsxs("table", { children: rows });
+	const tr = (...cells) => jsxs("tr", { children: cells });
+	const td = (props = {}) => jsx("td", { ...props, children: "x" });
+	for (const [input, message] of [
+		[
+			table(jsx("tbody", { children: tr(td({ rowSpan: 2 })) })),
+			/^Error: rowSpan 2 runs past the last row of its <tbody>; rows joined by rowSpan stay in one row group on <td> in <tr> > <tbody> > <table>$/,
+		],
+		[
+			table(tr(td(), td({ rowSpan: 2 })), tr(td({ colSpan: 2 }))),
+			/colSpan runs into a cell that rowSpan brings down from an earlier row/,
+		],
+		[table(tr(td({ colSpan: 2, style: { width: "50pt" } }))), /width and flex size one column/],
+		[
+			table(tr(td({ style: { verticalAlign: "baseline" } }))),
+			/vertical-align: baseline is not implemented/,
+		],
+		[
+			jsx("table", { style: { borderSpacing: "2pt" }, children: tr(td()) }),
+			/border-spacing is not implemented/,
+		],
+		[
+			jsx("div", { style: { verticalAlign: "middle" }, children: "x" }),
+			/vertical-align applies only to <td>, <th>, <tr>, and row groups on <div>$/,
+		],
+		[table(tr(td({ colSpan: 0 }))), /colSpan must be an integer from 1 to 256 on <td>/],
+	])
+		await assert.rejects(compiled(input), message);
 });
 
 test("given a td outside a table row, when compiling, then rejects naming it", async () => {

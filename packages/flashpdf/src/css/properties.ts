@@ -5,10 +5,7 @@ export type RejectedProperty =
 	| "maxWidth"
 	| "borderRadius"
 	| "letterSpacing"
-	| "verticalAlign"
-	| "objectFit"
-	| "borderCollapse"
-	| "borderSpacing";
+	| "objectFit";
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
 type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: string };
 const properties = {
@@ -49,6 +46,9 @@ const properties = {
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
+	verticalAlign: { css: "vertical-align" },
+	borderCollapse: { css: "border-collapse", inherited: true },
+	borderSpacing: { css: "border-spacing", inherited: true },
 	minWidth: {
 		css: "min-width",
 		unsupported: "only width on a flex row child is implemented",
@@ -65,19 +65,6 @@ const properties = {
 	objectFit: {
 		css: "object-fit",
 		unsupported: "size an image with width and height; it always scales to fill them",
-	},
-	verticalAlign: {
-		css: "vertical-align",
-		unsupported: "cells align to the top; middle and bottom are not implemented",
-	},
-	borderCollapse: {
-		css: "border-collapse",
-		unsupported:
-			"cell borders are separate and adjacent ones double up; draw one edge per cell, such as border-bottom",
-	},
-	borderSpacing: {
-		css: "border-spacing",
-		unsupported: "cells tile their row; use cell padding",
 	},
 } as const satisfies Record<StyleProperty | RejectedProperty, PropertyDefinition>;
 

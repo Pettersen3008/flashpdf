@@ -1,7 +1,9 @@
 use crate::document::{
     Block, BoxNode, Cell, Document, Element, ImageNode, Paragraph, Row, Spacer, Stack, Table,
 };
-use crate::{BoxStyle, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun, TextStyle};
+use crate::{
+    BoxStyle, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun, TextStyle, VerticalAlign,
+};
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
 pub(crate) const MAX_COLUMNS: usize = 256;
@@ -30,8 +32,10 @@ pub enum Command<'a> {
         gap: Pt,
     },
     StackEnd,
+    /// `slots` has one entry per column; empty gives every column its own top-aligned cell.
     RowStart {
         columns: &'a [ColumnWidth],
+        slots: &'a [Slot],
     },
     RowEnd,
     /// The first `header_rows` children repeat at the top of every page the table continues on,
@@ -60,6 +64,18 @@ pub enum ColumnWidth {
     Percent(Percent),
 }
 
+/// What a row's column holds. Rows that a `rowspan` joins must be the
+/// children of one Stack, which lays them out together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    /// Starts a cell that spans `rows` rows.
+    Cell { rows: u16, align: VerticalAlign },
+    /// Widens the cell to its left (`colspan`).
+    Join,
+    /// A cell from an earlier row covers this column.
+    Covered,
+}
+
 /// The protocol's decoded form owns data across input chunks.
 pub(crate) enum OwnedCommand {
     Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>),
@@ -68,7 +84,7 @@ pub(crate) enum OwnedCommand {
     Spacer(Pt),
     StackStart(Pt),
     StackEnd,
-    RowStart(Vec<ColumnWidth>),
+    RowStart(Vec<ColumnWidth>, Vec<Slot>),
     RowEnd,
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
@@ -89,7 +105,7 @@ impl OwnedCommand {
             Self::Spacer(value) => Command::Spacer(*value),
             Self::StackStart(gap) => Command::StackStart { gap: *gap },
             Self::StackEnd => Command::StackEnd,
-            Self::RowStart(columns) => Command::RowStart { columns },
+            Self::RowStart(columns, slots) => Command::RowStart { columns, slots },
             Self::RowEnd => Command::RowEnd,
             Self::TableStart(header_rows, footer_rows, width) => Command::TableStart {
                 header_rows: *header_rows,
@@ -229,22 +245,38 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 let children = self.parse_children(Command::StackEnd, depth + 1)?;
                 Ok(Element::Stack(Stack { gap, children }))
             }
-            Command::RowStart { columns } => {
+            Command::RowStart { columns, slots } => {
                 self.check_depth(depth)?;
-                if columns.is_empty() || columns.len() > MAX_COLUMNS {
+                if columns.is_empty()
+                    || columns.len() > MAX_COLUMNS
+                    || !(slots.is_empty() || slots.len() == columns.len())
+                {
                     return Err(CommandParseError::InvalidRow);
                 }
-                let mut cells = Vec::with_capacity(columns.len());
-                for width in columns {
-                    cells.push(Cell {
-                        width: *width,
-                        content: self.parse_element(depth + 1)?,
-                    });
+                let mut cells: Vec<Cell<'a>> = Vec::with_capacity(columns.len());
+                for column in 0..columns.len() {
+                    match slots.get(column).copied().unwrap_or(Slot::Cell {
+                        rows: 1,
+                        align: VerticalAlign::Top,
+                    }) {
+                        Slot::Cell { rows, align } => cells.push(Cell {
+                            column,
+                            span: 1,
+                            rows,
+                            align,
+                            content: self.parse_element(depth + 1)?,
+                        }),
+                        Slot::Join => match cells.last_mut() {
+                            Some(cell) if cell.column + cell.span == column => cell.span += 1,
+                            _ => return Err(CommandParseError::InvalidRow),
+                        },
+                        Slot::Covered => {}
+                    }
                 }
                 if self.next()? != Command::RowEnd {
                     return Err(CommandParseError::InvalidRow);
                 }
-                Ok(Element::Row(Row { cells }))
+                Ok(Element::Row(Row { columns, cells }))
             }
             Command::TableStart {
                 header_rows,
@@ -317,10 +349,10 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
 }
 
 /// A table child is a Row, or a Box/Stack group of them, and every Row has the
-/// same cell count; `columns` learns it from the first Row.
+/// same column count; `columns` learns it from the first Row.
 pub(crate) fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
     match element {
-        Element::Row(row) => *columns.get_or_insert(row.cells.len()) == row.cells.len(),
+        Element::Row(row) => *columns.get_or_insert(row.columns.len()) == row.columns.len(),
         Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {
             children.iter().all(|child| uniform_rows(child, columns))
         }

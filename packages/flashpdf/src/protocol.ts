@@ -2,6 +2,8 @@ import { asError, Binary } from "./binary.js";
 import type { Box } from "./style.js";
 
 export type Column = { kind: 0 | 1 | 2; value: number };
+/** A table row's column: a cell that starts there, more of the cell to its left, or part of a cell from an earlier row. */
+export type Slot = { align: 0 | 1 | 2; rows: number } | "join" | "covered";
 /** An image dimension: 1 is points, 2 is percent of the container width. */
 export type Dimension = { kind: 1 | 2; value: number };
 /** One styled stretch of a paragraph; `break` ends the line after it. */
@@ -185,13 +187,23 @@ export class ProtocolWriter {
 		this.binary.record(opcode.stackEnd);
 	}
 
-	rowStart(columns: readonly Column[]) {
+	/** Without `slots`, each column holds its own top-aligned cell. */
+	rowStart(columns: readonly Column[], slots: readonly Slot[] = []) {
 		this.body();
 		this.binary.record(opcode.rowStart, () => {
 			this.binary.u16(columns.length);
-			for (const column of columns) {
+			for (const [index, column] of columns.entries()) {
 				this.binary.u8(column.kind);
 				this.binary.f32(column.value);
+				// Bits 0-1 align a cell top, middle, or bottom, and bit 2 means a u16 row span follows;
+				// 8 joins the cell to the left, and 16 marks a column a cell from an earlier row covers.
+				const slot = slots[index] ?? { align: 0, rows: 1 };
+				if (slot === "join") this.binary.u8(8);
+				else if (slot === "covered") this.binary.u8(16);
+				else if (slot.rows > 1) {
+					this.binary.u8(4 | slot.align);
+					this.binary.u16(slot.rows);
+				} else this.binary.u8(slot.align);
 			}
 		});
 	}

@@ -64,7 +64,38 @@ pub(crate) struct LayoutBuffer {
     pub(crate) links: Vec<String>,
 }
 
+/// Buffer lengths before or after a cell, so its content can move once the row height is known.
+#[derive(Clone, Copy)]
+pub(crate) struct Marks {
+    pub(crate) lines: usize,
+    pub(crate) boxes: usize,
+    pub(crate) images: usize,
+}
+
 impl LayoutBuffer {
+    pub(crate) fn marks(&self) -> Marks {
+        Marks {
+            lines: self.lines.len(),
+            boxes: self.boxes.len(),
+            images: self.images.len(),
+        }
+    }
+
+    /// Moves what was laid out between `from` and `to` down by `dy`.
+    pub(crate) fn shift(&mut self, from: Marks, to: Marks, dy: Pt) {
+        for line in &mut self.lines[from.lines..to.lines] {
+            line.origin.y += dy;
+            line.top += dy;
+            line.bottom += dy;
+        }
+        for paint in &mut self.boxes[from.boxes..to.boxes] {
+            paint.origin.y += dy;
+        }
+        for image in &mut self.images[from.images..to.images] {
+            image.origin.y += dy;
+        }
+    }
+
     pub(crate) fn clear(&mut self) {
         self.lines.clear();
         self.segments.clear();
