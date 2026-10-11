@@ -22,6 +22,22 @@ const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	cite: { fontStyle: "italic" },
 	th: { fontWeight: "bold", textAlign: "left" },
 	a: { color: "#0000EE", textDecoration: "underline" },
+	u: { textDecoration: "underline" },
+	ins: { textDecoration: "underline" },
+	s: { textDecoration: "line-through" },
+	del: { textDecoration: "line-through" },
+	mark: { backgroundColor: "yellow", color: "black" },
+	small: { fontSize: "0.83em" },
+	sub: { fontSize: "0.83em", verticalAlign: "sub" },
+	sup: { fontSize: "0.83em", verticalAlign: "super" },
+	code: { fontFamily: "monospace" },
+	kbd: { fontFamily: "monospace" },
+	samp: { fontFamily: "monospace" },
+	pre: { fontFamily: "monospace", whiteSpace: "pre", margin: "1em 0" },
+	blockquote: { margin: "1em 40px" },
+	figure: { margin: "1em 40px" },
+	dd: { marginLeft: "40px" },
+	address: { fontStyle: "italic" },
 	hr: { borderBottom: "1pt solid black" },
 	h1: { fontSize: "2em", fontWeight: "bold" },
 	h2: { fontSize: "1.5em", fontWeight: "bold" },
@@ -30,6 +46,24 @@ const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	h5: { fontSize: "0.83em", fontWeight: "bold" },
 	h6: { fontSize: "0.67em", fontWeight: "bold" },
 };
+
+/** The user-agent rules that depend on nesting: a list inside a list has no vertical margin, and
+ *  an unordered one cycles through disc, circle, and square as it goes deeper. */
+function listStyles(tag: Tag, ancestors: Identity[]): CascadedStyle | undefined {
+	if (tag !== "ul" && tag !== "ol" && tag !== "dl") return undefined;
+	const depth = ancestors.filter(({ tag }) => tag === "ul" || tag === "ol").length;
+	const nested = depth > 0 || ancestors.some(({ tag }) => tag === "dl");
+	return {
+		margin: nested ? "0" : "1em 0",
+		...(tag === "dl"
+			? {}
+			: {
+					paddingLeft: "40px",
+					listStyleType:
+						tag === "ol" ? "decimal" : ["disc", "circle", "square"][Math.min(depth, 2)]!,
+				}),
+	};
+}
 
 function cascade(target: CascadedStyle, source: CascadedStyle | undefined) {
 	if (!source) return;
@@ -127,6 +161,7 @@ function visit(
 			if (key.startsWith("--") || inherited.has(key))
 				(result as Record<string, unknown>)[key] = item;
 		cascade(result, uaStyles[value.tag]);
+		cascade(result, listStyles(value.tag, ancestors));
 		const matched = rules.filter((rule) => matches(rule.selector, identity, ancestors));
 		const own = inline(value.style);
 		for (const rule of matched) cascade(result, rule.declarations().normal);

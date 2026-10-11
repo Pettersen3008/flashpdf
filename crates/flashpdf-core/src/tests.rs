@@ -1093,7 +1093,7 @@ fn given_an_underlined_struck_run_with_a_decoration_colour_when_painted_then_str
             underline: true,
             line_through: true,
             color: Some(Rgb { r: 255, g: 0, b: 0 }),
-            link: None,
+            ..Default::default()
         },
         ..run(1, false, 10.0, false)
     }];
@@ -1182,6 +1182,172 @@ fn given_times_and_courier_when_measuring_then_times_kerns_by_afm_pairs_and_cour
     assert!(kerns(super::COURIER, "AV").is_empty());
     let courier = super::font::Font::Standard(super::COURIER.slot());
     assert_eq!((courier.advance(b"i"), courier.advance(b"W")), (600, 600));
+}
+
+fn marked(len: usize, marker: super::Marker) -> TextRun {
+    TextRun {
+        typography: super::Typography {
+            marker,
+            ..super::Typography::NORMAL
+        },
+        ..run(len, false, 10.0, false)
+    }
+}
+
+#[test]
+fn given_a_list_marker_when_its_first_line_moves_to_the_next_page_then_the_marker_goes_with_it() {
+    // 8pt remain after the spacer, below one 9.25pt line.
+    let runs = [
+        marked(2, super::Marker::Outside),
+        run(4, false, 10.0, false),
+    ];
+    let pdf = parsed(&[
+        Command::Spacer(Pt(32.0)),
+        Command::Paragraph {
+            links: &[],
+            align: TextAlign::Left,
+            text: "1.item",
+            runs: &runs,
+        },
+    ]);
+    let pages = pdf.get_pages();
+    let shown = |page: u32| String::from_utf8(pdf.get_page_content(pages[&page])).unwrap();
+    assert_eq!(pages.len(), 2);
+    assert!(!shown(1).contains("(1.)"));
+    // The marker hangs left of the text by its 8.34pt width.
+    assert!(shown(2).contains("(1.) Tj") && shown(2).contains("(item) Tj"));
+    assert_eq!(shown(2).matches("42.82 Td").count(), 2);
+    assert!(shown(2).contains("\n1.65"), "{}", shown(2));
+}
+
+#[test]
+fn given_an_inside_marker_when_laid_out_then_the_first_line_starts_after_it() {
+    let runs = [marked(2, super::Marker::Inside), run(4, false, 10.0, false)];
+    let pdf = parsed(&[Command::Paragraph {
+        links: &[],
+        align: TextAlign::Left,
+        text: "1.item",
+        runs: &runs,
+    }]);
+    let starts: Vec<f32> = operands(&pdf, "Td").iter().map(|td| td[0]).collect();
+    assert_eq!(starts.len(), 2);
+    assert!(
+        (starts[0] - 18.34).abs() < 0.001 && starts[1] == 10.0,
+        "{starts:?}"
+    );
+}
+
+#[test]
+fn given_disc_circle_and_square_markers_when_painted_then_draw_shapes_instead_of_text() {
+    let paragraphs: Vec<[TextRun; 2]> = (0..3)
+        .map(|_| {
+            [
+                marked(3, super::Marker::Outside),
+                run(1, false, 10.0, false),
+            ]
+        })
+        .collect();
+    let commands: Vec<Command> = ["\u{2022}x", "\u{25e6}x", "\u{25aa}x"]
+        .iter()
+        .zip(&paragraphs)
+        .map(|(text, runs)| Command::Paragraph {
+            links: &[],
+            align: TextAlign::Left,
+            text,
+            runs: runs.as_slice(),
+        })
+        .collect();
+    let pdf = parsed(&commands);
+    let count = |name: &str| {
+        operations(&pdf)
+            .iter()
+            .filter(|op| op.operator == name)
+            .count()
+    };
+    // A disc is a 12-sided polygon and a fill, a ring two of them and an even-odd fill, a square four corners.
+    let counts = ["m", "l", "h", "f", "f*"].map(count);
+    assert_eq!(counts, [4, 36, 4, 2, 1]);
+    assert_eq!(count("Tj"), 3);
+}
+
+#[test]
+fn given_a_nowrap_word_wider_than_its_line_when_laid_out_then_rejects_where_a_normal_word_breaks() {
+    let render = |nowrap| {
+        let runs = [TextRun {
+            typography: super::Typography {
+                nowrap,
+                ..super::Typography::NORMAL
+            },
+            ..run(12, false, 10.0, false)
+        }];
+        super::render(
+            page(),
+            &[Command::Paragraph {
+                links: &[],
+                align: TextAlign::Left,
+                text: "WWWWWWWWWWWW",
+                runs: &runs,
+            }],
+        )
+    };
+    assert_eq!(render(true), Err(RenderError::LineTooWide));
+    assert!(render(false).is_ok());
+}
+
+#[test]
+fn given_a_raised_run_when_painted_then_it_moves_up_by_the_rise_and_grows_the_line() {
+    let raised = |rise| {
+        let runs = [
+            run(1, false, 10.0, false),
+            TextRun {
+                typography: super::Typography {
+                    rise,
+                    ..super::Typography::NORMAL
+                },
+                ..run(1, false, 10.0, false)
+            },
+        ];
+        parsed(&[Command::Paragraph {
+            links: &[],
+            align: TextAlign::Left,
+            text: "xy",
+            runs: &runs,
+        }])
+    };
+    let (flat, up) = (raised(0.0), raised(3.0));
+    let starts = |pdf: &lopdf::Document| operands(pdf, "Td");
+    // The second segment steps right by x's 5pt and up by the rise; the baseline drops by it too.
+    assert_eq!(starts(&up)[1], [5.0, 3.0]);
+    assert!((starts(&flat)[0][1] - starts(&up)[0][1] - 3.0).abs() < 0.001);
+}
+
+#[test]
+fn given_a_run_background_when_painted_then_fills_its_text_extent_before_the_text() {
+    let runs = [TextRun {
+        decoration: super::RunDecoration {
+            background: Some(Rgb {
+                r: 255,
+                g: 255,
+                b: 0,
+            }),
+            ..Default::default()
+        },
+        ..run(2, false, 10.0, false)
+    }];
+    let pdf = parsed(&[Command::Paragraph {
+        links: &[],
+        align: TextAlign::Left,
+        text: "ab",
+        runs: &runs,
+    }]);
+    let baseline = operands(&pdf, "Td")[0][1];
+    // The AFM ascender and descender give a 9.25pt box over the two 5.56pt glyphs.
+    let (corner, edges) = (&operands(&pdf, "m")[0], operands(&pdf, "l"));
+    assert!((corner[1] - (baseline - 2.07)).abs() < 0.001, "{corner:?}");
+    assert!((edges[0][0] - corner[0] - 11.12).abs() < 0.001, "{edges:?}");
+    assert!((edges[1][1] - corner[1] - 9.25).abs() < 0.001, "{edges:?}");
+    let shown = content(&pdf);
+    assert!(shown.find("1 1 0 rg").unwrap() < shown.find("BT").unwrap());
 }
 
 #[test]

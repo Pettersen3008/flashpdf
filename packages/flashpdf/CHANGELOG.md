@@ -55,6 +55,10 @@
 - `text-decoration-color`, and a colour in the `text-decoration` shorthand.
 - Kerning, on by default, with `font-kerning: auto | normal | none`. Helvetica uses Adobe's AFM pairs; embedded fonts use GPOS pair adjustment under the `kern` feature, or the `kern` table. Line breaking measures kerned widths.
 - Times and Courier built-in fonts, each in regular, bold, italic or oblique, and bold italic, with Adobe's AFM widths and, for Times, its kerning pairs. `font-family` takes `serif`, `Times`, and `Times New Roman` for Times, and `monospace`, `Courier`, and `Courier New` for Courier. Output of a document that uses neither is unchanged.
+- Lists: `ul`, `ol`, and `li`, with `list-style-type` (`disc`, `circle`, `square`, `decimal`, `decimal-leading-zero`, `lower-alpha`, `lower-latin`, `upper-alpha`, `upper-latin`, `lower-roman`, `upper-roman`, `none`), `list-style-position`, the `list-style` shorthand, `ol` `start` and `reversed`, and `li` `value`. A `ul` nested one and two lists deep uses circles and squares, as browsers do. Bullets are shapes the engine draws, so they need no font glyph, and a marker stays with its item's first line across pages.
+- `dl`, `dt`, `dd`, `blockquote`, `address`, `figure`, `figcaption`, `nav`, and `aside` as blocks with the browser's default margins, indent, and italic.
+- `small`, `sub`, `sup`, `u`, `ins`, `s`, `del`, `mark`, `code`, `kbd`, and `samp`, with `vertical-align: baseline | sub | super` on inline elements. `mark` paints a yellow background behind each line of its text.
+- `pre` and `white-space: normal | nowrap | pre | pre-wrap | pre-line`, with tabs to the next multiple of 8 characters. A `pre` or `nowrap` line wider than its container rejects with `LineTooWide`.
 
 ### Changed
 
@@ -64,6 +68,9 @@
 - `font-family` reads its list in order and takes the first registered family or built-in name. A name that is neither, such as `Georgia`, is skipped for the next entry, and a list where nothing matches still rejects with `unregistered font family`. `serif` and `ui-serif` select Times, where they selected Helvetica.
 - The glyph error for a character outside WinAnsi reads `the built-in font has no glyph for ...`, because Times and Courier share the limit. PDF/A rejects text in any built-in font.
 - The binary protocol is version 15: embedded font slots start at 12 after the twelve built-in faces. The JavaScript and WASM halves ship together, so this affects no public API.
+- `ul`, `ol`, and `li` no longer reject as unsupported elements, and `vertical-align` works on inline elements. It still rejects on blocks and table cells.
+- A font without a U+00A0 glyph shows its space glyph for it, where it rejected the character. `pre` relies on this.
+- The binary protocol is version 16: run flags carry a background colour, a baseline shift, no-wrap, and a list marker. The JavaScript and WASM halves ship together, so this affects no public API.
 
 ## 0.4.0 - 2026-10-02
 

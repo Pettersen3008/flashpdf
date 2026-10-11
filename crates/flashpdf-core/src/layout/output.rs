@@ -4,6 +4,10 @@ use crate::font::Stroke;
 use crate::geometry::Point;
 use crate::{BoxStyle, FontId, Pt, Rgb, TextAlign};
 
+/// A drawn list marker's slot, with its gap to the text, and its size, in em.
+pub(crate) const MARKER_SLOT: f32 = 0.75;
+pub(crate) const MARKER_SHAPE: f32 = 0.3;
+
 pub(crate) struct PositionedLine {
     pub(crate) segments: Range<usize>,
     /// Baseline; `top..bottom` is the line box the page splitter measures.
@@ -25,6 +29,10 @@ pub(crate) struct Segment {
     /// `Tc`, in points.
     pub(crate) letter_spacing: f32,
     pub(crate) oblique: bool,
+    /// Baseline shift in points, up positive.
+    pub(crate) rise: f32,
+    /// 1, 2, or 3 draws a disc, circle, or square of this size instead of `text`, for a list marker.
+    pub(crate) shape: u8,
 }
 
 /// Extra advance before the code starting at byte `at` of `LayoutBuffer::text`,
@@ -51,6 +59,7 @@ pub(crate) struct Decoration {
     pub(crate) underline: Option<Stroke>,
     pub(crate) line_through: Option<Stroke>,
     pub(crate) color: Rgb,
+    pub(crate) background: Option<Rgb>,
     /// Index into `LayoutBuffer::links`.
     pub(crate) link: Option<usize>,
     /// Font ascent and (positive) descent at the segment size, for the link rectangle.

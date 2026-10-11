@@ -51,7 +51,21 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 </table>
 ```
 
-`colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+`colSpan`, `rowSpan`, `vertical-align` on a cell, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+
+## Lists, preformatted text, and inline elements
+
+`ul`, `ol`, and `li` render with browser defaults: a 40px indent, `disc`, `circle`, and `square` markers by depth, and `list-style-type`, `list-style-position`, and `list-style` to change them. `ol` takes `start` and `reversed`, and `li` takes `value`. A marker stays with the first line of its item across pages. `pre` and `white-space: pre | pre-wrap | pre-line | nowrap` keep spaces, tabs, and newlines, and a `pre` line wider than the page rejects. `dl`, `dt`, `dd`, `blockquote`, `address`, `figure`, `figcaption`, `nav`, and `aside` are blocks, and `small`, `sub`, `sup`, `u`, `ins`, `s`, `del`, `mark`, `code`, `kbd`, and `samp` are inline.
+
+```tsx
+<ol start={3}>
+  <li>Payment is due in <b>14 days</b>.</li>
+  <li>Late fees accrue at 1.5%<sup>1</sup>.</li>
+</ol>
+<pre style={{ fontSize: 9, lineHeight: 1.3 }}>{`IBAN  NO93 8601 1117 947\nBIC   DNBANOKK`}</pre>
+```
+
+Vertical margins do not collapse, and tagged mode writes list items as paragraphs without list structure; see [CSS.md](./CSS.md).
 
 ## Images and links
 
@@ -131,7 +145,7 @@ const pdf = await render(<Invoice />, {
 });
 ```
 
-`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
+`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, lists, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
 
 ## Embedded fonts
 

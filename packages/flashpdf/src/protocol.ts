@@ -1,5 +1,5 @@
 import { asError, Binary } from "./binary.js";
-import type { Box, Transform } from "./style.js";
+import type { Box, Transform, WhiteSpace } from "./style.js";
 
 export type Column = { kind: 0 | 1 | 2; value: number };
 /** An image dimension: 1 is points, 2 is percent of the container width. */
@@ -23,6 +23,14 @@ export type Run = {
 	letterSpacing: number;
 	wordSpacing: number;
 	kerning: boolean;
+	/** Baseline shift in points, up positive. */
+	rise: number;
+	/** The background behind the run's text, as `<mark>` paints it; undefined is none. */
+	background: readonly [number, number, number] | undefined;
+	/** 1 hangs a list marker before the paragraph's first line and 2 starts the line with it. */
+	marker: 0 | 1 | 2;
+	/** Applied by the compiler before writing; only `pre` and `nowrap` reach the engine, as a flag. */
+	whiteSpace: WhiteSpace;
 	/** Applied by the compiler before writing; not part of the protocol. */
 	transform: Transform;
 };
@@ -105,8 +113,17 @@ export class ProtocolWriter {
 			const [only] = runs;
 			if (this.repeatWritten || runs.length !== 1 || only!.break)
 				throw new Error(`${this.repeating} must be a single text line`);
-			if (only!.underline || only!.lineThrough || only!.link !== undefined)
-				throw new Error(`${this.repeating} text cannot be underlined or linked`);
+			if (
+				only!.underline ||
+				only!.lineThrough ||
+				only!.link !== undefined ||
+				only!.rise ||
+				only!.background ||
+				only!.marker
+			)
+				throw new Error(
+					`${this.repeating} text cannot be underlined, linked, raised, or highlighted`,
+				);
 			this.repeatWritten = true;
 			this.binary.record(opcode[this.repeating], () => {
 				this.binary.f32(only!.size);
@@ -134,7 +151,9 @@ export class ProtocolWriter {
 					this.binary.f32(run.size);
 					for (const channel of run.color) this.binary.u8(channel);
 					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-					// 4 an f32 line height follows, 5 to 7 and 9 typography, 8 a decoration colour follows.
+					// 4 an f32 line height follows, 5 to 7, 9, and 11 to 14 typography, 8 a decoration
+					// colour follows, 10 a background colour, 11 an f32 baseline shift, 12 no wrap,
+					// and 13 and 14 a marker.
 					this.binary.u16(
 						(run.break ? 1 : 0) |
 							(run.underline ? 2 : 0) |
@@ -142,12 +161,18 @@ export class ProtocolWriter {
 							(run.link === undefined ? 0 : 8) |
 							(run.lineHeight ? 16 : 0) |
 							typography(run) |
-							(run.decorationColor ? 256 : 0),
+							(run.decorationColor ? 256 : 0) |
+							(run.background ? 1024 : 0) |
+							(run.rise ? 2048 : 0) |
+							(run.whiteSpace === "pre" || run.whiteSpace === "nowrap" ? 4096 : 0) |
+							(run.marker << 13),
 					);
 					if (run.link !== undefined) this.binary.u16(links.indexOf(run.link));
 					if (run.lineHeight) this.binary.f32(run.lineHeight);
 					this.spacing(run);
+					if (run.rise) this.binary.f32(run.rise);
 					for (const channel of run.decorationColor ?? []) this.binary.u8(channel);
+					for (const channel of run.background ?? []) this.binary.u8(channel);
 					this.binary.text(run.text);
 				}
 			});

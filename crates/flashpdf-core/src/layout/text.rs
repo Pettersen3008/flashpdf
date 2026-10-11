@@ -3,9 +3,9 @@ use std::ops::Range;
 use crate::document::Paragraph;
 use crate::font::{Font, FontBook};
 use crate::geometry::{LayoutArea, Point};
-use crate::layout::output::{Gap, LayoutBuffer, PositionedLine, Segment};
+use crate::layout::output::{Gap, LayoutBuffer, PositionedLine, Segment, MARKER_SLOT};
 use crate::layout::LayoutError;
-use crate::{FontId, Pt, RenderError, Rgb, TextAlign, Typography};
+use crate::{FontId, Marker, Pt, RenderError, Rgb, TextAlign, Typography};
 
 struct RunMetrics<'a> {
     font: &'a Font,
@@ -88,6 +88,8 @@ pub(crate) struct ParagraphLayouter<'a> {
     /// The pending word's last glyph: its run and code, for kerning.
     previous: Option<(usize, Range<usize>)>,
     space: Option<Space>,
+    /// The list marker's segment, slot width, and whether it sits inside the line, until the first line takes it.
+    marker: Option<(usize, Pt, bool)>,
 }
 
 impl<'a> ParagraphLayouter<'a> {
@@ -108,6 +110,7 @@ impl<'a> ParagraphLayouter<'a> {
             let (ascent, descent, gap) = font.metrics();
             let scale = run.size.get() / 1000.0;
             let ascent = ascent * scale;
+            let rise = run.typography.rise;
             let content = ascent - descent * scale;
             // CSS half-leading: the difference to the content height splits evenly above and below.
             let (ascent, line_height) = match run.line_height {
@@ -119,8 +122,8 @@ impl<'a> ParagraphLayouter<'a> {
                 id: run.font,
                 size: run.size,
                 color: run.color,
-                ascent: Pt(ascent),
-                depth: Pt(line_height - ascent),
+                ascent: Pt(ascent + rise),
+                depth: Pt(line_height - ascent - rise),
                 typography: run.typography,
                 gapped: run.typography.word_spacing != 0.0 || paragraph.align == TextAlign::Justify,
             });
@@ -140,6 +143,7 @@ impl<'a> ParagraphLayouter<'a> {
             gaps: Vec::new(),
             previous: None,
             space: None,
+            marker: None,
         };
         let mut rest = paragraph.text;
         for (index, run) in paragraph.runs.iter().enumerate() {
@@ -147,6 +151,13 @@ impl<'a> ParagraphLayouter<'a> {
                 .split_at_checked(run.len)
                 .ok_or(LayoutError::InvalidRuns)?;
             rest = remaining;
+            if run.typography.marker != Marker::None {
+                if index != 0 {
+                    return Err(LayoutError::InvalidRuns);
+                }
+                state.marker(text, output)?;
+                continue;
+            }
             state.run(index, text, output)?;
             if run.hard_break {
                 state.word(output)?;
@@ -161,6 +172,46 @@ impl<'a> ParagraphLayouter<'a> {
             state.push_line(output, false);
         }
         Ok(state.height)
+    }
+
+    /// Measures the list marker and queues it for the first line, which `push_line` pairs it
+    /// with. An inside marker starts that line, so the first word wraps below it if it must.
+    fn marker(&mut self, text: &str, output: &mut LayoutBuffer) -> Result<(), LayoutError> {
+        let metrics = &self.runs[0];
+        let shape = match text {
+            "\u{2022}" => 1,
+            "\u{25e6}" => 2,
+            "\u{25aa}" => 3,
+            _ => 0,
+        };
+        let start = output.text.len();
+        let width = if shape == 0 {
+            let mut width = Pt::ZERO;
+            for character in text.chars() {
+                width += metrics.encode(character, &mut output.text)?;
+            }
+            width
+        } else {
+            Pt(metrics.size.get() * MARKER_SLOT)
+        };
+        output.segments.push(Segment {
+            text: start..output.text.len(),
+            x: Pt::ZERO,
+            font: metrics.id,
+            size: metrics.size,
+            color: metrics.color,
+            letter_spacing: metrics.typography.letter_spacing,
+            oblique: metrics.typography.oblique,
+            rise: 0.0,
+            shape,
+        });
+        self.segment_start = output.segments.len();
+        let inside = metrics.typography.marker == Marker::Inside;
+        if inside {
+            (self.used, self.ascent, self.depth) = (width, metrics.ascent, metrics.depth);
+        }
+        self.marker = Some((self.segment_start - 1, width, inside));
+        Ok(())
     }
 
     fn run(
@@ -272,8 +323,19 @@ impl<'a> ParagraphLayouter<'a> {
             .iter()
             .fold(Pt::ZERO, |total, piece| total + piece.lead + piece.width);
         let space = self.space.take();
+        let gap = space.as_ref().map_or(Pt::ZERO, |space| space.width);
+        let started = self.has_word || self.used > Pt::ZERO;
+        let overflow = self.used + gap + width > self.area.width;
+        // A word after a space may still move to the next line; a word that never could, may not.
+        if pieces
+            .iter()
+            .any(|piece| self.runs[piece.run].typography.nowrap)
+            && (width > self.area.width || started && space.is_none() && overflow)
+        {
+            return Err(LayoutError::LineTooWide);
+        }
         if width > self.area.width {
-            if self.has_word {
+            if started {
                 self.push_line(output, true);
             }
             let mut gaps = pending.drain(..).peekable();
@@ -300,8 +362,7 @@ impl<'a> ParagraphLayouter<'a> {
                 }
             }
         } else {
-            let gap = space.as_ref().map_or(Pt::ZERO, |space| space.width);
-            if self.has_word && self.used + gap + width > self.area.width {
+            if started && overflow {
                 self.push_line(output, true);
             } else if let Some(space) = space {
                 if let Some((gap, _)) = self.runs[space.run].word_gap(space.text.end) {
@@ -336,6 +397,7 @@ impl<'a> ParagraphLayouter<'a> {
         let Typography {
             letter_spacing,
             oblique,
+            rise,
             ..
         } = metrics.typography;
         match output.segments.last_mut() {
@@ -345,7 +407,8 @@ impl<'a> ParagraphLayouter<'a> {
                     && last.size == metrics.size
                     && last.color == metrics.color
                     && last.letter_spacing == letter_spacing
-                    && last.oblique == oblique =>
+                    && last.oblique == oblique
+                    && last.rise == rise =>
             {
                 last.text.end = text.end;
             }
@@ -357,6 +420,8 @@ impl<'a> ParagraphLayouter<'a> {
                 color: metrics.color,
                 letter_spacing,
                 oblique,
+                rise,
+                shape: 0,
             }),
         }
         self.used += width;
@@ -404,18 +469,36 @@ impl<'a> ParagraphLayouter<'a> {
         }
         let top = self.area.origin.y + self.height;
         let height = self.ascent + self.depth;
+        let origin = Point {
+            x: self.area.origin.x,
+            y: top + self.ascent,
+        };
         output.lines.push(PositionedLine {
             segments: self.segment_start..output.segments.len(),
-            origin: Point {
-                x: self.area.origin.x,
-                y: top + self.ascent,
-            },
+            origin,
             top,
             bottom: top + height,
             available_width: self.area.width,
             text_width: self.used,
             align: self.align,
         });
+        // The marker follows the first line with the same extent, so the page splitter never parts them.
+        if let Some((segment, width, inside)) = self.marker.take() {
+            let (x, align, available_width, text_width) = if inside {
+                (origin.x, self.align, self.area.width, self.used)
+            } else {
+                (origin.x - width, TextAlign::Left, width, width)
+            };
+            output.lines.push(PositionedLine {
+                segments: segment..segment + 1,
+                origin: Point { x, y: origin.y },
+                top,
+                bottom: top + height,
+                available_width,
+                text_width,
+                align,
+            });
+        }
         self.height += height;
         self.segment_start = output.segments.len();
         self.gap_start = output.gaps.len();

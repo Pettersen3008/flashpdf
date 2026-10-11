@@ -39,6 +39,10 @@ const run = (font, text, extra = {}) => ({
 	letterSpacing: 0,
 	wordSpacing: 0,
 	kerning: true,
+	rise: 0,
+	background: undefined,
+	marker: 0,
+	whiteSpace: "normal",
 	transform: "none",
 	...extra,
 });
@@ -82,7 +86,7 @@ test("given a padded span in a block, when compiling, then it stays a box beside
 test("given a padded span inside a paragraph, when compiling, then rejects with the element path", async () => {
 	await assert.rejects(
 		compiled(jsx("p", { children: jsx("span", { style: { padding: 2 }, children: "x" }) })),
-		/<p> accepts only text, <br>, and <span>, <b>, <strong>, <em>, <i>, <cite>, <a> without box styles on <p>/,
+		/<p> accepts only text, <br>, and inline elements such as <span>, <b>, <a>, and <code> without box styles on <p>/,
 	);
 });
 
@@ -353,4 +357,165 @@ test("given a text-decoration shorthand without a colour inside one with a colou
 			"left",
 		],
 	]);
+});
+
+/** The runs of every paragraph a compiled document writes, in order. */
+const paragraphs = (calls) =>
+	calls.filter(([method]) => method === "paragraph").map(([, runs]) => runs);
+
+test("given a ul and an ol with start, reversed, and an li value, when compiling, then each item's first run is a marker that numbers from them", async () => {
+	const item = (children, props = {}) => jsx("li", { children, ...props });
+	const calls = await compiled(
+		jsxs("main", {
+			children: [
+				jsxs("ul", { children: [item("a"), item("b")] }),
+				jsxs("ol", { start: 3, children: [item("c"), item("d", { value: 10 }), item("e")] }),
+				jsxs("ol", { reversed: true, children: [item("f"), item("g")] }),
+			],
+		}),
+	);
+	const markers = paragraphs(calls).map(([marker, text]) => [
+		marker.marker,
+		marker.text,
+		text.text,
+	]);
+	assert.deepEqual(markers, [
+		[1, "\u2022", "a"],
+		[1, "\u2022", "b"],
+		[1, "3. ", "c"],
+		[1, "10. ", "d"],
+		[1, "11. ", "e"],
+		[1, "2. ", "f"],
+		[1, "1. ", "g"],
+	]);
+});
+
+test("given lists nested three deep, when compiling, then ul markers cycle disc, circle, square and ol stays decimal", async () => {
+	const list = (tag, children) => jsx(tag, { children });
+	const item = (...children) => jsx("li", { children });
+	const calls = await compiled(
+		list("ul", [item("a", list("ul", [item("b", list("ul", [item("c")]))]))]),
+	);
+	const calls2 = await compiled(list("ol", [item("x", list("ul", [item("y")]))]));
+	assert.deepEqual(
+		paragraphs(calls).map(([marker]) => marker.text),
+		["\u2022", "\u25e6", "\u25aa"],
+	);
+	assert.deepEqual(
+		paragraphs(calls2).map(([marker]) => marker.text),
+		["1. ", "\u25e6"],
+	);
+});
+
+test("given list-style-position inside and type none, when compiling, then the marker is inside or absent while the count goes on", async () => {
+	const item = (children) => jsx("li", { children });
+	const calls = await compiled(
+		jsxs("ol", {
+			style: { listStyle: "upper-roman inside" },
+			children: [
+				item("a"),
+				jsx("li", { style: { listStyleType: "none" }, children: "b" }),
+				item("c"),
+			],
+		}),
+	);
+	const runs = paragraphs(calls);
+	assert.deepEqual(
+		runs.map((paragraph) => [paragraph[0].marker, paragraph[0].text]),
+		[
+			[2, "I. "],
+			[0, "b"],
+			[2, "III. "],
+		],
+	);
+});
+
+test("given an li outside a list, a ul with another child, or a value in a ul, when compiling, then rejects", async () => {
+	await assert.rejects(compiled(jsx("li", { children: "x" })), /<li> belongs in a <ul> or <ol>/);
+	await assert.rejects(
+		compiled(jsx("ul", { children: jsx("p", { children: "x" }) })),
+		/<ul> accepts only <li> on <ul>/,
+	);
+	await assert.rejects(
+		compiled(jsx("ul", { children: jsx("li", { value: 2, children: "x" }) })),
+		/value applies only to an <li> in an <ol>/,
+	);
+});
+
+test("given an item that starts with a nested list, when compiling, then its marker takes a line of its own", async () => {
+	const calls = await compiled(
+		jsx("ul", {
+			children: jsx("li", { children: jsx("ul", { children: jsx("li", { children: "in" }) }) }),
+		}),
+	);
+	assert.deepEqual(
+		paragraphs(calls).map(([first, second]) => [first.marker, first.text, second?.text]),
+		[
+			[1, "\u2022", "\u00a0"],
+			[1, "\u25e6", "in"],
+		],
+	);
+});
+
+test("given pre text with tabs, runs of spaces, and newlines, when compiling, then each line is a run that keeps its spaces and tabs reach multiples of 8", async () => {
+	const calls = await compiled(jsx("pre", { children: "\nab\tc  d\n\nend" }));
+	assert.deepEqual(
+		paragraphs(calls)[0].map(({ text, break: hard, font }) => [text, hard, font]),
+		[
+			["ab\u00a0\u00a0\u00a0\u00a0\u00a0\u00a0c\u00a0\u00a0d", true, 8],
+			["", true, 8],
+			["end", false, 8],
+		],
+	);
+});
+
+test("given pre-wrap, pre-line, and nowrap, when compiling, then spaces keep one wrap point, collapse, or never break", async () => {
+	const lines = async (whiteSpace, text) =>
+		paragraphs(await compiled(jsx("p", { style: { whiteSpace }, children: text })))[0].map(
+			({ text }) => text,
+		);
+	assert.deepEqual(await lines("pre-wrap", "  a   b\nc"), ["\u00a0\u00a0a\u00a0\u00a0 b", "c"]);
+	assert.deepEqual(await lines("pre-line", "a   b\n c"), ["a   b", " c"]);
+	assert.deepEqual(await lines("nowrap", "  a \n  b  "), ["a\u00a0b"]);
+});
+
+test("given sub and sup inside each other and a mark, when compiling, then the rise accumulates, the size shrinks, and the mark carries its background", async () => {
+	const calls = await compiled(
+		jsxs("p", {
+			children: [
+				"x",
+				jsx("sup", { children: ["2", jsx("sub", { children: "i" })] }),
+				jsx("mark", { children: "m" }),
+			],
+		}),
+	);
+	const [[x, two, i, mark]] = paragraphs(calls);
+	// A sup lifts a third of the parent's size and a nested sub lowers a fifth of the sup's.
+	assert.deepEqual([x.rise, two.rise], [0, 0.33 * 12]);
+	assert.ok(Math.abs(i.rise - (0.33 * 12 - 0.2 * two.size)) < 1e-9);
+	assert.ok(Math.abs(two.size - 12 * 0.83) < 1e-5 && i.size < two.size);
+	assert.deepEqual(
+		[mark.background, mark.color],
+		[
+			[255, 255, 0],
+			[0, 0, 0],
+		],
+	);
+});
+
+test("given vertical-align on a block, a box, or with an unknown value, when compiling, then rejects", async () => {
+	await assert.rejects(
+		compiled(jsx("p", { style: { verticalAlign: "sub" }, children: "x" })),
+		/vertical-align applies only to inline elements/,
+	);
+	await assert.rejects(
+		compiled(jsx("sup", { style: { padding: 2 }, children: "x" })),
+		/vertical-align: super shifts text within a line, and <sup> has box styles/,
+	);
+	await assert.rejects(
+		compiled(
+			jsx("p", { children: jsx("span", { style: { verticalAlign: "middle" }, children: "x" }) }),
+		),
+		/invalid verticalAlign: middle/,
+	);
 });

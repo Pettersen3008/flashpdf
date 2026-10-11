@@ -4,7 +4,7 @@ export type RejectedProperty =
 	| "minWidth"
 	| "maxWidth"
 	| "borderRadius"
-	| "verticalAlign"
+	| "listStyleImage"
 	| "objectFit"
 	| "borderCollapse"
 	| "borderSpacing";
@@ -46,6 +46,13 @@ const properties = {
 	// CSS propagates decoration to descendants rather than inheriting it; the effect is the same here.
 	textDecoration: { css: "text-decoration", inherited: true },
 	textDecorationColor: { css: "text-decoration-color", inherited: true },
+	whiteSpace: { css: "white-space", inherited: true },
+	// Not inherited: the compiler accumulates the shift down nested inline elements.
+	verticalAlign: { css: "vertical-align" },
+	// Inherited so a child sees the shorthand in its cascade order, which decides against longhands.
+	listStyle: { css: "list-style", inherited: true },
+	listStyleType: { css: "list-style-type", inherited: true },
+	listStylePosition: { css: "list-style-position", inherited: true },
 	color: { inherited: true },
 	// Inherits through the compiler's text state: a factor stays a factor, a length stays a length.
 	lineHeight: { css: "line-height" },
@@ -68,9 +75,9 @@ const properties = {
 		css: "object-fit",
 		unsupported: "size an image with width and height; it always scales to fill them",
 	},
-	verticalAlign: {
-		css: "vertical-align",
-		unsupported: "cells align to the top; middle and bottom are not implemented",
+	listStyleImage: {
+		css: "list-style-image",
+		unsupported: "markers are text or drawn shapes; choose list-style-type",
 	},
 	borderCollapse: {
 		css: "border-collapse",

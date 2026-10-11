@@ -2,7 +2,17 @@ import assert from "node:assert/strict";
 
 import { test } from "vitest";
 
-import { color, courier, edges, font, helvetica, point, style, times } from "../dist/style.js";
+import {
+	color,
+	counter,
+	courier,
+	edges,
+	font,
+	helvetica,
+	point,
+	style,
+	times,
+} from "../dist/style.js";
 
 test("given pt, px, em, and rem lengths, when resolving a point value, then converts to points", () => {
 	assert.equal(point("12pt"), 12);
@@ -122,4 +132,55 @@ test("given an oblique angle, a percent spacing, a wavy line, or another transfo
 		[{ textTransform: "full-width" }, /invalid textTransform: full-width/],
 	])
 		assert.throws(() => style(value), message);
+});
+
+test("given list-style, when normalizing, then omitted parts reset and unsupported parts reject", () => {
+	assert.deepEqual(
+		[
+			style({ listStyle: "inside" }).listStyleType,
+			style({ listStyle: "inside" }).listStylePosition,
+		],
+		["disc", "inside"],
+	);
+	assert.equal(style({ listStyleType: "square", listStyle: "none" }).listStyleType, "none");
+	assert.equal(style({ listStyle: "none upper-roman" }).listStyleType, "upper-roman");
+	assert.throws(() => style({ listStyle: "url(x.png)" }), /list-style-image is not supported/);
+	assert.throws(
+		() => style({ listStyleType: "lower-greek" }),
+		/invalid listStyleType: lower-greek/,
+	);
+	assert.throws(() => style({ listStylePosition: "middle" }), /invalid listStylePosition/);
+	assert.throws(() => style({ listStyleImage: "none" }), /listStyleImage/);
+});
+
+test("given ordinals outside a counter's range, when numbering, then letters and numerals count and the rest fall back to decimal", () => {
+	assert.deepEqual(
+		[1, 26, 27, 703].map((n) => counter("lower-alpha", n)),
+		["a", "z", "aa", "aaa"],
+	);
+	assert.deepEqual(
+		[4, 9, 1994, 3999].map((n) => counter("upper-roman", n)),
+		["IV", "IX", "MCMXCIV", "MMMCMXCIX"],
+	);
+	assert.deepEqual(
+		[0, -3, 4000].map((n) => [counter("lower-alpha", n), counter("lower-roman", n)]),
+		[
+			["0", "0"],
+			["-3", "-3"],
+			["ewv", "4000"],
+		],
+	);
+	assert.deepEqual(
+		[7, 0, -5, 123].map((n) => counter("decimal-leading-zero", n)),
+		["07", "00", "-05", "123"],
+	);
+});
+
+test("given white-space and vertical-align values, when normalizing, then only the supported keywords pass", () => {
+	for (const whiteSpace of ["normal", "nowrap", "pre", "pre-wrap", "pre-line"])
+		style({ whiteSpace });
+	assert.throws(() => style({ whiteSpace: "break-spaces" }), /invalid whiteSpace: break-spaces/);
+	for (const verticalAlign of ["baseline", "sub", "super"]) style({ verticalAlign });
+	assert.throws(() => style({ verticalAlign: "top" }), /invalid verticalAlign: top/);
+	assert.throws(() => style({ verticalAlign: "toString" }), /invalid verticalAlign/);
 });

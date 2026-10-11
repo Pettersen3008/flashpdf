@@ -20,7 +20,7 @@ use pdf_writer::types::AssociationKind;
 use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
-use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle, BUILT_IN};
+use crate::{Edges, FontId, Marker, OwnedCommand, RunDecoration, TextRun, TextStyle, BUILT_IN};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -33,7 +33,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 15;
+const VERSION: u16 = 16;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -399,11 +399,9 @@ impl Decoder {
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
                     // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-                    // 4 an f32 line height follows, 5 to 7 and 9 typography, 8 a decoration colour follows.
+                    // 4 an f32 line height follows, 5 to 7, 9, and 11 to 14 typography, 8 a decoration
+                    // colour follows, and 10 a background colour.
                     let flags = cursor.u16()?;
-                    if flags > 0x3ff {
-                        return Err(ProtocolError::InvalidValue("run flags"));
-                    }
                     let link = if flags & 8 != 0 {
                         Some(cursor.u16()?)
                             .filter(|index| usize::from(*index) < links.len())
@@ -418,7 +416,15 @@ impl Decoder {
                         None
                     };
                     let typography = cursor.typography(flags)?;
+                    if typography.marker != Marker::None && !runs.is_empty() {
+                        return Err(ProtocolError::InvalidValue("marker run"));
+                    }
                     let decoration_color = if flags & 256 != 0 {
+                        Some(cursor.rgb()?)
+                    } else {
+                        None
+                    };
+                    let background = if flags & 1024 != 0 {
                         Some(cursor.rgb()?)
                     } else {
                         None
@@ -437,6 +443,7 @@ impl Decoder {
                             line_through: flags & 4 != 0,
                             color: decoration_color,
                             link,
+                            background,
                         },
                         typography,
                     });

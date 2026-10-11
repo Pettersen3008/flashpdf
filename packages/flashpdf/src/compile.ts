@@ -7,6 +7,7 @@ import type { ProtocolWriter, Column, Run } from "./protocol.js";
 import {
 	boxStyle,
 	color,
+	counter,
 	decoration,
 	decorationColor,
 	dimension,
@@ -15,14 +16,20 @@ import {
 	helvetica,
 	kerning,
 	lineHeight,
+	listStylePosition,
+	listStyleType,
 	point,
+	SHAPES,
 	spacing,
 	transform,
+	verticalAlign,
+	whiteSpace,
 	type Box,
 	type FontSlots,
 	type LineHeight,
 	type NormalizedStyle,
 	type Transform,
+	type WhiteSpace,
 } from "./style.js";
 import { locate, rowOnly } from "./tree.js";
 
@@ -42,8 +49,17 @@ type TextState = {
 	letterSpacing: number;
 	wordSpacing: number;
 	transform: Transform;
+	whiteSpace: WhiteSpace;
+	/** Baseline shift in points, up positive; `sub` and `sup` add to their parent's. */
+	rise: number;
+	/** The background of the nearest enclosing `<mark>`. */
+	background: [number, number, number] | undefined;
 	/** The nearest enclosing `<a href>`. */
 	link: string | undefined;
+	/** Set on the direct children of a `ul` or `ol`, whose items number themselves from it. */
+	list: { next: number; step: number; ordered: boolean } | undefined;
+	/** The list item being compiled, which its first paragraph empties by taking the marker. */
+	item: { marker: Run | undefined } | undefined;
 };
 /** `cell` is set only for the direct children of a table row. */
 type Context = TextState & { inRow: boolean; cell?: boolean };
@@ -64,13 +80,41 @@ const ROOT: Context = {
 	letterSpacing: 0,
 	wordSpacing: 0,
 	transform: "none",
+	whiteSpace: "normal",
+	rise: 0,
+	background: undefined,
 	link: undefined,
+	list: undefined,
+	item: undefined,
 	inRow: false,
 };
 
-const INLINE_TAGS = new Set<string>(["span", "b", "strong", "em", "i", "cite", "a", "br"]);
+const INLINE_TAGS = new Set<string>([
+	"span",
+	"b",
+	"strong",
+	"em",
+	"i",
+	"cite",
+	"a",
+	"br",
+	"small",
+	"sub",
+	"sup",
+	"u",
+	"ins",
+	"s",
+	"del",
+	"mark",
+	"code",
+	"kbd",
+	"samp",
+]);
 const INLINE_ONLY =
-	"accepts only text, <br>, and <span>, <b>, <strong>, <em>, <i>, <cite>, <a> without box styles";
+	"accepts only text, <br>, and inline elements such as <span>, <b>, <a>, and <code> without box styles";
+const NBSP = "\u00a0";
+/** Blocks with no line of text of their own, so a marker before them takes a line of its own. */
+const MARKER_ALONE = new Set<string>(["ul", "ol", "table", "img", "hr"]);
 
 /** CSS collapsible whitespace only; U+00A0 is content. */
 function blank(text: string) {
@@ -94,6 +138,10 @@ const ENGINE_ERRORS = new Map([
 	[
 		"TextTooWide",
 		"TextTooWide: a character, or a header or footer line, is wider than its space; reduce the font size or widen the column",
+	],
+	[
+		"LineTooWide",
+		"LineTooWide: a line of white-space: pre or nowrap text is wider than its container; shorten it, reduce the font size, or use white-space: pre-wrap",
 	],
 ]);
 /** Explains the engine's bare error codes; `locate` then names the element. */
@@ -133,7 +181,14 @@ function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): Text
 				: spacing(style.wordSpacing, size, "wordSpacing"),
 		transform:
 			style.textTransform === undefined ? current.transform : transform(style.textTransform),
+		whiteSpace: style.whiteSpace === undefined ? current.whiteSpace : whiteSpace(style.whiteSpace),
+		rise:
+			current.rise +
+			(style.verticalAlign === undefined ? 0 : verticalAlign(style.verticalAlign, current.size)),
+		background: current.background,
 		link: current.link,
+		list: undefined,
+		item: current.item,
 	};
 }
 
@@ -154,6 +209,10 @@ function run(state: TextState, text: string, hardBreak = false): Run {
 		letterSpacing: state.letterSpacing,
 		wordSpacing: state.wordSpacing,
 		kerning: state.kerning,
+		rise: state.rise,
+		background: state.background,
+		marker: 0,
+		whiteSpace: state.whiteSpace,
 		transform: state.transform,
 	};
 }
@@ -175,6 +234,9 @@ function push(runs: Run[], next: Run) {
 		last.letterSpacing === next.letterSpacing &&
 		last.wordSpacing === next.wordSpacing &&
 		last.kerning === next.kerning &&
+		last.rise === next.rise &&
+		String(last.background) === String(next.background) &&
+		last.whiteSpace === next.whiteSpace &&
 		last.transform === next.transform &&
 		last.color.every((channel, index) => channel === next.color[index])
 	) {
@@ -191,13 +253,15 @@ function inlineRuns(node: StyledNode, context: Context, fonts: Fonts): Run[] | u
 	try {
 		const style = node.style;
 		rowOnly(style, context.inRow);
-		if (
-			boxStyle(style, context.size) ||
-			style.breakBefore === "page" ||
-			style.breakAfter === "page"
-		)
+		// A `<mark>` paints its background behind each line of its text, so only box edges make it a box.
+		const paint = boxStyle(style, context.size);
+		const highlight =
+			node.tag === "mark" &&
+			paint?.margin.concat(paint.padding, paint.border).every((edge) => !edge);
+		if ((paint && !highlight) || style.breakBefore === "page" || style.breakAfter === "page")
 			return undefined;
 		const next = inherit(style, context, fonts);
+		if (highlight && paint?.background) next.background = paint.background;
 		if (next.align !== context.align) return undefined;
 		return collect(node.children, { ...next, inRow: false, link: node.href ?? next.link }, fonts);
 	} catch (error) {
@@ -229,12 +293,75 @@ function writeParagraph(
 		throw new Error("page tokens are only valid in a header or footer");
 	// A word may span runs, so each run sees the text before it.
 	let before = "";
-	const shown = runs.map((item) => {
-		const text = transformText(item.text, item.transform, before);
-		before = item.break ? "" : item.text;
-		return { ...item, text };
-	});
+	const shown = preserve(
+		runs.map((item) => {
+			const text = transformText(item.text, item.transform, before);
+			before = item.break ? "" : item.text;
+			return { ...item, text };
+		}),
+	);
+	// The first paragraph of a list item takes its marker, which hangs before that paragraph's first line.
+	if (state.item?.marker) {
+		shown.unshift(state.item.marker);
+		state.item.marker = undefined;
+	}
 	writer.paragraph(shown, state.align);
+}
+
+/** Applies `white-space` to a paragraph's runs. In `pre`, `pre-wrap`, and `pre-line` a newline ends
+ *  the line. The engine collapses every ASCII space, so `pre` and `pre-wrap` keep spaces as U+00A0,
+ *  but `pre-wrap` leaves the last of a run of spaces as a space, where the line may wrap. `nowrap`
+ *  collapses to one U+00A0 so its words never break. A tab reaches the next multiple of 8 columns. */
+function preserve(runs: readonly Run[]): Run[] {
+	const result: Run[] = [];
+	let column = 0;
+	// The line has text, and it ends in a space that may wrap, or in a collapsed one.
+	let started = false;
+	let loose = false;
+	for (const [index, item] of runs.entries()) {
+		const mode = item.whiteSpace;
+		if (mode === "normal") {
+			result.push(item);
+			continue;
+		}
+		let piece = "";
+		let spaces = 0;
+		const flush = () => {
+			if (!spaces) return;
+			const kept = mode === "pre-wrap" && started && !loose ? spaces - 1 : spaces;
+			piece += NBSP.repeat(kept) + " ".repeat(spaces - kept);
+			loose = kept < spaces;
+			column += spaces;
+			spaces = 0;
+		};
+		for (const char of item.text.replace(/\r\n?/g, "\n")) {
+			if (char === "\n" && mode !== "nowrap") {
+				flush();
+				result.push({ ...item, text: piece, break: true });
+				[piece, column, started, loose] = ["", 0, false, false];
+			} else if (mode === "pre-line") piece += char;
+			else if (mode === "nowrap") {
+				if (/[ \t\n\f]/.test(char)) {
+					if (started && !loose) piece += NBSP;
+					loose = started;
+				} else [piece, started, loose] = [piece + char, true, false];
+			} else if (char === " " || char === "\t")
+				spaces += char === " " ? 1 : 8 - ((column + spaces) % 8);
+			else {
+				flush();
+				[piece, column, started, loose] = [piece + char, column + 1, true, false];
+			}
+		}
+		flush();
+		// A collapsed space at the end of a line goes.
+		if (mode === "nowrap" && loose && (item.break || index === runs.length - 1)) {
+			piece = piece.slice(0, -1);
+			loose = false;
+		}
+		if (piece || item.break) result.push({ ...item, text: piece, break: item.break });
+		if (item.break) [column, started, loose] = [0, false, false];
+	}
+	return result;
 }
 
 /** A letter starts a word unless a letter, digit, or mark precedes it, or an apostrophe,
@@ -295,8 +422,15 @@ function flow(
 	};
 	let runs: Run[] = [];
 	const flush = () => {
-		// Whitespace between block-level children makes no line, as in CSS.
-		if (runs.some((item) => item.break || !blank(item.text))) {
+		// Whitespace between block-level children makes no line, as in CSS, unless it is preformatted.
+		if (
+			runs.some(
+				(item) =>
+					item.break ||
+					!blank(item.text) ||
+					(item.text && item.whiteSpace !== "normal" && item.whiteSpace !== "nowrap"),
+			)
+		) {
 			separate();
 			writeParagraph(writer, runs, context, pageTokens);
 		}
@@ -344,6 +478,58 @@ function column(value: StyledNode): Column {
 	return { kind: 1, value: 1 };
 }
 
+/** `ul` and `ol` start the counter their items number themselves from; an `li` takes the next
+ *  number and, unless its type is `none`, owes its first paragraph a marker. */
+function listState(node: StyledElement, next: TextState, context: TextState) {
+	if (node.tag === "ul" || node.tag === "ol") {
+		for (const child of node.children)
+			if (child.kind === "text" ? !blank(child.value) : child.tag !== "li")
+				throw new Error(`<${node.tag}> accepts only <li>`);
+		const count = node.children.filter((child) => child.kind === "element").length;
+		next.list = {
+			next: node.start ?? (node.reversed ? count : 1),
+			step: node.reversed ? -1 : 1,
+			ordered: node.tag === "ol",
+		};
+	} else if (node.tag === "li") {
+		const list = context.list;
+		if (!list) throw new Error("<li> belongs in a <ul> or <ol>");
+		if (node.value !== undefined && !list.ordered)
+			throw new Error("value applies only to an <li> in an <ol>");
+		const ordinal = node.value ?? list.next;
+		list.next = ordinal + list.step;
+		const type = listStyleType(node.style.listStyleType ?? "disc");
+		const inside = listStylePosition(node.style.listStylePosition ?? "outside") === "inside";
+		const text = SHAPES[type] ?? `${counter(type, ordinal)}. `;
+		// A marker is plain text in the item's font, whatever the item inherits.
+		next.item = {
+			marker:
+				type === "none"
+					? undefined
+					: {
+							...run(next, text),
+							underline: false,
+							lineThrough: false,
+							decorationColor: undefined,
+							link: undefined,
+							background: undefined,
+							rise: 0,
+							marker: inside ? 2 : 1,
+							whiteSpace: "normal",
+							transform: "none",
+						},
+		};
+	}
+}
+
+/** HTML ignores one newline right after `<pre>`, so a template literal can start on its own line. */
+function withoutLeadingNewline(children: readonly StyledNode[]): readonly StyledNode[] {
+	const [first, ...rest] = children;
+	return first?.kind === "text"
+		? [{ ...first, value: first.value.replace(/^\r?\n/, "") }, ...rest]
+		: children;
+}
+
 function element(
 	node: StyledElement,
 	writer: ProtocolWriter,
@@ -355,6 +541,8 @@ function element(
 	const style = node.style;
 	if (style.height !== undefined && node.tag !== "img")
 		throw new Error("height applies only to <img> (block height comes from content)");
+	if (style.verticalAlign !== undefined && !INLINE_TAGS.has(node.tag))
+		throw new Error("vertical-align applies only to inline elements; table cells align to the top");
 	switch (node.tag) {
 		case "div":
 		case "main":
@@ -362,6 +550,18 @@ function element(
 		case "article":
 		case "header":
 		case "footer":
+		case "ul":
+		case "ol":
+		case "li":
+		case "dl":
+		case "dt":
+		case "dd":
+		case "blockquote":
+		case "address":
+		case "figure":
+		case "figcaption":
+		case "nav":
+		case "aside":
 		case "td":
 		case "th": {
 			if ((node.tag === "td" || node.tag === "th") && !context.cell)
@@ -369,12 +569,19 @@ function element(
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
+			listState(node, next, context);
+			const owed = node.tag === "li" ? next.item : undefined;
 			const paint = boxStyle(style, next.size);
 			const streamed = streamMargin(paint, context, style);
 			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
 			box(writer, streamed ? undefined : paint, () => {
 				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
 				const inner = { ...next, inRow: false };
+				const alone = () => writeParagraph(writer, [run(inner, NBSP)], inner, pageTokens);
+				const first = node.children.find(
+					(child) => child.kind === "element" || !blank(child.value),
+				);
+				if (owed?.marker && first?.kind === "element" && MARKER_ALONE.has(first.tag)) alone();
 				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
 				// A whitespace-only text child is no flex item, as in CSS.
 				const items = node.children.filter((child) => child.kind !== "text" || !blank(child.value));
@@ -395,6 +602,7 @@ function element(
 					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
 					writer.stackEnd();
 				} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
+				if (owed?.marker) alone();
 			});
 			if (streamed && paint?.margin[2]) writer.spacer(paint.margin[2]);
 			pageBreak(writer, style, "breakAfter", depth);
@@ -407,6 +615,18 @@ function element(
 		case "em":
 		case "i":
 		case "cite":
+		case "small":
+		case "sub":
+		case "sup":
+		case "u":
+		case "ins":
+		case "s":
+		case "del":
+		case "mark":
+		case "code":
+		case "kbd":
+		case "samp":
+		case "pre":
 		case "p":
 		case "h1":
 		case "h2":
@@ -418,12 +638,18 @@ function element(
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
 			const inner = { ...next, inRow: false, link: node.href ?? next.link };
-			const runs = collect(node.children, inner, fonts);
+			const children = node.tag === "pre" ? withoutLeadingNewline(node.children) : node.children;
+			const runs = collect(children, inner, fonts);
 			// A link around layout nodes (an image, a card) flows them as a block; every run inside links.
 			if (runs === undefined && node.tag !== "a") throw new Error(`<${node.tag}> ${INLINE_ONLY}`);
-			box(writer, boxStyle(style, next.size), () =>
+			const paint = boxStyle(style, next.size);
+			if (paint && style.verticalAlign && style.verticalAlign !== "baseline")
+				throw new Error(
+					`vertical-align: ${style.verticalAlign} shifts text within a line, and <${node.tag}> has box styles that make it a block`,
+				);
+			box(writer, paint, () =>
 				runs === undefined
-					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
+					? flow(children, writer, fonts, inner, depth, pageTokens, 0)
 					: writeParagraph(writer, runs, next, pageTokens),
 			);
 			pageBreak(writer, style, "breakAfter", depth);

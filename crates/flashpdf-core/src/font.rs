@@ -90,8 +90,10 @@ impl Font {
                 Ok(standard::width(*face, byte))
             }
             Self::Embedded(font) => {
+                // A font without U+00A0 shows its space, as browsers do; preformatted text relies on it.
                 let gid = font
                     .glyph(character)
+                    .or_else(|| font.glyph(' ').filter(|_| character == '\u{a0}'))
                     .ok_or(RenderError::MissingGlyph(character))?;
                 out.extend(gid.to_be_bytes());
                 Ok(font.advance(gid))

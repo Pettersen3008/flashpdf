@@ -3,6 +3,7 @@ import { supported, unsupported } from "./css/properties.js";
 import { decoration, decorationColor } from "./style/decoration.js";
 import { bold, italic } from "./style/font.js";
 import { dimension, flexGrow, lineHeight, point, spacing } from "./style/length.js";
+import { listStylePosition, listStyleType } from "./style/list.js";
 import { normalize } from "./style/normalize.js";
 import type { NormalizedStyle } from "./style/types.js";
 
@@ -12,11 +13,30 @@ export { color } from "./style/color.js";
 export { decoration, decorationColor } from "./style/decoration.js";
 export { bold, courier, face, font, helvetica, times } from "./style/font.js";
 export { dimension, lineHeight, point, spacing, type LineHeight } from "./style/length.js";
+export { counter, listStylePosition, listStyleType, SHAPES } from "./style/list.js";
 
 export function kerning(value: unknown): boolean {
 	if (value !== "auto" && value !== "normal" && value !== "none")
 		throw new Error(`invalid fontKerning: ${String(value)} (use auto, normal, or none)`);
 	return value !== "none";
+}
+
+const WHITE_SPACE = new Set(["normal", "nowrap", "pre", "pre-wrap", "pre-line"]);
+export type WhiteSpace = "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
+export function whiteSpace(value: unknown): WhiteSpace {
+	if (typeof value !== "string" || !WHITE_SPACE.has(value))
+		throw new Error(
+			`invalid whiteSpace: ${String(value)} (use normal, nowrap, pre, pre-wrap, or pre-line)`,
+		);
+	return value as WhiteSpace;
+}
+
+/** The baseline shift of `sub` and `super` as a fraction of the parent's font size, upward. */
+const SHIFTS = { baseline: 0, sub: -0.2, super: 0.33 };
+export function verticalAlign(value: unknown, parent: number): number {
+	if (typeof value !== "string" || !Object.hasOwn(SHIFTS, value))
+		throw new Error(`invalid verticalAlign: ${String(value)} (use baseline, sub, or super)`);
+	return SHIFTS[value as keyof typeof SHIFTS] * parent;
 }
 
 const TRANSFORMS = new Set(["none", "uppercase", "lowercase", "capitalize"]);
@@ -73,6 +93,10 @@ export function style(value: unknown): NormalizedStyle {
 	if (result.wordSpacing !== undefined) spacing(result.wordSpacing, 12, "wordSpacing");
 	if (result.textTransform !== undefined) transform(result.textTransform);
 	if (result.textDecorationColor !== undefined) decorationColor(result.textDecorationColor);
+	if (result.whiteSpace !== undefined) whiteSpace(result.whiteSpace);
+	if (result.verticalAlign !== undefined) verticalAlign(result.verticalAlign, 12);
+	if (result.listStyleType !== undefined) listStyleType(result.listStyleType);
+	if (result.listStylePosition !== undefined) listStylePosition(result.listStylePosition);
 	if (result.lineHeight !== undefined) lineHeight(result.lineHeight, 12);
 	const family = result.fontFamily;
 	if (family !== undefined && (typeof family !== "string" || !family.trim()))

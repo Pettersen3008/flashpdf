@@ -311,8 +311,18 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&bad_length), "truncated record");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
-    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 1024, b"x")]));
+    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 3 << 13, b"x")]));
     assert_eq!(push_error(&bad_flags), "invalid run flags");
+
+    let mut late_marker = header(VERSION, 120.0, 60.0, 10.0);
+    late_marker.extend(paragraph(
+        0,
+        &[
+            (0, 10.0, [0, 0, 0], 0, b"x"),
+            (0, 10.0, [0, 0, 0], 1 << 13, b"1."),
+        ],
+    ));
+    assert_eq!(push_error(&late_marker), "invalid marker run");
 
     let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);
     bad_align.extend(paragraph(4, &[(0, 10.0, [0, 0, 0], 0, b"x")]));

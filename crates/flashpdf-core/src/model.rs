@@ -207,7 +207,15 @@ impl TextStyle {
     }
 }
 
-/// Spacing and slant of a run; `NORMAL` changes nothing.
+/// A list marker: hung before the paragraph's first line, or filling its start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Marker {
+    None,
+    Outside,
+    Inside,
+}
+
+/// Spacing, slant, and placement of a run; `NORMAL` changes nothing.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Typography {
     /// CSS `letter-spacing` in points, added after every character.
@@ -218,6 +226,13 @@ pub struct Typography {
     pub oblique: bool,
     /// CSS `font-kerning`: `auto` and `normal` kern pairs within a word.
     pub kerning: bool,
+    /// Baseline shift in points, up positive: `vertical-align: sub | super`.
+    pub rise: f32,
+    /// A word wider than its line is an error, not a break: `white-space: pre | nowrap`.
+    pub nowrap: bool,
+    /// Only the first run of a paragraph may be a marker. The shapes U+2022, U+25E6, and
+    /// U+25AA draw a disc, circle, or square; any other text is shown in the run's font.
+    pub marker: Marker,
 }
 
 impl Typography {
@@ -226,6 +241,9 @@ impl Typography {
         word_spacing: 0.0,
         oblique: false,
         kerning: true,
+        rise: 0.0,
+        nowrap: false,
+        marker: Marker::None,
     };
 }
 
@@ -253,6 +271,8 @@ pub struct RunDecoration {
     pub color: Option<Rgb>,
     /// Index into the paragraph's URI table.
     pub link: Option<u16>,
+    /// CSS `background-color` of an inline element, painted behind each line segment.
+    pub background: Option<Rgb>,
 }
 
 /// An image's requested width; `Auto` is the intrinsic size at 96 px per inch, capped to the container.
@@ -315,6 +335,8 @@ pub enum RenderError {
     InvalidFontSize,
     UnsupportedCharacter(char),
     TextTooWide,
+    /// A `white-space: pre` or `nowrap` line is wider than its container.
+    LineTooWide,
     PageOverflow,
     /// A table row and its repeated header exceed an empty page; the index is the table child.
     TableRowOverflow(usize),

@@ -2,6 +2,19 @@ export type Length = number | "0" | `${number}${"pt" | "px" | "em" | "rem"}`;
 export type Width = number | `${number}${"pt" | "px" | "%"}`;
 export type SignedLength = Length | `-${Length}`;
 type TextDecorationLine = "none" | "underline" | "line-through" | "underline line-through";
+export type ListStyleType =
+	| "disc"
+	| "circle"
+	| "square"
+	| "decimal"
+	| "decimal-leading-zero"
+	| "lower-alpha"
+	| "lower-latin"
+	| "upper-alpha"
+	| "upper-latin"
+	| "lower-roman"
+	| "upper-roman"
+	| "none";
 export type Edges =
 	| Length
 	| `${Length} ${Length}`
@@ -53,6 +66,14 @@ export type Style = {
 	/** Lines, optionally followed by a colour, as in `underline red`. */
 	textDecoration?: TextDecorationLine | `${TextDecorationLine} ${string}`;
 	textDecorationColor?: string;
+	/** Collapses whitespace unless `pre`, `pre-wrap`, or `pre-line`. `pre` and `nowrap` reject a line wider than its container. */
+	whiteSpace?: "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
+	/** Only on inline elements: `sub` and `super` shift the baseline by a fraction of the parent's size. */
+	verticalAlign?: "baseline" | "sub" | "super";
+	/** Omitted parts reset to `disc` and `outside`, as in CSS. */
+	listStyle?: string;
+	listStyleType?: ListStyleType;
+	listStylePosition?: "outside" | "inside";
 	color?: string;
 	breakBefore?: "auto" | "page";
 	breakAfter?: "auto" | "page";
@@ -80,8 +101,21 @@ export type CommonProps = {
 };
 export type BlockProps = CommonProps & { children?: PdfNode | undefined };
 export type VoidProps = CommonProps & { children?: never };
+/** `start` is the first item's number, and `reversed` counts down. */
+export type OrderedListProps = BlockProps & {
+	start?: number | undefined;
+	reversed?: boolean | undefined;
+};
+/** `value` sets this item's number in an `ol`. */
+export type ListItemProps = BlockProps & { value?: number | undefined };
 /** `src` is the PNG or JPEG file bytes; `alt` is stored for accessibility tagging. */
 export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined };
 /** `href` must be an absolute `http:`, `https:`, or `mailto:` URL. */
 export type LinkProps = BlockProps & { href: string };
-export type PdfProps = BlockProps | VoidProps | ImageProps | LinkProps;
+export type PdfProps =
+	| BlockProps
+	| VoidProps
+	| ImageProps
+	| LinkProps
+	| OrderedListProps
+	| ListItemProps;

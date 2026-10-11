@@ -509,10 +509,7 @@ test("given an hr border, when rendering, then uses the author rule", async () =
 });
 
 test("given non-native JSX, when rendering, then rejects it", async () => {
-	await assert.rejects(
-		render({ type: "ul", props: {} }),
-		/unsupported element <ul>: lists are not supported yet/,
-	);
+	await assert.rejects(render({ type: "marquee", props: {} }), /unsupported element <marquee>/);
 });
 
 test("given a table that spans two pages, when rendering, then the header row repeats on the second page", async () => {
@@ -756,4 +753,66 @@ test("given AVA in Helvetica, when rendered, then TJ tightens both pairs unless 
 		string(await render(jsx("p", { style: { fontKerning }, children: "AVA" })));
 	assert.match(await show("auto"), /\[\(A\) 70 \(V\) 80 \(A\)\] TJ/);
 	assert.match(await show("none"), /\(AVA\) Tj/);
+});
+
+test("given lists, a pre block, and inline elements, when rendered, then the PDF draws marker shapes, sets pre in Courier, and fills the mark", async () => {
+	const item = (children) => jsx("li", { children });
+	const document = jsxs("main", {
+		children: [
+			jsxs("ul", { children: [item("one"), item("two")] }),
+			jsxs("ol", { style: { listStyleType: "lower-roman" }, children: [item("three")] }),
+			jsx("pre", { children: "a\tb" }),
+			jsxs("p", {
+				children: [
+					"H",
+					jsx("sub", { children: "2" }),
+					"O ",
+					jsx("mark", { children: "mark" }),
+					jsx("code", { children: "code" }),
+				],
+			}),
+		],
+	});
+	const pdf = await render(document);
+	const text = string(pdf);
+	assert.match(text, /\/BaseFont \/Courier\b/);
+	// A disc is a polygon fill and the numeral is text; the mark's yellow fill comes before its text.
+	assert.match(text, /\nh\nf\n/);
+	assert.match(text, /\(i\. \) Tj/);
+	assert.match(text, /1 1 0 rg\n[^]*?\nf\n[^]*?BT/);
+	assert.deepEqual(pdf, await render(document));
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-lists.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+});
+
+test("given a pre line wider than its container, when rendering, then rejects naming the element unless it is pre-wrap", async () => {
+	const line = "x".repeat(200);
+	await assert.rejects(
+		render(jsx("pre", { children: line })),
+		/LineTooWide: a line of white-space: pre or nowrap text is wider than its container.* on <pre>/,
+	);
+	await assert.rejects(
+		render(jsx("p", { style: { whiteSpace: "nowrap" }, children: line })),
+		/LineTooWide/,
+	);
+	await render(jsx("pre", { style: { whiteSpace: "pre-wrap" }, children: line }));
+});
+
+test("given a list and a pre block in an embedded font under PDF/A, when rendered, then markers are drawn and the spaces use the font", async () => {
+	const pdf = await render(
+		jsxs("main", {
+			style: { fontFamily: "Abel" },
+			children: [
+				jsx("ul", { children: jsx("li", { children: "Item" }) }),
+				jsx("pre", { style: { fontFamily: "Abel" }, children: "a  b" }),
+			],
+		}),
+		{ pdfa: "3b", fonts: [{ family: "Abel", regular: font }] },
+	);
+	assert.doesNotMatch(string(pdf), /\/Type1\b/);
+	assert.match(string(pdf), /\nh\nf\n/);
 });
