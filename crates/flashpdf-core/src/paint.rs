@@ -5,73 +5,68 @@ use pdf_writer::{Content, Name, Str};
 use crate::font::font_name;
 use crate::geometry::Point;
 use crate::layout::{LayoutBuffer, Segment};
+use crate::structure::{Structure, ARTIFACT};
 use crate::{Pt, Rgb, TextAlign};
 
 /// A `/Link` annotation rectangle in page coordinates: `[x1, y1, x2, y2]`.
 pub(crate) struct PageLink {
     pub(crate) rect: [f32; 4],
     pub(crate) uri: String,
-}
-
-pub(crate) enum PageTag {
-    Paragraph,
-    Figure(String),
+    /// Tagged output only: the link text or the image's alternate text, and the Link element.
+    pub(crate) contents: String,
+    pub(crate) element: Option<u32>,
 }
 
 pub(crate) struct PdfPainter<'a> {
     content: &'a mut Content,
     links: &'a mut Vec<PageLink>,
-    tags: Option<&'a mut Vec<PageTag>>,
+    tree: Option<&'a mut Structure>,
+    /// A repeated table header or footer, which paints as an artifact.
+    repeat: bool,
 }
 
 impl<'a> PdfPainter<'a> {
     pub(crate) fn new(
         content: &'a mut Content,
         links: &'a mut Vec<PageLink>,
-        tags: Option<&'a mut Vec<PageTag>>,
+        tree: Option<&'a mut Structure>,
+        repeat: bool,
     ) -> Self {
         Self {
             content,
             links,
-            tags,
+            tree,
+            repeat,
         }
     }
 
     pub(crate) fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
-        let mut ids = if self.tags.is_some() {
-            vec![None; lines.len()]
-        } else {
-            Vec::new()
-        };
-        if let Some(tags) = &mut self.tags {
-            let mut images = layout.images.iter().peekable();
-            for line in lines.clone() {
-                while images.peek().is_some_and(|image| image.line < line) {
-                    images.next();
-                }
-                let image = images.peek().filter(|image| image.line == line);
-                let tag = if let Some(image) = image {
-                    (!image.alt.is_empty()).then(|| PageTag::Figure(image.alt.clone()))
-                } else if !layout.lines[line].segments.is_empty() {
-                    Some(PageTag::Paragraph)
-                } else {
-                    None
-                };
-                if let Some(tag) = tag {
-                    ids[line - lines.start] = Some(tags.len() as i32);
-                    tags.push(tag);
-                }
-            }
-        }
-        if self.tags.is_some() {
-            self.content.begin_marked_content(Name(b"Artifact"));
-        }
+        let tagged = self.artifact();
         self.paint_boxes(layout, origin);
-        if self.tags.is_some() {
+        if tagged {
             self.content.end_marked_content();
         }
-        self.paint_images(layout, lines.clone(), origin, &ids);
-        self.paint_text(layout, lines, origin, &ids);
+        self.paint_images(layout, lines.clone(), origin);
+        self.paint_text(layout, lines, origin);
+    }
+
+    /// Begins an artifact in tagged output; true when the caller must end it.
+    fn artifact(&mut self) -> bool {
+        let Some(tree) = &mut self.tree else {
+            return false;
+        };
+        tree.mark(self.content, ARTIFACT, false);
+        true
+    }
+
+    fn push_link(&mut self, rect: [f32; 4], uri: &str, contents: &str, element: Option<u32>) {
+        let tagged = self.tree.as_mut().map(|tree| tree.annotate(element));
+        self.links.push(PageLink {
+            rect,
+            uri: uri.to_owned(),
+            contents: tagged.map_or_else(String::new, |_| contents.to_owned()),
+            element,
+        });
     }
 
     fn paint_boxes(&mut self, layout: &LayoutBuffer, origin: Point) {
@@ -102,29 +97,30 @@ impl<'a> PdfPainter<'a> {
     }
 
     /// `q w 0 0 h x y cm /ImN Do Q`; only images whose pseudo-line is in range.
-    fn paint_images(
-        &mut self,
-        layout: &LayoutBuffer,
-        lines: Range<usize>,
-        origin: Point,
-        ids: &[Option<i32>],
-    ) {
+    fn paint_images(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
         for image in layout
             .images
             .iter()
             .filter(|image| lines.contains(&image.line))
         {
-            if let Some(id) = ids.get(image.line - lines.start).copied().flatten() {
-                self.content
-                    .begin_marked_content_with_properties(Name(b"Figure"))
-                    .properties()
-                    .identify(id);
-            } else if self.tags.is_some() {
-                self.content.begin_marked_content(Name(b"Artifact"));
-            }
             let (width, height) = (image.width.get(), image.height.get());
             let x = origin.x.get() + image.origin.x.get();
             let y = origin.y.get() - image.origin.y.get() - height;
+            // A linked image's content sits in a Link element inside its Figure.
+            let mut element = None;
+            let mut alt = "";
+            if let Some(tree) = &mut self.tree {
+                element = image.link.and_then(|_| tree.link(image.tag));
+                tree.mark(self.content, element.unwrap_or(image.tag), self.repeat);
+                if let Some(figure) = tree.elements.get_mut(image.tag as usize) {
+                    if !self.repeat {
+                        let (right, top) = ((x + width).ceil(), (y + height).ceil());
+                        figure.bbox =
+                            Some([x.floor(), y.floor(), right, top].map(|edge| edge as i32));
+                    }
+                    alt = &figure.alt;
+                }
+            }
             let mut buffer = [0_u8; 8];
             self.content
                 .save_state()
@@ -132,12 +128,15 @@ impl<'a> PdfPainter<'a> {
                 .x_object(Name(image_name(image.slot, &mut buffer)))
                 .restore_state();
             if let Some(link) = image.link {
-                self.links.push(PageLink {
-                    rect: [x, y, x + width, y + height],
-                    uri: layout.links[link].clone(),
-                });
+                let alt = alt.to_owned();
+                self.push_link(
+                    [x, y, x + width, y + height],
+                    &layout.links[link].uri,
+                    &alt,
+                    element,
+                );
             }
-            if self.tags.is_some() {
+            if self.tree.is_some() {
                 self.content.end_marked_content();
             }
         }
@@ -145,24 +144,16 @@ impl<'a> PdfPainter<'a> {
 
     /// One text object per line; `Tf` and `rg` change only where the style does.
     /// Underlines, strike-throughs, and link rectangles follow per segment.
-    fn paint_text(
-        &mut self,
-        layout: &LayoutBuffer,
-        lines: Range<usize>,
-        origin: Point,
-        ids: &[Option<i32>],
-    ) {
-        for (offset, line) in layout.lines[lines].iter().enumerate() {
+    /// In tagged output each run of segments with the same link is one marked-content
+    /// sequence, and a link keeps its Link element across lines until other text interrupts it.
+    fn paint_text(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        let mut open: Option<(usize, u32)> = None;
+        for line in &layout.lines[lines] {
             let segments = &layout.segments[line.segments.clone()];
             if segments.is_empty() {
                 continue;
             }
-            if let Some(id) = ids.get(offset).copied().flatten() {
-                self.content
-                    .begin_marked_content_with_properties(Name(b"P"))
-                    .properties()
-                    .identify(id);
-            }
+            let decorations = &layout.decorations[line.segments.clone()];
             self.content.begin_text();
             let x = origin.x
                 + aligned(
@@ -172,8 +163,33 @@ impl<'a> PdfPainter<'a> {
                     line.text_width,
                 );
             let baseline = (origin.y - line.origin.y).get();
+            // Each segment's start and width on the page.
+            let extent = |index: usize| {
+                let segment: &Segment = &segments[index];
+                let end = segments
+                    .get(index + 1)
+                    .map_or(line.text_width, |next| next.x);
+                ((x + segment.x).get(), (end - segment.x).get())
+            };
             let mut previous: Option<&Segment> = None;
-            for segment in segments {
+            let mut marked = None;
+            for (index, (segment, decoration)) in segments.iter().zip(decorations).enumerate() {
+                let mut element = None;
+                if let Some(tree) = &mut self.tree {
+                    let link = decoration.link;
+                    element = link.and_then(|link| match open {
+                        Some((last, element)) if last == link => Some(element),
+                        _ => tree.link(line.tag),
+                    });
+                    open = link.zip(element);
+                    if marked != Some(link) {
+                        if marked.is_some() {
+                            self.content.end_marked_content();
+                        }
+                        tree.mark(self.content, element.unwrap_or(line.tag), self.repeat);
+                        marked = Some(link);
+                    }
+                }
                 if previous.is_none_or(|last| last.color != segment.color) {
                     self.set_fill(segment.color);
                 }
@@ -192,15 +208,31 @@ impl<'a> PdfPainter<'a> {
                 };
                 self.content.show(Str(&layout.text[segment.text.clone()]));
                 previous = Some(segment);
+                if let Some(link) = decoration.link {
+                    let (start, width) = extent(index);
+                    let link = &layout.links[link];
+                    self.push_link(
+                        [
+                            start,
+                            baseline - decoration.descent.get(),
+                            start + width,
+                            baseline + decoration.ascent.get(),
+                        ],
+                        &link.uri,
+                        &link.text,
+                        element,
+                    );
+                }
+            }
+            if marked.is_some() {
+                self.content.end_marked_content();
             }
             self.content.end_text();
-            for (index, segment) in segments.iter().enumerate() {
-                let decoration = &layout.decorations[line.segments.start + index];
-                let start = (x + segment.x).get();
-                let end = segments
-                    .get(index + 1)
-                    .map_or(line.text_width, |next| next.x);
-                let width = (end - segment.x).get();
+            let decorated = (decorations.iter())
+                .any(|decoration| decoration.underline || decoration.line_through)
+                && self.artifact();
+            for (index, (segment, decoration)) in segments.iter().zip(decorations).enumerate() {
+                let (start, width) = extent(index);
                 let size = segment.size.get();
                 let thickness = size / 14.0;
                 if decoration.underline || decoration.line_through {
@@ -221,19 +253,8 @@ impl<'a> PdfPainter<'a> {
                         )
                         .fill_nonzero();
                 }
-                if let Some(link) = decoration.link {
-                    self.links.push(PageLink {
-                        rect: [
-                            start,
-                            baseline - decoration.descent.get(),
-                            start + width,
-                            baseline + decoration.ascent.get(),
-                        ],
-                        uri: layout.links[link].clone(),
-                    });
-                }
             }
-            if self.tags.is_some() {
+            if decorated {
                 self.content.end_marked_content();
             }
         }

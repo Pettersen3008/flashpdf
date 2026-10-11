@@ -25,6 +25,8 @@ export type RenderOptions = {
 	header?: Element | undefined;
 	metadata?: PdfMetadata | undefined;
 	tagged?: boolean | undefined;
+	/** PDF/UA-1: needs `tagged`, `metadata.title`, `metadata.language`, embedded fonts, and `alt` on every image. */
+	pdfua?: "1" | undefined;
 	/** Bookmarks every `h1` to `h6` in document order, nested by level, and opens the outline panel. */
 	outline?: boolean | undefined;
 	pdfa?: "3b" | undefined;
@@ -59,6 +61,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			"header",
 			"metadata",
 			"tagged",
+			"pdfua",
 			"outline",
 			"pdfa",
 			"attachments",
@@ -87,6 +90,10 @@ export function createRenderer(loadWasm: LoadWasm) {
 		if (p.tagged !== undefined && typeof p.tagged !== "boolean")
 			throw new Error("invalid tagged option");
 		if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
+		if (p.pdfua !== undefined && p.pdfua !== "1")
+			throw new Error('invalid pdfua option; the supported part is "1"');
+		if (p.pdfua && !p.tagged) throw new Error("pdfua requires tagged: true");
+		if (p.pdfua && !metadata.title) throw new Error("PDF/UA requires metadata.title");
 		if (p.outline !== undefined && typeof p.outline !== "boolean")
 			throw new Error("invalid outline option");
 		if (
@@ -104,7 +111,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			const fonts = registerFonts(renderer, p.fonts);
 			const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
 			writer.header(width, height, margin);
-			writer.metadata(metadata, p.tagged === true);
+			writer.metadata(metadata, p.pdfua ? 2 : p.tagged ? 1 : 0);
 			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 			for (const position of ["header", "footer"] as const) {
 				if (p[position] === undefined) continue;
@@ -127,6 +134,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 				writer,
 				fonts,
 				p.outline === true,
+				p.pdfua === "1",
 			);
 			writer.end();
 			consumed = true;

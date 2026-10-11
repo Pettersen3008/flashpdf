@@ -49,7 +49,6 @@ pub enum Command<'a> {
         width: ImageSize,
         height: Option<Pt>,
         link: Option<&'a str>,
-        alt: &'a str,
     },
     /// The destination slot of a registered anchor, set at the top of the next line laid out,
     /// which a page break may carry onto a later page.
@@ -63,9 +62,10 @@ pub enum ColumnWidth {
     Percent(Percent),
 }
 
-/// The protocol's decoded form owns data across input chunks.
+/// The protocol's decoded form owns data across input chunks. A paragraph and an image
+/// end with the structure element they belong to.
 pub(crate) enum OwnedCommand {
-    Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>),
+    Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>, u32),
     BoxStart(BoxStyle),
     BoxEnd,
     Spacer(Pt),
@@ -75,14 +75,14 @@ pub(crate) enum OwnedCommand {
     RowEnd,
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
-    Image(u16, ImageSize, Option<Pt>, Option<String>, String),
+    Image(u16, ImageSize, Option<Pt>, Option<String>, u32),
     Anchor(u16),
 }
 
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Paragraph(align, text, runs, links) => Command::Paragraph {
+            Self::Paragraph(align, text, runs, links, _) => Command::Paragraph {
                 align: *align,
                 text,
                 runs,
@@ -101,12 +101,11 @@ impl OwnedCommand {
                 width: *width,
             },
             Self::TableEnd => Command::TableEnd,
-            Self::Image(slot, width, height, link, alt) => Command::Image {
+            Self::Image(slot, width, height, link, _) => Command::Image {
                 slot: *slot,
                 width: *width,
                 height: *height,
                 link: link.as_deref(),
-                alt,
             },
             Self::Anchor(slot) => Command::Anchor(*slot),
         }
@@ -116,6 +115,10 @@ impl OwnedCommand {
 pub(crate) trait CommandSource {
     fn command(&self, index: usize) -> Option<Command<'_>>;
     fn len(&self) -> usize;
+    /// The structure element of the paragraph or image at `index`; the document by default.
+    fn tag(&self, _index: usize) -> u32 {
+        0
+    }
 }
 
 impl<'command> CommandSource for [Command<'command>] {
@@ -135,6 +138,13 @@ impl CommandSource for [OwnedCommand] {
 
     fn len(&self) -> usize {
         <[OwnedCommand]>::len(self)
+    }
+
+    fn tag(&self, index: usize) -> u32 {
+        match self.get(index) {
+            Some(OwnedCommand::Paragraph(.., tag) | OwnedCommand::Image(.., tag)) => *tag,
+            _ => 0,
+        }
     }
 }
 
@@ -184,6 +194,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_element(&mut self, depth: usize) -> Result<Element<'a>, CommandParseError> {
+        let tag = self.source.tag(self.index);
         match self.next()? {
             Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
                 align: style.align,
@@ -198,6 +209,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     decoration: Default::default(),
                 }],
                 links: &[],
+                tag,
             })),
             Command::Paragraph {
                 align,
@@ -209,19 +221,19 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 text,
                 runs: runs.to_vec(),
                 links,
+                tag,
             })),
             Command::Image {
                 slot,
                 width,
                 height,
                 link,
-                alt,
             } => Ok(Element::Image(ImageNode {
                 slot,
                 width,
                 height,
                 link,
-                alt,
+                tag,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::Anchor(slot) => Ok(Element::Anchor(slot)),

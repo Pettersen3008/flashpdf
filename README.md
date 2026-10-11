@@ -122,7 +122,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; outline?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfua?: '1'; outline?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
@@ -135,7 +135,9 @@ const pdf = await render(<Invoice />, {
 });
 ```
 
-`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
+`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes one structure element per paragraph, heading roles, tables with header-cell scope, figures with image descriptions, and links containing their annotation references. Page furniture, decoration, and repeated table headers and footers are artifacts.
+
+`pdfua: '1'` adds PDF/UA-1 identification metadata. It requires `tagged: true`, a nonempty title and language, embedded fonts for every text run, and `alt` on every image. Use `alt=""` for decoration; linked images need a description. Headings start at `h1` and cannot skip a level. Header cells in `thead` and rows containing only `th` have column scope; other header cells have row scope. The integration test runs veraPDF when it is installed. Check the document's reading order and image descriptions yourself, since automated validation cannot judge their meaning.
 
 ## Embedded fonts
 

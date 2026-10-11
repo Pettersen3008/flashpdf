@@ -3,7 +3,7 @@ import type { StyledElement } from "./css/cascade.js";
 import { inherited } from "./css/properties.js";
 import { glyphError } from "./fonts.js";
 import { PAGE_NUMBER, TOTAL_PAGES } from "./page.js";
-import type { ProtocolWriter, Column, Run } from "./protocol.js";
+import type { ProtocolWriter, Column, Run, TableAttributes } from "./protocol.js";
 import {
 	boxStyle,
 	color,
@@ -18,7 +18,7 @@ import {
 	type LineHeight,
 	type NormalizedStyle,
 } from "./style.js";
-import { locate, rowOnly } from "./tree.js";
+import { locate, rowOnly, type Tag } from "./tree.js";
 
 type TextState = {
 	size: number;
@@ -34,8 +34,8 @@ type TextState = {
 	/** Set only while compiling the document body. */
 	nav: Navigation | undefined;
 };
-/** `cell` is set only for the direct children of a table row. */
-type Context = TextState & { inRow: boolean; cell?: boolean };
+/** `scope` is set only for the direct children of a table row: the scope a `th` there gets. */
+type Context = TextState & { inRow: boolean; scope?: "Column" | "Row" };
 type Fonts = ReadonlyMap<string, FontSlots>;
 /** What a document needs before its first record: the ids links name, and whether to bookmark headings. */
 type Navigation = {
@@ -46,6 +46,10 @@ type Navigation = {
 	anchored: Set<string>;
 	/** Anchor records written, against the engine's cap. */
 	count: number;
+	/** PDF/UA-1 output, which needs `alt` on images and headings that skip no level. */
+	pdfua: boolean;
+	/** The last heading level, or 0 before the first heading. */
+	heading: number;
 };
 /** Destinations and bookmarks per render, matching the engine's cap. */
 const MAX_ANCHORS = 10_000;
@@ -66,6 +70,48 @@ const ROOT: Context = {
 };
 
 const INLINE_TAGS = new Set<string>(["span", "b", "strong", "a", "br"]);
+
+/** The structure element each tag opens in tagged output. A tag left out opens none, so a plain
+ *  `div`, `main`, `header`, or `footer` is layout and its content joins the parent element.
+ *  Text that no listed tag holds becomes a `P`, and the engine puts each link in a `Link`. */
+const ROLES: Partial<Record<Tag, string>> = {
+	section: "Sect",
+	article: "Art",
+	p: "P",
+	h1: "H1",
+	h2: "H2",
+	h3: "H3",
+	h4: "H4",
+	h5: "H5",
+	h6: "H6",
+	img: "Figure",
+	table: "Table",
+	thead: "THead",
+	tbody: "TBody",
+	tfoot: "TFoot",
+	tr: "TR",
+	th: "TH",
+	td: "TD",
+};
+
+/** Table attributes of a cell's structure element. */
+function attributes(node: StyledElement, context: Context): TableAttributes {
+	return { scope: node.tag === "th" ? context.scope : undefined };
+}
+
+/** Wraps what `body` writes in a structure element; the writer skips it in untagged output. */
+function tag(
+	writer: ProtocolWriter,
+	role: string | undefined,
+	body: () => void,
+	alt?: string,
+	table?: TableAttributes,
+) {
+	if (role === undefined) return body();
+	writer.structStart(role, alt, table);
+	body();
+	writer.structEnd();
+}
 
 /** CSS collapsible whitespace only; U+00A0 is content. */
 function blank(text: string) {
@@ -233,22 +279,26 @@ function flow(
 	depth: number,
 	pageTokens: boolean,
 	gap: number,
+	cell = false,
 ) {
 	let count = 0;
 	const separate = () => {
 		if (count++ && gap) writer.spacer(gap);
 	};
+	const parts = children.map((child) => inlineRuns(child, context, fonts));
+	// A table cell holds its text directly unless block children sit beside it.
+	const role = cell && !parts.includes(undefined) ? undefined : "P";
 	let runs: Run[] = [];
 	const flush = () => {
 		// Whitespace between block-level children makes no line, as in CSS.
 		if (runs.some((item) => item.break || !blank(item.text))) {
 			separate();
-			writeParagraph(writer, runs, context, pageTokens);
+			tag(writer, role, () => writeParagraph(writer, runs, context, pageTokens));
 		}
 		runs = [];
 	};
-	for (const child of children) {
-		const part = inlineRuns(child, context, fonts);
+	for (const [index, child] of children.entries()) {
+		const part = parts[index];
 		if (part) {
 			for (const item of part) push(runs, item);
 			continue;
@@ -310,7 +360,8 @@ function element(
 		case "footer":
 		case "td":
 		case "th": {
-			if ((node.tag === "td" || node.tag === "th") && !context.cell)
+			const cell = node.tag === "td" || node.tag === "th";
+			if (cell && !context.scope)
 				throw new Error(`<${node.tag}> belongs in a <tr> inside a <table>`);
 			rowOnly(style, context.inRow);
 			pageBreak(writer, style, "breakBefore", depth);
@@ -318,7 +369,7 @@ function element(
 			const paint = boxStyle(style, next.size);
 			const streamed = streamMargin(paint, context, style);
 			if (streamed && paint?.margin[0]) writer.spacer(paint.margin[0]);
-			box(writer, streamed ? undefined : paint, () => {
+			const content = () => {
 				const row = style.display === "flex" && (style.flexDirection ?? "row") === "row";
 				const inner = { ...next, inRow: false };
 				const gap = style.gap === undefined ? 0 : point(style.gap, next.size);
@@ -338,10 +389,17 @@ function element(
 					writer.rowEnd();
 				} else if (context.inRow || style.breakInside === "avoid") {
 					writer.stackStart(gap);
-					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
+					flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0, cell);
 					writer.stackEnd();
-				} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
-			});
+				} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap, cell);
+			};
+			tag(
+				writer,
+				ROLES[node.tag],
+				() => box(writer, streamed ? undefined : paint, content),
+				undefined,
+				attributes(node, context),
+			);
 			if (streamed && paint?.margin[2]) writer.spacer(paint.margin[2]);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
@@ -367,10 +425,13 @@ function element(
 				throw new Error(
 					`<${node.tag}> accepts only text, <br>, and <span>, <b>, <strong>, <a> without box styles`,
 				);
-			box(writer, boxStyle(style, next.size), () =>
-				runs === undefined
-					? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
-					: writeParagraph(writer, runs, next, pageTokens),
+			heading(node, context.nav);
+			tag(writer, runs && (ROLES[node.tag] ?? "P"), () =>
+				box(writer, boxStyle(style, next.size), () =>
+					runs === undefined
+						? flow(node.children, writer, fonts, inner, depth, pageTokens, 0)
+						: writeParagraph(writer, runs, next, pageTokens),
+				),
 			);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
@@ -385,18 +446,33 @@ function element(
 			const width = style.width === undefined ? undefined : dimension(style.width, "width");
 			const height =
 				style.height === undefined ? undefined : dimension(style.height, "height").value;
-			box(writer, boxStyle(style, next.size), () => {
-				try {
-					writer.image(node.src!, width, height, node.alt ?? "", context.link);
-				} catch (error) {
-					if (!(error instanceof Error)) throw error;
-					if (error.message === "PageOverflow")
-						throw new Error("PageOverflow: the image is taller than the page; reduce its height");
-					if (error.message === "ImageTooWide")
-						throw new Error("the image is wider than its container; reduce width or height");
-					throw error;
-				}
-			});
+			if (context.nav?.pdfua && node.alt === undefined)
+				throw new Error(
+					'PDF/UA needs alt on every <img>; describe it, or set alt="" for decoration',
+				);
+			if (context.nav?.pdfua && !node.alt && context.link !== undefined)
+				throw new Error("PDF/UA needs alt on a linked <img> to describe the link");
+			// An image without alt text is decoration.
+			tag(
+				writer,
+				node.alt ? ROLES.img : "Artifact",
+				() =>
+					box(writer, boxStyle(style, next.size), () => {
+						try {
+							writer.image(node.src!, width, height, context.link);
+						} catch (error) {
+							if (!(error instanceof Error)) throw error;
+							if (error.message === "PageOverflow")
+								throw new Error(
+									"PageOverflow: the image is taller than the page; reduce its height",
+								);
+							if (error.message === "ImageTooWide")
+								throw new Error("the image is wider than its container; reduce width or height");
+							throw error;
+						}
+					}),
+				node.alt,
+			);
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 		}
@@ -418,6 +494,19 @@ function element(
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 	}
+}
+
+/** PDF/UA-1 headings start at `h1` and never skip a level on the way down. */
+function heading(node: StyledElement, nav: Navigation | undefined) {
+	const level = Number(/^h([1-6])$/.exec(node.tag)?.[1] ?? 0);
+	if (!level || !nav?.pdfua) return;
+	if (level > nav.heading + 1)
+		throw new Error(
+			nav.heading
+				? `<h${level}> follows <h${nav.heading}>; PDF/UA headings cannot skip a level`
+				: `the first heading is <h${level}>; PDF/UA headings start at <h1>`,
+		);
+	nav.heading = level;
 }
 
 function plain(nodes: readonly StyledNode[]): string {
@@ -482,8 +571,16 @@ export function compileBody(
 	writer: ProtocolWriter,
 	fonts: Fonts,
 	outline: boolean,
+	pdfua: boolean,
 ) {
-	const nav: Navigation = { targets: linkTargets(nodes), outline, anchored: new Set(), count: 0 };
+	const nav: Navigation = {
+		targets: linkTargets(nodes),
+		outline,
+		anchored: new Set(),
+		count: 0,
+		pdfua,
+		heading: 0,
+	};
 	compile(nodes, writer, fonts, { ...ROOT, nav });
 	for (const [id, owner] of nav.targets)
 		if (!nav.anchored.has(id))
@@ -576,23 +673,27 @@ function table(
 	const inner = { ...next, inRow: false };
 	/** Element path of each table child, indexed as the renderer reports an overflowing row. */
 	const wheres: string[] = [];
-	const row = (tr: StyledElement, state: Context) => {
+	const row = (tr: StyledElement, state: Context, head: boolean) => {
 		try {
 			rowOnly(tr.style, false);
 			for (const key of BREAKS) pageBreak(writer, tr.style, key, depth + 1);
 			const own = inherit(tr.style, state, fonts);
-			box(writer, boxStyle(tr.style, own.size), () => {
-				writer.rowStart(columns);
-				compile(
-					tr.children,
-					writer,
-					fonts,
-					{ ...own, inRow: true, cell: true },
-					depth + 2,
-					pageTokens,
-				);
-				writer.rowEnd();
-			});
+			// A row of only header cells heads the columns below it, as HTML's auto scope reads it.
+			const scope = head || cells(tr).every((cell) => cell.tag === "th") ? "Column" : "Row";
+			tag(writer, ROLES.tr, () =>
+				box(writer, boxStyle(tr.style, own.size), () => {
+					writer.rowStart(columns);
+					compile(
+						tr.children,
+						writer,
+						fonts,
+						{ ...own, inRow: true, scope },
+						depth + 2,
+						pageTokens,
+					);
+					writer.rowEnd();
+				}),
+			);
 		} catch (error) {
 			throw locate(error, tr.where);
 		}
@@ -609,28 +710,33 @@ function table(
 			} catch (error) {
 				throw locate(error, group.where);
 			}
-		// Header and footer rows always share a page, so `break-inside: avoid` only groups body rows.
-		if (group?.style.breakInside === "avoid" && !repeated) {
-			writer.stackStart(0);
-			for (const tr of rows) row(tr, state);
-			writer.stackEnd();
-			wheres.push(group.where);
-			return;
-		}
-		for (const tr of rows) {
-			row(tr, state);
-			wheres.push(tr.where);
-		}
+		const head = group?.tag === "thead";
+		tag(writer, group && ROLES[group.tag], () => {
+			// Header and footer rows always share a page, so `break-inside: avoid` only groups body rows.
+			if (group?.style.breakInside === "avoid" && !repeated) {
+				writer.stackStart(0);
+				for (const tr of rows) row(tr, state, head);
+				writer.stackEnd();
+				wheres.push(group.where);
+				return;
+			}
+			for (const tr of rows) {
+				row(tr, state, head);
+				wheres.push(tr.where);
+			}
+		});
 	};
 	try {
 		if (style.breakInside === "avoid") writer.stackStart(0);
 		const count = (groups: RowGroup[]) =>
 			groups.reduce((total, { rows }) => total + rows.length, 0);
-		writer.tableStart(count(header), count(footer), width);
-		for (const item of header) group(item, true);
-		for (const item of body) group(item, false);
-		for (const item of footer) group(item, true);
-		writer.tableEnd();
+		tag(writer, ROLES.table, () => {
+			writer.tableStart(count(header), count(footer), width);
+			for (const item of header) group(item, true);
+			for (const item of body) group(item, false);
+			for (const item of footer) group(item, true);
+			writer.tableEnd();
+		});
 		if (style.breakInside === "avoid") writer.stackEnd();
 	} catch (error) {
 		if (!(error instanceof Error)) throw error;
@@ -667,7 +773,9 @@ export function compile(
 ): void {
 	for (const node of nodes) {
 		if (node.kind === "text") {
-			writeParagraph(writer, [run(context, node.value)], context, pageTokens);
+			tag(writer, "P", () =>
+				writeParagraph(writer, [run(context, node.value)], context, pageTokens),
+			);
 			continue;
 		}
 		try {

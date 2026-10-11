@@ -1,13 +1,15 @@
 use pdf_writer::types::{
     ActionType, AnnotationFlags, AnnotationType, AssociationKind, OutputIntentSubtype, Predictor,
-    StructRole,
 };
 use pdf_writer::writers::StructTreeRoot;
-use pdf_writer::{Content, Filter, Finish, Name, Null, Pdf, Rect, Ref, Str, TextStr};
+use pdf_writer::{
+    Array, Content, Dict, Filter, Finish, Name, Null, Pdf, Primitive, Rect, Ref, Str, TextStr,
+};
 
 use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
-use crate::paint::{image_name, PageLink, PageTag};
+use crate::paint::{image_name, PageLink};
+use crate::structure::{Element, Kid, Structure};
 use crate::{FontId, Page, HELVETICA_BOLD};
 
 #[derive(Default)]
@@ -18,6 +20,7 @@ pub(crate) struct Metadata {
     pub(crate) keywords: String,
     pub(crate) language: String,
     pub(crate) tagged: bool,
+    pub(crate) pdfua: bool,
     pub(crate) pdfa: bool,
     /// Factur-X conformance level and embedded file name.
     pub(crate) facturx: Option<(&'static str, &'static str)>,
@@ -64,7 +67,7 @@ pub(crate) fn finish_pdf(
     images: Vec<Image>,
     used_images: Vec<bool>,
     links: Vec<Vec<PageLink>>,
-    tags: Vec<Vec<PageTag>>,
+    structure: Structure,
     metadata: Metadata,
 ) -> Vec<u8> {
     let used: Vec<FontId> = (0..fonts.len())
@@ -135,20 +138,17 @@ pub(crate) fn finish_pdf(
     .iter()
     .any(|value| !value.is_empty())
     .then(&mut allocate);
-    let structure = metadata.tagged.then(|| (allocate(), allocate()));
-    let parent_arrays: Vec<Ref> = if metadata.tagged {
-        tags.iter().map(|_| allocate()).collect()
+    let tree_root = metadata.tagged.then(&mut allocate);
+    let (element_refs, parent_arrays): (Vec<Ref>, Vec<Ref>) = if metadata.tagged {
+        (
+            structure.elements.iter().map(|_| allocate()).collect(),
+            structure.pages.iter().map(|_| allocate()).collect(),
+        )
     } else {
-        Vec::new()
+        Default::default()
     };
-    let tag_refs: Vec<Vec<Ref>> = if metadata.tagged {
-        tags.iter()
-            .map(|page| page.iter().map(|_| allocate()).collect())
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let archive = metadata.pdfa.then(|| (allocate(), allocate()));
+    let xmp = (metadata.pdfa || metadata.pdfua).then(&mut allocate);
+    let profile = metadata.pdfa.then(&mut allocate);
     let files: Vec<(Ref, Ref)> = metadata
         .attachments
         .iter()
@@ -165,25 +165,29 @@ pub(crate) fn finish_pdf(
     let outline = (!bookmarks.is_empty()).then(&mut allocate);
     let first_page = next;
     let count = contents.len();
-    let page_refs = (0..count).map(|index| Ref::new(first_page + index as i32 * 2));
-    let mut next_annotation = first_page + count as i32 * 2;
+    let page_ref = |index: usize| Ref::new(first_page + index as i32 * 2);
+    let first_annotation = first_page + count as i32 * 2;
+    let mut next_annotation = first_annotation;
 
     let mut catalog_writer = pdf.catalog(catalog);
     catalog_writer.pages(pages);
     if !metadata.language.is_empty() {
-        catalog_writer.lang(pdf_writer::TextStr(&metadata.language));
+        pair(&mut catalog_writer, b"Lang", TextStr(&metadata.language));
     }
     if let Some(root) = outline {
         catalog_writer
             .outlines(root)
             .pair(Name(b"PageMode"), Name(b"UseOutlines"));
     }
-    if let Some((root, _)) = structure {
+    if let Some(root) = tree_root {
         catalog_writer.pair(Name(b"StructTreeRoot"), root);
         catalog_writer.mark_info().marked(true);
+        catalog_writer.viewer_preferences().display_doc_title(true);
     }
-    if let Some((xmp, profile)) = archive {
+    if let Some(xmp) = xmp {
         catalog_writer.metadata(xmp);
+    }
+    if let Some(profile) = profile {
         catalog_writer
             .output_intents()
             .push()
@@ -217,27 +221,27 @@ pub(crate) fn finish_pdf(
     drop(catalog_writer);
     if let Some(info) = info {
         let mut writer = pdf.document_info(info);
-        if !metadata.title.is_empty() {
-            writer.title(pdf_writer::TextStr(&metadata.title));
-        }
-        if !metadata.author.is_empty() {
-            writer.author(pdf_writer::TextStr(&metadata.author));
-        }
-        if !metadata.subject.is_empty() {
-            writer.subject(pdf_writer::TextStr(&metadata.subject));
-        }
-        if !metadata.keywords.is_empty() {
-            writer.keywords(pdf_writer::TextStr(&metadata.keywords));
+        for (key, value) in [
+            (&b"Title"[..], &metadata.title),
+            (b"Author", &metadata.author),
+            (b"Subject", &metadata.subject),
+            (b"Keywords", &metadata.keywords),
+        ] {
+            if !value.is_empty() {
+                pair(&mut writer, key, TextStr(value));
+            }
         }
     }
-    pdf.pages(pages).kids(page_refs.clone()).count(count as i32);
+    pdf.pages(pages)
+        .kids((0..count).map(page_ref))
+        .count(count as i32);
 
     // `[page /XYZ left top null]`, as an object so the name tree and bookmarks share it.
     for (anchor, reference) in metadata.anchors.iter().zip(&dests) {
         let (page_index, left, top) = anchor.at.unwrap();
         pdf.indirect(*reference)
             .array()
-            .item(Ref::new(first_page + page_index as i32 * 2))
+            .item(page_ref(page_index))
             .item(Name(b"XYZ"))
             .item(left)
             .item(top)
@@ -252,38 +256,43 @@ pub(crate) fn finish_pdf(
             .count(bookmarks.len() as i32);
     }
 
-    if let Some((root, document)) = structure {
+    if let Some(root) = tree_root {
         let mut tree = pdf.indirect(root).start::<StructTreeRoot>();
-        tree.child(document).parent_tree_next_key(count as i32);
+        tree.child(element_refs[0])
+            .parent_tree_next_key((count + structure.annotations) as i32);
         let mut parents = tree.parent_tree();
         let mut nums = parents.nums();
         for (index, reference) in parent_arrays.iter().enumerate() {
             nums.insert(index as i32, *reference);
         }
+        // Each tagged annotation's StructParent key follows the page keys.
+        for (index, link) in links.iter().flatten().enumerate() {
+            if let Some(element) = link.element {
+                nums.insert((count + index) as i32, element_refs[element as usize]);
+            }
+        }
         drop(nums);
         drop(parents);
         drop(tree);
-        let mut doc = pdf.struct_element(document);
-        doc.kind(StructRole::Document).parent(root);
-        doc.children().items(tag_refs.iter().flatten().copied());
-        drop(doc);
-        for (page_index, page_tags) in tags.iter().enumerate() {
-            pdf.indirect(parent_arrays[page_index])
+        for (ids, reference) in structure.pages.iter().zip(&parent_arrays) {
+            pdf.indirect(*reference)
                 .array()
-                .items(tag_refs[page_index].iter().copied());
-            for (mcid, tag) in page_tags.iter().enumerate() {
-                let mut item = pdf.struct_element(tag_refs[page_index][mcid]);
-                item.kind(match tag {
-                    PageTag::Paragraph => StructRole::P,
-                    PageTag::Figure(_) => StructRole::Figure,
-                })
-                .parent(document)
-                .page(Ref::new(first_page + page_index as i32 * 2));
-                if let PageTag::Figure(alt) = tag {
-                    item.alt(TextStr(alt));
-                }
-                item.marked_content_child().marked_content_id(mcid as i32);
-            }
+                .items(ids.iter().map(|id| element_refs[*id as usize]));
+        }
+        for (index, element) in structure.elements.iter().enumerate() {
+            let parent = match index {
+                0 => root,
+                _ => element_refs[element.parent as usize],
+            };
+            write_element(
+                &mut pdf,
+                element_refs[index],
+                parent,
+                element,
+                &element_refs,
+                first_page,
+                first_annotation,
+            );
         }
     }
 
@@ -318,8 +327,10 @@ pub(crate) fn finish_pdf(
     }
     drop(images);
 
-    if let Some((xmp, profile)) = archive {
+    if let Some(xmp) = xmp {
         pdf.metadata(xmp, xmp_packet(&metadata).as_bytes());
+    }
+    if let Some(profile) = profile {
         pdf.icc_profile(profile, SRGB).n(3);
     }
     for (attachment, (spec, file)) in metadata.attachments.iter().zip(&files) {
@@ -329,26 +340,26 @@ pub(crate) fn finish_pdf(
         stream.filter(Filter::FlateDecode);
         drop(stream);
         let mut file_spec = pdf.file_spec(*spec);
+        file_spec.path(Str(attachment.name.as_bytes()));
+        pair(&mut file_spec, b"UF", TextStr(&attachment.name));
         file_spec
-            .path(Str(attachment.name.as_bytes()))
-            .unic_file(TextStr(&attachment.name))
             .association_kind(attachment.relationship)
             .embedded_file(*file);
         if !attachment.description.is_empty() {
-            file_spec.description(TextStr(&attachment.description));
+            pair(&mut file_spec, b"Desc", TextStr(&attachment.description));
         }
     }
 
     for (index, (content, page_links)) in contents.into_iter().zip(links).enumerate() {
-        let page_ref = Ref::new(first_page + index as i32 * 2);
         let stream_ref = Ref::new(first_page + 1 + index as i32 * 2);
-        let mut output_page = pdf.page(page_ref);
+        let mut output_page = pdf.page(page_ref(index));
         output_page
             .parent(pages)
             .media_box(Rect::new(0.0, 0.0, page.width.0, page.height.0))
             .contents(stream_ref);
         if metadata.tagged {
             output_page.struct_parents(index as i32);
+            pair(&mut output_page, b"Tabs", Name(b"S"));
         }
         let mut resources = output_page.resources();
         // Every font belongs to one `/Font` dictionary; a second `fonts()` call
@@ -390,6 +401,18 @@ pub(crate) fn finish_pdf(
                 .rect(Rect::new(x1, y1, x2, y2))
                 .flags(AnnotationFlags::PRINT)
                 .border(0.0, 0.0, 0.0, None);
+            if metadata.tagged {
+                // PDF/UA needs a description; a link without text falls back to its target.
+                let contents = match link.contents.is_empty() {
+                    true => &link.uri,
+                    false => &link.contents,
+                };
+                pair(&mut annotation, b"Contents", TextStr(contents));
+            }
+            if link.element.is_some() {
+                let key = count as i32 + reference.get() - first_annotation;
+                pair(&mut annotation, b"StructParent", key);
+            }
             let mut action = annotation.action();
             match link.uri.strip_prefix('#') {
                 Some(name) => action
@@ -417,6 +440,98 @@ pub(crate) fn finish_pdf(
     pdf.finish()
 }
 
+/// Writes one structure element. Pages sit at every second object from `first_page`, and the
+/// annotations follow the pages in order.
+// Inlined into `finish_pdf`, the optimizer grows this by a few KB of WASM.
+#[inline(never)]
+fn write_element(
+    pdf: &mut Pdf,
+    reference: Ref,
+    parent: Ref,
+    element: &Element,
+    element_refs: &[Ref],
+    first_page: i32,
+    first_annotation: i32,
+) {
+    let page_ref = |index: usize| Ref::new(first_page + index as i32 * 2);
+    let mut writer = pdf.struct_element(reference);
+    pair(&mut writer, b"S", Name(element.role.as_bytes()));
+    pair(&mut writer, b"P", parent);
+    // Content on this page needs only its MCID; other pages need a reference with /Pg.
+    let page = element.kids.iter().find_map(Kid::page);
+    if let Some(page) = page {
+        pair(&mut writer, b"Pg", page_ref(page));
+    }
+    if !element.alt.is_empty() {
+        pair(&mut writer, b"Alt", TextStr(&element.alt));
+    }
+    let [scope, rows, columns] = element.table;
+    let table = scope > 0 || rows > 1 || columns > 1;
+    if table || element.bbox.is_some() {
+        let mut objects = writer.insert(Name(b"A")).array();
+        if table {
+            let mut object = objects.push().dict();
+            pair(&mut object, b"O", Name(b"Table"));
+            if scope > 0 {
+                let names: [&[u8]; 3] = [b"Row", b"Column", b"Both"];
+                pair(&mut object, b"Scope", Name(names[usize::from(scope) - 1]));
+            }
+            if rows > 1 {
+                pair(&mut object, b"RowSpan", i32::from(rows));
+            }
+            if columns > 1 {
+                pair(&mut object, b"ColSpan", i32::from(columns));
+            }
+        }
+        if let Some(bbox) = element.bbox {
+            let mut object = objects.push().dict();
+            pair(&mut object, b"O", Name(b"Layout"));
+            let mut edges = object.insert(Name(b"BBox")).array();
+            for edge in bbox {
+                item(&mut edges, edge);
+            }
+        }
+    }
+    if element.kids.is_empty() {
+        return;
+    }
+    let mut kids = writer.insert(Name(b"K")).array();
+    for kid in &element.kids {
+        match *kid {
+            Kid::Element(child) => item(&mut kids, element_refs[child as usize]),
+            Kid::Content(on, id) if Some(on) == page => item(&mut kids, id),
+            Kid::Content(on, id) => {
+                let mut content = kids.push().dict();
+                pair(&mut content, b"Type", Name(b"MCR"));
+                pair(&mut content, b"Pg", page_ref(on));
+                pair(&mut content, b"MCID", id);
+            }
+            // A Link element paints on one page, so its /Pg covers the annotation.
+            Kid::Annotation(_, index) => {
+                let mut object = kids.push().dict();
+                pair(&mut object, b"Type", Name(b"OBJR"));
+                pair(
+                    &mut object,
+                    b"Obj",
+                    Ref::new(first_annotation + index as i32),
+                );
+            }
+        }
+    }
+}
+
+/// pdf-writer inlines every `pair` and `item`; one copy per value type keeps the many
+/// call sites, mostly in the structure tree, from adding several KB of WASM.
+#[inline(never)]
+pub(crate) fn pair<T: Primitive>(dict: &mut Dict, key: &'static [u8], value: T) {
+    dict.pair(Name(key), value);
+}
+
+#[inline(never)]
+fn item<T: Primitive>(array: &mut Array, value: T) {
+    array.item(value);
+}
+
 /// An outline item: its object, its destination object, and its anchor.
 type Bookmark<'a> = (Ref, Ref, &'a Anchor);
 
@@ -435,9 +550,8 @@ fn write_outline(pdf: &mut Pdf, parent: Ref, items: &[Bookmark]) -> Ref {
         let kids = &items[start + 1..end];
         let last = (!kids.is_empty()).then(|| write_outline(pdf, object, kids));
         let mut item = pdf.outline_item(object);
-        item.title(TextStr(&anchor.title))
-            .parent(parent)
-            .pair(Name(b"Dest"), dest);
+        pair(&mut item, b"Title", TextStr(&anchor.title));
+        item.parent(parent).pair(Name(b"Dest"), dest);
         if let Some(prev) = prev {
             item.prev(prev);
         }
@@ -459,9 +573,19 @@ fn xmp_packet(metadata: &Metadata) -> String {
         "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">",
         "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">",
         "<rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"",
-        " xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">",
-        "<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
     ));
+    if metadata.pdfua {
+        xmp.push_str(" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\"");
+    }
+    xmp.push_str(
+        " xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">",
+    );
+    if metadata.pdfa {
+        xmp.push_str("<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>");
+    }
+    if metadata.pdfua {
+        xmp.push_str("<pdfuaid:part>1</pdfuaid:part>");
+    }
     for (value, open, close) in [
         (
             &metadata.title,
@@ -510,54 +634,100 @@ fn xmp_packet(metadata: &Metadata) -> String {
             file,
             "</fx:DocumentFileName><fx:Version>1.0</fx:Version><fx:ConformanceLevel>",
             level,
-            concat!(
-                "</fx:ConformanceLevel></rdf:Description>",
-                "<rdf:Description rdf:about=\"\"",
-                " xmlns:pdfaExtension=\"http://www.aiim.org/pdfa/ns/extension/\"",
-                " xmlns:pdfaSchema=\"http://www.aiim.org/pdfa/ns/schema#\"",
-                " xmlns:pdfaProperty=\"http://www.aiim.org/pdfa/ns/property#\">",
-                "<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType=\"Resource\">",
-                "<pdfaSchema:schema>Factur-X PDFA Extension Schema</pdfaSchema:schema>",
-                "<pdfaSchema:namespaceURI>urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#",
-                "</pdfaSchema:namespaceURI><pdfaSchema:prefix>fx</pdfaSchema:prefix>",
-                "<pdfaSchema:property><rdf:Seq>",
-            ),
+            "</fx:ConformanceLevel></rdf:Description>",
         ]);
-        for (name, description) in [
-            ("DocumentFileName", "The name of the embedded XML document"),
-            (
-                "DocumentType",
-                "The type of the hybrid document, e.g. INVOICE",
-            ),
-            (
-                "Version",
-                "The version of the standard applying to the embedded XML",
-            ),
-            (
-                "ConformanceLevel",
-                "The conformance level of the embedded XML",
-            ),
-        ] {
-            xmp.extend([
-                "<rdf:li rdf:parseType=\"Resource\"><pdfaProperty:name>",
-                name,
-                concat!(
-                    "</pdfaProperty:name><pdfaProperty:valueType>Text</pdfaProperty:valueType>",
-                    "<pdfaProperty:category>external</pdfaProperty:category>",
-                    "<pdfaProperty:description>",
-                ),
-                description,
-                "</pdfaProperty:description></rdf:li>",
-            ]);
-        }
+    }
+    let schemas = [
+        metadata.facturx.map(|_| FACTURX_SCHEMA),
+        (metadata.pdfa && metadata.pdfua).then_some(PDFUA_SCHEMA),
+    ];
+    if schemas.iter().any(Option::is_some) {
         xmp.push_str(concat!(
-            "</rdf:Seq></pdfaSchema:property></rdf:li></rdf:Bag>",
-            "</pdfaExtension:schemas></rdf:Description>",
+            "<rdf:Description rdf:about=\"\"",
+            " xmlns:pdfaExtension=\"http://www.aiim.org/pdfa/ns/extension/\"",
+            " xmlns:pdfaSchema=\"http://www.aiim.org/pdfa/ns/schema#\"",
+            " xmlns:pdfaProperty=\"http://www.aiim.org/pdfa/ns/property#\">",
+            "<pdfaExtension:schemas><rdf:Bag>",
         ));
+        for (schema, namespace, prefix, properties) in schemas.into_iter().flatten() {
+            xmp.extend([
+                "<rdf:li rdf:parseType=\"Resource\"><pdfaSchema:schema>",
+                schema,
+                "</pdfaSchema:schema><pdfaSchema:namespaceURI>",
+                namespace,
+                "</pdfaSchema:namespaceURI><pdfaSchema:prefix>",
+                prefix,
+                "</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq>",
+            ]);
+            for (name, kind, category, description) in properties {
+                xmp.extend([
+                    "<rdf:li rdf:parseType=\"Resource\"><pdfaProperty:name>",
+                    name,
+                    "</pdfaProperty:name><pdfaProperty:valueType>",
+                    kind,
+                    "</pdfaProperty:valueType><pdfaProperty:category>",
+                    category,
+                    "</pdfaProperty:category><pdfaProperty:description>",
+                    description,
+                    "</pdfaProperty:description></rdf:li>",
+                ]);
+            }
+            xmp.push_str("</rdf:Seq></pdfaSchema:property></rdf:li>");
+        }
+        xmp.push_str("</rdf:Bag></pdfaExtension:schemas></rdf:Description>");
     }
     xmp.push_str("</rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>");
     xmp
 }
+
+/// An XMP extension schema: name, namespace, prefix, and each property's name, value type,
+/// category, and description. PDF/A-3 predefines neither schema below, so a file using one
+/// describes it.
+type Schema = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str, &'static str, &'static str)],
+);
+
+const FACTURX_SCHEMA: Schema = (
+    "Factur-X PDFA Extension Schema",
+    "urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#",
+    "fx",
+    &[
+        (
+            "DocumentFileName",
+            "Text",
+            "external",
+            "The name of the embedded XML document",
+        ),
+        (
+            "DocumentType",
+            "Text",
+            "external",
+            "The type of the hybrid document, e.g. INVOICE",
+        ),
+        (
+            "Version",
+            "Text",
+            "external",
+            "The version of the standard applying to the embedded XML",
+        ),
+        (
+            "ConformanceLevel",
+            "Text",
+            "external",
+            "The conformance level of the embedded XML",
+        ),
+    ],
+);
+
+const PDFUA_SCHEMA: Schema = (
+    "PDF/UA Universal Accessibility Schema",
+    "http://www.aiim.org/pdfua/ns/id/",
+    "pdfuaid",
+    &[("part", "Integer", "internal", "ISO 14289 part")],
+);
 
 /// Fixed level keeps the output byte-for-byte deterministic across runs.
 pub(crate) fn deflate(bytes: &[u8]) -> Vec<u8> {

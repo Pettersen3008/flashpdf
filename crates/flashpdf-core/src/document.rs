@@ -26,6 +26,8 @@ pub(crate) struct Paragraph<'a> {
     pub(crate) text: &'a str,
     pub(crate) runs: Vec<TextRun>,
     pub(crate) links: &'a [String],
+    /// The structure element it belongs to in tagged output; 0 is the document.
+    pub(crate) tag: u32,
 }
 
 pub(crate) struct ImageNode<'a> {
@@ -33,7 +35,7 @@ pub(crate) struct ImageNode<'a> {
     pub(crate) width: ImageSize,
     pub(crate) height: Option<Pt>,
     pub(crate) link: Option<&'a str>,
-    pub(crate) alt: &'a str,
+    pub(crate) tag: u32,
 }
 
 pub(crate) struct Spacer {

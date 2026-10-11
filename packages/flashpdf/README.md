@@ -113,7 +113,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
 
-`RenderOptions` accepts page format, margin, stylesheets, embedded fonts, a one-line repeating `header` and `footer`, `metadata`, and `tagged`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. Tagged mode requires a language and writes paragraph-line and figure tags with image `alt` text; it is not PDF/UA conformant.
+`RenderOptions` accepts page format, margin, stylesheets, embedded fonts, a one-line repeating `header` and `footer`, `metadata`, `tagged`, and `pdfua: '1'`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. Tagged mode requires a language and writes paragraph, heading, table, figure, and link structure. PDF/UA-1 output requires `tagged: true`, title and language metadata, embedded fonts, and `alt` on every image. Use empty `alt` for decoration; linked images need a description. Headings start at `h1` and cannot skip a level. Check reading order and image descriptions before distributing accessible documents.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';

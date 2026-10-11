@@ -530,7 +530,6 @@ fn image_record(
         }
         None => payload.push(0),
     }
-    payload.extend(text(b"Company logo"));
     record(12, &payload)
 }
 
@@ -944,7 +943,8 @@ fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_
     let pdfa = record(20, &[0]);
     let facturx = record(20, &[4, 0, 0]);
 
-    assert!(error(&[], &[pdfa.clone(), plain(b"Total")]).starts_with("PDF/A embeds every font"));
+    assert!(error(&[], &[pdfa.clone(), plain(b"Total")])
+        .starts_with("PDF/A and PDF/UA embed every font"));
     assert_eq!(
         error(&[b"Total: 42"], std::slice::from_ref(&facturx)),
         "invalid Factur-X XML"
@@ -1014,4 +1014,102 @@ fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_
         .unwrap_err()
         .to_string();
     assert_eq!(message, "attachments exceed 64 MiB per render");
+}
+
+/// A Metadata record with `tagging` 0 untagged, 1 tagged, or 2 PDF/UA-1, and English text.
+fn metadata(tagging: u8, title: &[u8]) -> Vec<u8> {
+    let mut fields = vec![tagging];
+    for value in [title, b"", b"", b"", b"en"] {
+        fields.extend(text(value));
+    }
+    record(14, &fields)
+}
+
+/// A StructStart record: role, alternate text, and Table scope, row span, and column span.
+fn struct_start(role: &[u8], alt: &[u8], (scope, rows, columns): (u8, u16, u16)) -> Vec<u8> {
+    let mut payload = text(role);
+    payload.extend(text(alt));
+    payload.push(scope);
+    payload.extend(rows.to_le_bytes());
+    payload.extend(columns.to_le_bytes());
+    record(23, &payload)
+}
+
+#[test]
+fn given_structure_records_the_output_cannot_hold_when_decoding_then_rejects_naming_why() {
+    let error = |records: &[Vec<u8>]| {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        bytes.extend(records.concat());
+        bytes.extend(record(255, &[]));
+        decode(&bytes).unwrap_err()
+    };
+    let tagged = metadata(1, b"");
+    let paragraph = struct_start(b"P", b"", (0, 1, 1));
+    let end = record(24, &[]);
+    for (records, message) in [
+        (
+            vec![paragraph.clone(), end.clone()],
+            "invalid structure element in untagged output",
+        ),
+        (
+            vec![tagged.clone(), struct_start(b"Paragraph", b"", (0, 1, 1))],
+            "invalid structure role",
+        ),
+        (
+            vec![tagged.clone(), struct_start(b"TH", b"", (4, 1, 1))],
+            "invalid table attributes",
+        ),
+        (
+            vec![tagged.clone(), struct_start(b"TD", b"", (0, 1, 0))],
+            "invalid table attributes",
+        ),
+        (vec![tagged.clone(), end], "invalid structure end"),
+        (vec![tagged, paragraph, plain(b"x")], "invalid nesting"),
+        (vec![metadata(2, b"")], "invalid metadata title"),
+        (
+            vec![metadata(2, b"Invoice"), struct_start(b"Figure", b"", (0, 1, 1))],
+            "invalid PDF/UA figure alternate text",
+        ),
+        (
+            vec![metadata(2, b"Invoice"), struct_start(b"TH", b"", (0, 1, 1))],
+            "invalid PDF/UA table header scope",
+        ),
+        (
+            vec![metadata(2, b"Invoice"), struct_start(b"H2", b"", (0, 1, 1))],
+            "invalid PDF/UA heading sequence",
+        ),
+        (
+            vec![metadata(2, b"Invoice"), plain(b"x")],
+            "PDF/A and PDF/UA embed every font and Helvetica has none; register one with `fonts` and set fontFamily",
+        ),
+    ] {
+        assert_eq!(error(&records), message);
+    }
+}
+
+#[test]
+fn given_a_tagged_paragraph_that_splits_across_pages_when_decoding_then_its_later_content_names_that_page(
+) {
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(metadata(1, b""));
+    bytes.extend(struct_start(b"P", b"", (0, 1, 1)));
+    bytes.extend(plain("word ".repeat(40).as_bytes()));
+    bytes.extend(record(24, &[]));
+    bytes.extend(record(255, &[]));
+    let pdf = decode_with_images(&[], &bytes).unwrap();
+    let pages = pdf.get_pages();
+    let element = (pdf.objects.values())
+        .filter_map(|object| object.as_dict().ok())
+        .find(|dict| dict.get(b"S").and_then(lopdf::Object::as_name).ok() == Some(b"P"))
+        .unwrap();
+    assert_eq!(
+        element.get(b"Pg").unwrap().as_reference().unwrap(),
+        pages[&1]
+    );
+    let kids = element.get(b"K").unwrap().as_array().unwrap();
+    assert_eq!(kids[0].as_i64().unwrap(), 0);
+    let later = kids.iter().find_map(|kid| kid.as_dict().ok()).unwrap();
+    assert_eq!(later.get(b"Type").unwrap().as_name().unwrap(), b"MCR");
+    assert_eq!(later.get(b"Pg").unwrap().as_reference().unwrap(), pages[&2]);
+    assert_eq!(later.get(b"MCID").unwrap().as_i64().unwrap(), 0);
 }

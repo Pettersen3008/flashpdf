@@ -36,7 +36,7 @@ pub enum ProtocolError {
     InvalidLink,
     AttachmentsTooLarge,
     DuplicateAttachment,
-    PdfAFont,
+    UnembeddedFont,
     PdfACmyk,
 }
 
@@ -79,8 +79,8 @@ impl std::fmt::Display for ProtocolError {
             Self::InvalidLink => "invalid link: URIs must be printable ASCII",
             Self::AttachmentsTooLarge => "attachments exceed 64 MiB per render",
             Self::DuplicateAttachment => "duplicate attachment name",
-            Self::PdfAFont => {
-                "PDF/A embeds every font and Helvetica has none; register one with `fonts` and set fontFamily"
+            Self::UnembeddedFont => {
+                "PDF/A and PDF/UA embed every font and Helvetica has none; register one with `fonts` and set fontFamily"
             }
             Self::PdfACmyk => "PDF/A output uses an sRGB output intent, so CMYK JPEGs are not supported",
         };

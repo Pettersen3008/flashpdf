@@ -270,7 +270,7 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 	}
 	await assert.rejects(
 		render(jsx("p", { children: "Total" }), options),
-		/PDF\/A embeds every font and Helvetica has none; register one with `fonts` and set fontFamily on <p>/,
+		/PDF\/A and PDF\/UA embed every font and Helvetica has none; register one with `fonts` and set fontFamily on <p>/,
 	);
 	await assert.rejects(
 		render(document, { ...options, attachments: [{ ...note, relationship: "Related" }] }),
@@ -430,6 +430,172 @@ test("given a repeating header and tagged metadata, when rendering two pages, th
 		}),
 	);
 	await assert.rejects(render(document, { tagged: true }), /requires metadata.language/);
+});
+
+/** The structure tree read from the PDF's uncompressed structure elements. A node is its role,
+ *  plus the scope of a header cell and the alternate text of a figure. */
+function structureTree(pdf) {
+	const text = Buffer.from(pdf).toString("latin1");
+	const objects = new Map(
+		[...text.matchAll(/(\d+) 0 obj\n([\s\S]*?)\nendobj/g)].map(([, id, body]) => [id, body]),
+	);
+	const node = (id) => {
+		const body = objects.get(id);
+		const kids = /\/K \[([\s\S]*?)\]/.exec(body)?.[1] ?? "";
+		const direct = kids.replace(/<<[\s\S]*?>>/g, "");
+		return {
+			role: /\/S \/(\w+)/.exec(body)[1],
+			scope: /\/Scope \/(\w+)/.exec(body)?.[1],
+			alt: /\/Alt \(([^)]*)\)/.exec(body)?.[1],
+			marked:
+				(direct.replace(/\d+ 0 R/g, "").match(/\d+/g)?.length ?? 0) +
+				(kids.match(/\/MCID/g)?.length ?? 0),
+			kids: [...direct.matchAll(/(\d+) 0 R/g)].map(([, child]) => node(child)),
+		};
+	};
+	const root = /\/StructTreeRoot (\d+) 0 R/.exec(text)[1];
+	return node(/\/K (\d+) 0 R/.exec(objects.get(root))[1]);
+}
+
+/** `Role[children]`, with a run of identical siblings folded into `child×count`. */
+function shape({ role, scope, alt, kids }) {
+	const label = role + (scope ? ` ${scope}` : "") + (alt ? ` "${alt}"` : "");
+	const parts = [];
+	for (const kid of kids.map(shape)) {
+		const last = parts.at(-1);
+		if (last?.text === kid) last.count++;
+		else parts.push({ text: kid, count: 1 });
+	}
+	const children = parts.map(({ text, count }) => (count > 1 ? `${text}×${count}` : text));
+	return children.length ? `${label}[${children.join(", ")}]` : label;
+}
+
+test("given a small invoice in PDF/UA mode, when rendering, then the structure tree follows its headings, text, links, table, and figures", async () => {
+	const logo = png(1, 1, 2, [0, 255, 0, 0]);
+	const cell = (tag, children) => jsx(tag, { children });
+	const document = jsxs("main", {
+		style: { fontFamily: "Abel" },
+		children: [
+			jsx("a", {
+				href: "https://example.com/",
+				children: jsx("img", { src: logo, alt: "Acme", style: { width: 24 } }),
+			}),
+			jsx("img", { src: logo, alt: "", style: { width: "100%", height: 1 } }),
+			jsx("h1", { children: "Invoice 42" }),
+			jsxs("p", {
+				children: [
+					"Pay at ",
+					jsx("a", { href: "https://example.com/pay", children: "example.com/pay" }),
+					" by the date in the ",
+					jsx("a", { href: "#terms", children: "terms" }),
+					".",
+				],
+			}),
+			jsxs("table", {
+				children: [
+					jsx("thead", {
+						children: jsxs("tr", { children: [cell("th", "Item"), cell("th", "Amount")] }),
+					}),
+					jsx("tbody", {
+						children: Array.from({ length: 60 }, (_, index) =>
+							jsxs("tr", { children: [cell("td", `Hour ${index + 1}`), cell("td", "120.00")] }),
+						),
+					}),
+					jsx("tfoot", {
+						children: jsxs("tr", { children: [cell("th", "Total"), cell("td", "7200.00")] }),
+					}),
+				],
+			}),
+			jsxs("section", {
+				id: "terms",
+				children: [jsx("h2", { children: "Terms" }), jsxs("div", { children: ["Net 30 days."] })],
+			}),
+		],
+	});
+	const options = {
+		fonts: [{ family: "Abel", regular: font, bold: font }],
+		metadata: { title: "Invoice 42", language: "en-US" },
+		tagged: true,
+		pdfua: "1",
+	};
+	const pdf = await render(document, options);
+	const tree = structureTree(pdf);
+	assert.equal(
+		shape(tree),
+		'Document[Figure "Acme"[Link], H1, P[Link×2], Table[THead[TR[TH Column×2]], TBody[TR[TD×2]×60], TFoot[TR[TH Row, TD]]], Sect[H2, P]]',
+	);
+	// The header and footer rows repeat on page 2 as artifacts, so each cell holds one sequence.
+	const rows = tree.kids[4].kids.flatMap((group) => group.kids);
+	assert.ok(rows.flatMap((row) => row.kids).every((cell) => cell.marked === 1));
+	const output = string(pdf);
+	assert.equal(output.match(/\/Type \/Page\n/g).length, 2);
+	assert.equal(output.match(/\/Tabs \/S/g).length, 2);
+	assert.equal(output.match(/\/StructParent \d+/g).length, 3);
+	for (const part of [
+		"/DisplayDocTitle true",
+		"/Contents (Acme)",
+		"/Contents (example.com/pay)",
+		"/Contents (terms)",
+		"/O /Layout",
+		"<pdfuaid:part>1</pdfuaid:part>",
+		'<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Invoice 42</rdf:li></rdf:Alt></dc:title>',
+	])
+		assert.ok(output.includes(part), part);
+	assert.deepEqual(pdf, await render(document, options));
+	if (spawnSync("verapdf", ["--version"]).status === 0) {
+		const path = new URL("../../../dist/pdfua.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const checked = spawnSync("verapdf", ["--flavour", "ua1", "--format", "text", path.pathname], {
+			encoding: "utf8",
+		});
+		assert.equal(checked.status, 0, checked.stderr + checked.stdout);
+		assert.match(checked.stdout, /^PASS /m);
+	}
+});
+
+test("given PDF/UA mode, when the options or document lack what it requires, then rejects naming it", async () => {
+	const logo = png(1, 1, 2, [0, 255, 0, 0]);
+	const fonts = [{ family: "Abel", regular: font, bold: font }];
+	const options = {
+		fonts,
+		metadata: { title: "Invoice", language: "en" },
+		tagged: true,
+		pdfua: "1",
+	};
+	const body = (...children) => jsxs("main", { style: { fontFamily: "Abel" }, children });
+	for (const [document, renderOptions, message] of [
+		[body("x"), { ...options, tagged: false }, /^Error: pdfua requires tagged: true$/],
+		[
+			body("x"),
+			{ ...options, metadata: { language: "en" } },
+			/^Error: PDF\/UA requires metadata.title$/,
+		],
+		[body("x"), { ...options, pdfua: "2" }, /^Error: invalid pdfua option/],
+		[jsx("main", { children: "x" }), options, /PDF\/A and PDF\/UA embed every font/],
+		[
+			body(jsx("img", { src: logo })),
+			options,
+			/PDF\/UA needs alt on every <img>.* on <img> in <main>$/,
+		],
+		[
+			body(
+				jsx("a", { href: "https://example.com/", children: jsx("img", { src: logo, alt: "" }) }),
+			),
+			options,
+			/PDF\/UA needs alt on a linked <img>/,
+		],
+		[
+			body(jsx("h1", { children: "A" }), jsx("h3", { children: "B" })),
+			options,
+			/^Error: <h3> follows <h1>; PDF\/UA headings cannot skip a level on <h3> in <main>$/,
+		],
+		[
+			body(jsx("h2", { children: "A" })),
+			options,
+			/the first heading is <h2>; PDF\/UA headings start at <h1>/,
+		],
+	])
+		await assert.rejects(render(document, renderOptions), message);
 });
 
 test("given adjacent text and plain spans, when rendering, then keeps them in one inline run", async () => {

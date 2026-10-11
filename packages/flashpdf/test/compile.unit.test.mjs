@@ -8,18 +8,23 @@ import { resolveStyles } from "../dist/css.js";
 import { helvetica } from "../dist/style.js";
 import { resolveTree } from "../dist/tree.js";
 
-/** Records protocol calls instead of encoding them. */
-async function compiled(element) {
-	const calls = [];
-	const writer = new Proxy(
+/** Records protocol calls instead of encoding them. Structure records are left out;
+ *  the tagged render test checks the tree they build. */
+function recorder(calls) {
+	return new Proxy(
 		{},
 		{
 			get:
 				(_, method) =>
 				(...args) =>
-					calls.push([method, ...args]),
+					method.startsWith("struct") || calls.push([method, ...args]),
 		},
 	);
+}
+
+async function compiled(element) {
+	const calls = [];
+	const writer = recorder(calls);
 	compile(resolveStyles(await resolveTree(element)), writer, new Map([["Helvetica", helvetica]]));
 	return calls;
 }
@@ -27,20 +32,12 @@ async function compiled(element) {
 /** Like `compiled`, for a document body, where links and the outline need the whole tree. */
 async function compiledBody(element, outline = false) {
 	const calls = [];
-	const writer = new Proxy(
-		{},
-		{
-			get:
-				(_, method) =>
-				(...args) =>
-					calls.push([method, ...args]),
-		},
-	);
 	compileBody(
 		resolveStyles(await resolveTree(element)),
-		writer,
+		recorder(calls),
 		new Map([["Helvetica", helvetica]]),
 		outline,
+		false,
 	);
 	return calls;
 }
@@ -128,7 +125,7 @@ test("given a link inside a paragraph, when compiling, then its runs carry the h
 	]);
 });
 
-test("given a link around an image, when compiling, then emits the image record with the href and alt", async () => {
+test("given a link around an image, when compiling, then emits the image record with the href", async () => {
 	const src = new Uint8Array([1, 2, 3]);
 	const calls = await compiled(
 		jsx("a", {
@@ -137,7 +134,7 @@ test("given a link around an image, when compiling, then emits the image record 
 		}),
 	);
 	assert.deepEqual(calls, [
-		["image", src, { kind: 2, value: 50 }, 12, "Logo", "mailto:billing@example.com"],
+		["image", src, { kind: 2, value: 50 }, 12, "mailto:billing@example.com"],
 	]);
 });
 

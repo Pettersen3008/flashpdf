@@ -8,8 +8,9 @@ use crate::font::{EmbeddedFont, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
 use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
-use crate::paint::{PageLink, PageTag, PdfPainter};
+use crate::paint::{PageLink, PdfPainter};
 use crate::pdf::{finish_pdf, Anchor, Metadata};
+use crate::structure::{Structure, ARTIFACT};
 use crate::{Command, Page, Pt, RenderError, TextStyle};
 
 /// Total content-stream bytes a document may paint before `finish`.
@@ -34,7 +35,7 @@ pub struct Renderer {
     used_images: Vec<bool>,
     /// Link annotations per page, parallel to `contents`.
     links: Vec<Vec<PageLink>>,
-    tags: Vec<Vec<PageTag>>,
+    pub(crate) structure: Structure,
     layout: LayoutBuffer,
     header: Option<Furniture>,
     footer: Option<Furniture>,
@@ -67,7 +68,7 @@ impl Renderer {
             images: Vec::new(),
             used_images: Vec::new(),
             links: vec![Vec::new()],
-            tags: vec![Vec::new()],
+            structure: Structure::default(),
             layout: LayoutBuffer::default(),
             header: None,
             footer: None,
@@ -193,6 +194,10 @@ impl Renderer {
         self.metadata = metadata;
     }
 
+    pub(crate) fn tagged(&self) -> bool {
+        self.metadata.tagged
+    }
+
     /// Registers a destination, named for links and `#nameddest=` and bookmarked when
     /// `level` is a heading level. Names the invalid field on failure.
     pub(crate) fn add_anchor(
@@ -276,7 +281,7 @@ impl Renderer {
             if !self.cursor.fits(height, self.page) {
                 self.start_page();
             }
-            return self.paint_block(layout, height);
+            return self.paint_block(layout, height, false);
         }
         // Stream positioned lines page by page; `offset` is the block y where
         // the current page starts, so gaps straddling a break collapse.
@@ -300,7 +305,7 @@ impl Renderer {
                 continue;
             }
             let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
-            self.paint(layout, start..index, origin);
+            self.paint(layout, start..index, origin, false);
             if index == lines {
                 let rest = (height - offset).get().min(available.get());
                 self.cursor.advance(Pt(rest.max(0.0)));
@@ -313,7 +318,8 @@ impl Renderer {
 
     /// Rows place one at a time; the header and footer rows lay out once into
     /// their own buffers. The header repaints at the top of every page a body
-    /// row opens, the footer after the last body row of every page.
+    /// row opens, the footer after the last body row of every page. Only the
+    /// first paint of each is content; the repeats are artifacts.
     fn render_table(&mut self, table: &Table<'_>) -> Result<(), RenderError> {
         let area = LayoutArea::root(table_width(table.width, self.page.content_width())?);
         let split = table.rows.len() - table.footer_rows;
@@ -326,10 +332,11 @@ impl Renderer {
             if !self.cursor.fits(reserved, self.page) {
                 self.start_page();
             }
-            self.paint_block(&header, header_height)?;
-            return self.paint_block(&footer, footer_height);
+            self.paint_block(&header, header_height, false)?;
+            return self.paint_block(&footer, footer_height, false);
         }
         let mut header_on_page = false;
+        let (mut header_repeats, mut footer_repeats) = (false, false);
         for (index, row) in body.iter().enumerate() {
             self.layout.clear();
             let height =
@@ -347,20 +354,22 @@ impl Renderer {
                 };
             if !self.cursor.fits(needed, self.page) {
                 if header_on_page {
-                    self.paint_block(&footer, footer_height)?;
+                    self.paint_block(&footer, footer_height, footer_repeats)?;
+                    footer_repeats = true;
                 }
                 self.start_page();
                 header_on_page = false;
             }
             if !header_on_page {
-                self.paint_block(&header, header_height)?;
+                self.paint_block(&header, header_height, header_repeats)?;
                 header_on_page = true;
+                header_repeats = true;
             }
-            let painted = self.paint_block(&layout, height);
+            let painted = self.paint_block(&layout, height, false);
             self.layout = layout;
             painted?;
         }
-        self.paint_block(&footer, footer_height)
+        self.paint_block(&footer, footer_height, footer_repeats)
     }
 
     fn layout_rows(
@@ -382,17 +391,28 @@ impl Renderer {
     }
 
     /// Checks the cap per paint: a repeated table header multiplies one block's bytes.
-    fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) -> Result<(), RenderError> {
+    fn paint_block(
+        &mut self,
+        layout: &LayoutBuffer,
+        height: Pt,
+        repeat: bool,
+    ) -> Result<(), RenderError> {
         let origin = self.cursor.origin(self.page);
-        self.paint(layout, 0..layout.lines.len(), origin);
+        self.paint(layout, 0..layout.lines.len(), origin, repeat);
         self.cursor.advance(height);
         self.check_size()
     }
 
     /// Paints `lines`, then places each anchor on the first line at or after it, with the
     /// first fragment winning. An anchor with no line left in `layout` waits for the next one.
-    fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
-        self.painter().paint(layout, lines.clone(), origin);
+    fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point, repeat: bool) {
+        PdfPainter::new(
+            self.contents.last_mut().unwrap(),
+            self.links.last_mut().unwrap(),
+            self.metadata.tagged.then_some(&mut self.structure),
+            repeat,
+        )
+        .paint(layout, lines.clone(), origin);
         let page = self.contents.len() - 1;
         let at = |line: usize| {
             let line = &layout.lines[line];
@@ -422,19 +442,11 @@ impl Renderer {
         }
     }
 
-    fn painter(&mut self) -> PdfPainter<'_> {
-        PdfPainter::new(
-            self.contents.last_mut().unwrap(),
-            self.links.last_mut().unwrap(),
-            self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
-        )
-    }
-
     fn start_page(&mut self) {
         self.content_bytes += self.contents.last().unwrap().len();
         self.contents.push(Content::new());
         self.links.push(Vec::new());
-        self.tags.push(Vec::new());
+        self.structure.pages.push(Vec::new());
         self.cursor.reset(self.page);
     }
 
@@ -458,9 +470,9 @@ impl Renderer {
                 .unwrap();
                 self.fonts.mark_used(furniture.style.font, &text);
                 if self.metadata.tagged {
-                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                    self.structure.mark(content, ARTIFACT, false);
                 }
-                PdfPainter::new(content, links, None).paint_line(
+                PdfPainter::new(content, links, None, false).paint_line(
                     &text,
                     furniture.style,
                     crate::geometry::Point {
@@ -503,7 +515,7 @@ impl Renderer {
             self.images,
             self.used_images,
             self.links,
-            self.tags,
+            self.structure,
             self.metadata,
         ))
     }

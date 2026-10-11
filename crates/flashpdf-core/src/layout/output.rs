@@ -12,6 +12,8 @@ pub(crate) struct PositionedLine {
     pub(crate) available_width: Pt,
     pub(crate) text_width: Pt,
     pub(crate) align: TextAlign,
+    /// The structure element of its paragraph in tagged output.
+    pub(crate) tag: u32,
 }
 
 /// One style's stretch of a line; `x` is its offset from the line start.
@@ -48,9 +50,15 @@ pub(crate) struct PositionedImage {
     pub(crate) height: Pt,
     pub(crate) slot: u16,
     pub(crate) link: Option<usize>,
-    pub(crate) alt: String,
+    pub(crate) tag: u32,
     /// The empty pseudo-line whose box carries the image through page splitting.
     pub(crate) line: usize,
+}
+
+pub(crate) struct Link {
+    pub(crate) uri: String,
+    /// The text of the link's runs; empty for an image.
+    pub(crate) text: String,
 }
 
 #[derive(Default)]
@@ -61,7 +69,7 @@ pub(crate) struct LayoutBuffer {
     pub(crate) text: Vec<u8>,
     pub(crate) boxes: Vec<PositionedBox>,
     pub(crate) images: Vec<PositionedImage>,
-    pub(crate) links: Vec<String>,
+    pub(crate) links: Vec<Link>,
     /// Anchor slot and the index of the line it waits for; `lines.len()` when none follows.
     pub(crate) anchors: Vec<(u16, usize)>,
 }

@@ -4,7 +4,7 @@ mod text;
 
 use std::collections::BTreeMap;
 
-pub(crate) use output::{Decoration, LayoutBuffer, PositionedImage, Segment};
+pub(crate) use output::{Decoration, LayoutBuffer, Link, PositionedImage, Segment};
 pub(crate) use row::table_width;
 
 use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Stack, Table};
@@ -132,11 +132,28 @@ impl<'a> LayoutEngine<'a> {
             text: paragraph.text,
             runs,
             links: paragraph.links,
+            tag: paragraph.tag,
         };
         let first = output.segments.len();
         let link_base = output.links.len();
         let height = text::ParagraphLayouter::layout(self.fonts, &keyed, area, output)?;
-        output.links.extend(paragraph.links.iter().cloned());
+        for uri in paragraph.links {
+            output.links.push(Link {
+                uri: uri.clone(),
+                text: String::new(),
+            });
+        }
+        // Layout succeeded, so the runs cover the text on character boundaries.
+        let mut start = 0;
+        for run in &paragraph.runs {
+            if let Some(link) = run.decoration.link {
+                let text = &paragraph.text[start..start + run.len];
+                output.links[link_base + usize::from(link)]
+                    .text
+                    .push_str(text);
+            }
+            start += run.len;
+        }
         for segment in &mut output.segments[first..] {
             let index = usize::from(segment.color.r)
                 | usize::from(segment.color.g) << 8
@@ -203,9 +220,13 @@ impl<'a> LayoutEngine<'a> {
             available_width: area.width,
             text_width: Pt::ZERO,
             align: TextAlign::Left,
+            tag: node.tag,
         });
         let link = node.link.map(|uri| {
-            output.links.push(uri.to_owned());
+            output.links.push(Link {
+                uri: uri.to_owned(),
+                text: String::new(),
+            });
             output.links.len() - 1
         });
         output.images.push(PositionedImage {
@@ -214,7 +235,7 @@ impl<'a> LayoutEngine<'a> {
             height: Pt(height),
             slot: node.slot,
             link,
-            alt: node.alt.to_owned(),
+            tag: node.tag,
             line,
         });
         Ok(Pt(height))

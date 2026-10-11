@@ -56,6 +56,7 @@ struct Space {
 pub(crate) struct ParagraphLayouter<'a> {
     runs: Vec<RunMetrics<'a>>,
     align: TextAlign,
+    tag: u32,
     area: LayoutArea,
     height: Pt,
     segment_start: usize,
@@ -103,6 +104,7 @@ impl<'a> ParagraphLayouter<'a> {
         let mut state = Self {
             runs,
             align: paragraph.align,
+            tag: paragraph.tag,
             area,
             height: Pt::ZERO,
             segment_start: output.segments.len(),
@@ -281,6 +283,7 @@ impl<'a> ParagraphLayouter<'a> {
             available_width: self.area.width,
             text_width: self.used,
             align: self.align,
+            tag: self.tag,
         });
         self.height += height;
         self.segment_start = output.segments.len();

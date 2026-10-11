@@ -33,7 +33,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 17;
+const VERSION: u16 = 19;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -66,6 +66,8 @@ pub struct Decoder {
     attachment_bytes: usize,
     metadata: crate::pdf::Metadata,
     pdfa: bool,
+    pdfua: bool,
+    heading: u8,
     body_started: bool,
 }
 
@@ -285,11 +287,11 @@ impl Decoder {
                 .map_err(ProtocolError::from)
             }
             Opcode::Metadata => {
-                let tagged = match cursor.take(1)?[0] {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(ProtocolError::InvalidValue("tagged flag")),
-                };
+                // 0 untagged, 1 tagged, 2 tagged PDF/UA-1.
+                let tagging = cursor.take(1)?[0];
+                if tagging > 2 {
+                    return Err(ProtocolError::InvalidValue("tagged flag"));
+                }
                 let fields = (0..5)
                     .map(|_| cursor.alt().map(str::to_owned))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -301,12 +303,17 @@ impl Decoder {
                     subject: fields[2].clone(),
                     keywords: fields[3].clone(),
                     language: fields[4].clone(),
-                    tagged,
+                    tagged: tagging > 0,
+                    pdfua: tagging == 2,
                     ..std::mem::take(&mut self.metadata)
                 };
-                if tagged && metadata.language.is_empty() {
+                if metadata.tagged && metadata.language.is_empty() {
                     return Err(ProtocolError::InvalidValue("metadata language"));
                 }
+                if metadata.pdfua && metadata.title.is_empty() {
+                    return Err(ProtocolError::InvalidValue("metadata title"));
+                }
+                self.pdfua = metadata.pdfua;
                 if !metadata.language.is_empty() && !valid_language(&metadata.language) {
                     return Err(ProtocolError::InvalidValue("metadata language"));
                 }
@@ -447,7 +454,8 @@ impl Decoder {
                     });
                 }
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Paragraph(align, text, runs, links))
+                let tag = self.tag();
+                self.layout_command(OwnedCommand::Paragraph(align, text, runs, links, tag))
             }
             Opcode::Image => {
                 let slot = cursor.u16()?;
@@ -465,9 +473,52 @@ impl Decoder {
                     1 => Some(cursor.uri()?.to_owned()),
                     _ => return Err(ProtocolError::InvalidValue("image link flag")),
                 };
-                let alt = cursor.alt()?.to_owned();
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt))
+                let tag = self.tag();
+                self.layout_command(OwnedCommand::Image(slot, width, height, link, tag))
+            }
+            Opcode::StructStart => {
+                // The role table check in `open` validates the role.
+                let length = cursor.u32()? as usize;
+                let role = cursor.take(length)?;
+                let alt = cursor.alt()?.to_owned();
+                // Table attributes: scope (0 none, 1 Row, 2 Column, 3 Both), row span, column span.
+                let table = [u16::from(cursor.take(1)?[0]), cursor.u16()?, cursor.u16()?];
+                if table[0] > 3 || table[1] == 0 || table[2] == 0 {
+                    return Err(ProtocolError::InvalidValue("table attributes"));
+                }
+                cursor.done()?;
+                if self.pdfua {
+                    if role == b"Figure" && alt.trim().is_empty() {
+                        return Err(ProtocolError::InvalidValue("PDF/UA figure alternate text"));
+                    }
+                    if role == b"TH" && table[0] == 0 {
+                        return Err(ProtocolError::InvalidValue("PDF/UA table header scope"));
+                    }
+                    if let [b'H', level @ b'1'..=b'6'] = role {
+                        let level = level - b'0';
+                        if level > self.heading + 1 {
+                            return Err(ProtocolError::InvalidValue("PDF/UA heading sequence"));
+                        }
+                        self.heading = level;
+                    }
+                }
+                self.body_started = true;
+                let renderer = self.ensure_renderer()?;
+                if !renderer.tagged() {
+                    return Err(ProtocolError::InvalidValue(
+                        "structure element in untagged output",
+                    ));
+                }
+                (renderer.structure)
+                    .open(role, alt, table)
+                    .map_err(ProtocolError::InvalidValue)
+            }
+            Opcode::StructEnd => {
+                cursor.done()?;
+                (self.ensure_renderer()?.structure)
+                    .close()
+                    .map_err(ProtocolError::InvalidValue)
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -517,7 +568,9 @@ impl Decoder {
             }
             Opcode::End => {
                 cursor.done()?;
-                if !self.frames.is_empty() {
+                if !self.frames.is_empty()
+                    || (self.renderer.as_ref()).is_some_and(|renderer| renderer.structure.is_open())
+                {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 if self.renderer.is_none() {
@@ -532,8 +585,8 @@ impl Decoder {
     /// Slots 0 and 1 are Helvetica; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
-        if self.pdfa && font.index() < 2 {
-            return Err(ProtocolError::PdfAFont);
+        if (self.pdfa || self.pdfua) && font.index() < 2 {
+            return Err(ProtocolError::UnembeddedFont);
         }
         let count = self
             .renderer
@@ -544,6 +597,11 @@ impl Decoder {
         } else {
             Err(ProtocolError::UnknownFont)
         }
+    }
+
+    /// The structure element that content decoded now belongs to.
+    fn tag(&self) -> u32 {
+        (self.renderer.as_ref()).map_or(0, |renderer| renderer.structure.current())
     }
 
     /// Document-level records must precede the header, footer and body.
@@ -593,7 +651,7 @@ impl Decoder {
 
     fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let payload = match &command {
-            OwnedCommand::Paragraph(_, text, runs, links) => {
+            OwnedCommand::Paragraph(_, text, runs, links, _) => {
                 text.len()
                     + runs.len() * size_of::<TextRun>()
                     + links
@@ -602,9 +660,7 @@ impl Decoder {
                         .sum::<usize>()
             }
             OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
-            OwnedCommand::Image(_, _, _, link, alt) => {
-                link.as_ref().map_or(0, String::len) + alt.len()
-            }
+            OwnedCommand::Image(_, _, _, link, _) => link.as_ref().map_or(0, String::len),
             _ => 0,
         };
         self.block_bytes += payload + size_of::<OwnedCommand>();

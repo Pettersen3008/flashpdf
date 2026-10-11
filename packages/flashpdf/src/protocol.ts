@@ -17,6 +17,14 @@ export type Run = {
 	lineThrough: boolean;
 	link: string | undefined;
 };
+/** Table attributes of a structure element, such as a `TH` cell's scope. Spans default to 1. */
+export type TableAttributes = {
+	scope?: "Row" | "Column" | "Both" | undefined;
+	rowSpan?: number | undefined;
+	colSpan?: number | undefined;
+};
+
+const SCOPES = ["Row", "Column", "Both"] as const;
 
 const opcode = {
 	spacer: 2,
@@ -37,12 +45,15 @@ const opcode = {
 	pdfa: 20,
 	attachment: 21,
 	anchor: 22,
+	structStart: 23,
+	structEnd: 24,
 	end: 255,
 } as const;
 
 export class ProtocolWriter {
 	private repeating: "header" | "footer" | undefined;
 	private repeatWritten = false;
+	private tagged = false;
 	/** Slot per registered byte array, so a logo reused on every row embeds once. */
 	private readonly images = new Map<Uint8Array, number>();
 
@@ -55,9 +66,11 @@ export class ProtocolWriter {
 		this.binary.header(width, height, margin);
 	}
 
-	metadata(value: Record<string, unknown>, tagged: boolean) {
+	/** `tagging` is 0 untagged, 1 tagged, or 2 tagged PDF/UA-1. */
+	metadata(value: Record<string, unknown>, tagging: 0 | 1 | 2) {
+		this.tagged = tagging > 0;
 		this.binary.record(opcode.metadata, () => {
-			this.binary.u8(tagged ? 1 : 0);
+			this.binary.u8(tagging);
 			for (const key of ["title", "author", "subject", "keywords", "language"])
 				this.binary.text((value[key] as string | undefined) ?? "");
 		});
@@ -148,7 +161,6 @@ export class ProtocolWriter {
 		src: Uint8Array,
 		width: Dimension | undefined,
 		height: number | undefined,
-		alt: string,
 		link: string | undefined,
 	) {
 		this.body();
@@ -177,8 +189,24 @@ export class ProtocolWriter {
 				this.binary.u8(1);
 				this.binary.text(link);
 			}
-			this.binary.text(alt);
 		});
+	}
+
+	/** Opens a structure element, or with role `Artifact` marks what follows as decoration.
+	 *  Untagged output and the page furniture of a header or footer write none. */
+	structStart(role: string, alt = "", table: TableAttributes = {}) {
+		if (!this.tagged || this.repeating) return;
+		this.binary.record(opcode.structStart, () => {
+			this.binary.text(role);
+			this.binary.text(alt);
+			this.binary.u8(table.scope ? SCOPES.indexOf(table.scope) + 1 : 0);
+			this.binary.u16(table.rowSpan ?? 1);
+			this.binary.u16(table.colSpan ?? 1);
+		});
+	}
+
+	structEnd() {
+		if (this.tagged && !this.repeating) this.binary.record(opcode.structEnd);
 	}
 
 	spacer(height: number) {
