@@ -46,6 +46,8 @@ export type ElementNode = {
 	readonly href?: string | undefined;
 	/** An `<svg>`, or an `<img>` whose `src` is SVG markup. */
 	readonly drawing?: Drawing | undefined;
+	/** `data-bookmark` on a heading: its outline title, or `false` to leave it out. */
+	readonly bookmark?: string | false | undefined;
 };
 export type Node = TextNode | ElementNode;
 
@@ -210,8 +212,13 @@ export async function reactTree(value: unknown, depth = 0): Promise<unknown> {
 export function href(value: unknown, where = ""): string {
 	if (typeof value !== "string" || !value)
 		throw new Error(`href must be an absolute http, https, or mailto URL${where}`);
-	if (value.startsWith("#"))
-		throw new Error(`internal anchor links (${value}) are not supported yet${where}`);
+	if (value.startsWith("#")) {
+		if (!/^#[\x21-\x7e]{1,255}$/.test(value))
+			throw new Error(
+				`a link to an id is # and 1 to 255 printable ASCII characters, not ${JSON.stringify(value)}${where}`,
+			);
+		return value;
+	}
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -234,6 +241,22 @@ export function href(value: unknown, where = ""): string {
 			`href must be printable ASCII; percent-encode ${JSON.stringify(url.href)}${where}`,
 		);
 	return url.href;
+}
+
+/** `data-bookmark` is a heading's outline title, or `false` to leave it out. */
+function bookmark(value: unknown, where: string): { bookmark?: string | false } {
+	if (value === undefined) return {};
+	if (
+		value !== false &&
+		(typeof value !== "string" ||
+			!value.trim() ||
+			[...value].length > 255 ||
+			/[\p{Cc}\ud800-\udfff]/u.test(value))
+	)
+		throw new Error(
+			`data-bookmark must be 1 to 255 characters without control characters, or false${where}`,
+		);
+	return { bookmark: value as string | false };
 }
 
 function image(input: Record<string, unknown>, where: string, chain: string, depth: number) {
@@ -299,6 +322,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
 		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
+	const heading = /^h[1-6]$/.test(element.type);
 	const own =
 		element.type === "img"
 			? ["src", "alt"]
@@ -306,7 +330,9 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 				? ["href"]
 				: element.type === "svg"
 					? Object.keys(object(element.props))
-					: [];
+					: heading
+						? ["data-bookmark"]
+						: [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
 		throw new Error(`<${element.type}> has no children${where}`);
@@ -332,6 +358,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		...(element.type === "img" ? image(input, where, chain, depth) : {}),
 		...(element.type === "a" ? { href: href(input.href, where) } : {}),
 		...(element.type === "svg" ? vector(input, chain, depth) : {}),
+		...(heading ? bookmark(input["data-bookmark"], where) : {}),
 	};
 	const self = label(node);
 	// An svg's children became its drawing.

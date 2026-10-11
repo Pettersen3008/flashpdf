@@ -92,6 +92,9 @@
 
 - `RenderOptions.pdfa: '3b'` writes PDF/A-3b: XMP metadata that repeats `metadata`, an sRGB output intent, and a document ID hashed from the content. In this mode, text that would use the unembedded Helvetica and CMYK JPEGs reject.
 - `RenderOptions.attachments` embeds files with an `AFRelationship`, listed in the catalog's `/AF` array and the EmbeddedFiles name tree. Names, MIME types, and relationships are validated, with a 64 MiB cap per render.
+- Internal links: `<a href="#id">` jumps to the element with that `id`, on whatever page it lands. The id must be on one element, and a link to a missing or repeated id rejects naming it.
+- Named destinations: every element a link targets is in the `/Dests` name tree, so `invoice.pdf#nameddest=terms` opens there in a viewer.
+- `RenderOptions.outline` writes bookmarks for `h1` to `h6`, nested by level and titled with the heading's text. `data-bookmark="Title"` renames a heading's bookmark and `data-bookmark={false}` skips it.
 - `RenderOptions.facturx: { xml, profile }` embeds Factur-X or ZUGFeRD XML as `factur-x.xml` (`xrechnung.xml` for `XRECHNUNG`) with the Factur-X XMP extension schema, and implies `pdfa: '3b'`. FlashPDF does not validate the XML content.
 
 ### Changed
@@ -99,6 +102,7 @@
 - Link annotations carry the print flag, which PDF/A requires.
 - A selector that could match an element but is outside the subset rejects at `stylesheet()` and `render`, naming the selector and reason, instead of being skipped. This covers attribute selectors such as `[href]`, `:has()`, `:lang()`, namespaces, unknown pseudo-classes, and malformed selectors. Pseudo-elements, state pseudo-classes such as `:hover` and `:disabled`, `:host`, and tags FlashPDF never renders can never match in a PDF, so they stay skipped. Move a rule that uses `[href]` or `:has()` out of the sheet, or select a class.
 - Rules with `*` or `:root` apply instead of being skipped, so an unlayered Tailwind preflight now rejects at its `box-sizing` declaration. Tailwind puts the preflight and theme in `@layer`, which FlashPDF still skips.
+- The binary protocol is version 17: an `Anchor` record places a destination and an optional bookmark at the top of the next line. The JavaScript and WASM halves ship together, so this affects no public API.
 
 ## 0.4.0 - 2026-10-02
 

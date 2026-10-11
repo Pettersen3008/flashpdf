@@ -86,7 +86,7 @@ export type BlockProps = CommonProps & { children?: PdfNode | undefined };
 export type VoidProps = CommonProps & { children?: never };
 /** `src` is the PNG, JPEG, or SVG file bytes; `alt` is stored for accessibility tagging. */
 export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined };
-/** `href` must be an absolute `http:`, `https:`, or `mailto:` URL. */
+/** `href` must be an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element with that id. */
 export type LinkProps = BlockProps & { href: string };
 
 type SvgNumber = number | string;
@@ -144,3 +144,13 @@ export type BarcodeProps = CommonProps & {
 	quietZone?: number | undefined;
 	alt?: string | undefined;
 };
+/** With `RenderOptions.outline`, `data-bookmark` replaces the heading's bookmark title, or `false` skips it. */
+export type HeadingProps = BlockProps & { "data-bookmark"?: string | false | undefined };
+export type PdfProps =
+	| BlockProps
+	| VoidProps
+	| ImageProps
+	| LinkProps
+	| HeadingProps
+	| SvgProps
+	| SvgShapeProps;

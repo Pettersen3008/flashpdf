@@ -177,12 +177,36 @@ test("given an a with a javascript: href, when resolving, then rejects naming th
 		resolveTree(jsx("a", { href: "/invoices/42", children: "x" })),
 		/href must be an absolute http, https, or mailto URL, not "\/invoices\/42" on <a>/,
 	);
-	await assert.rejects(
-		resolveTree(jsx("a", { href: "#total", children: "x" })),
-		/internal anchor links \(#total\) are not supported yet on <a>/,
-	);
 	const [link] = await resolveTree(jsx("a", { href: "https://Example.com/ø", children: "x" }));
 	assert.equal(link.href, "https://example.com/%C3%B8");
+});
+
+test("given a link to an id, when resolving, then keeps the id verbatim and rejects one that is empty or not printable ASCII", async () => {
+	const [link] = await resolveTree(jsx("a", { href: "#total-due", children: "x" }));
+	assert.equal(link.href, "#total-due");
+	for (const href of ["#", "#a b", "#tæ"])
+		await assert.rejects(
+			resolveTree(jsx("a", { href, children: "x" })),
+			/a link to an id is # and 1 to 255 printable ASCII characters, not .* on <a>/,
+		);
+});
+
+test("given data-bookmark on a heading, when resolving, then keeps a title or false and rejects anything else", async () => {
+	const [title, hidden, plain] = await resolveTree([
+		jsx("h2", { "data-bookmark": "Terms", children: "x" }),
+		jsx("h2", { "data-bookmark": false, children: "x" }),
+		jsx("h2", { children: "x" }),
+	]);
+	assert.deepEqual([title.bookmark, hidden.bookmark, "bookmark" in plain], ["Terms", false, false]);
+	for (const value of [true, "", "a".repeat(256), 5, "a\nb"])
+		await assert.rejects(
+			resolveTree(jsx("h1", { "data-bookmark": value, children: "x" })),
+			/data-bookmark must be 1 to 255 characters without control characters, or false on <h1>/,
+		);
+	await assert.rejects(
+		resolveTree(jsx("p", { "data-bookmark": "x", children: "x" })),
+		/unsupported property: data-bookmark/,
+	);
 });
 
 test("given ref and key props on a host element, when resolving, then ignores them", async () => {

@@ -122,4 +122,18 @@ const _codes = (
 const _qrWithoutValue = <QRCode level="M" />;
 // @ts-expect-error The level is L, M, Q, or H.
 const _qrLevel = <QRCode value="x" level="X" />;
+const _outline = (
+	<main>
+		<h2 id="terms" data-bookmark="Terms of payment">
+			Terms
+		</h2>
+		<h3 data-bookmark={false}>Skipped</h3>
+		<a href="#terms">terms</a>
+	</main>
+);
+void render(_outline, { outline: true });
+// @ts-expect-error A bookmark title is a string, or false to skip the heading.
+const _bookmarkTrue = <h2 data-bookmark={true}>Terms</h2>;
+// @ts-expect-error The outline option is a boolean.
+void render(_outline, { outline: "yes" });
 void import("@pettersen3008/flashpdf/jsx-runtime");

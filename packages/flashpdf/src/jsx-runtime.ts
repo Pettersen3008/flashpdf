@@ -7,6 +7,7 @@ import type {
 	PdfProps,
 	SvgProps,
 	SvgShapeProps,
+	HeadingProps,
 	VoidProps,
 } from "./element.js";
 import type { BlockTag, TableTag, TextTag } from "./tree.js";
@@ -58,5 +59,11 @@ export namespace JSX {
 		path: SvgShapeProps & { d: string };
 		title: { children?: string | undefined };
 		desc: { children?: string | undefined };
+		h1: HeadingProps;
+		h2: HeadingProps;
+		h3: HeadingProps;
+		h4: HeadingProps;
+		h5: HeadingProps;
+		h6: HeadingProps;
 	}
 }

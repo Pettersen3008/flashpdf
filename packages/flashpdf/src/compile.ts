@@ -36,10 +36,25 @@ type TextState = {
 	link: string | undefined;
 	/** Not inherited by CSS, but each element paints its own, so the product down the tree is the effective value. */
 	opacity: number;
+	/** Set only while compiling the document body. */
+	nav: Navigation | undefined;
 };
 /** `cell` is set only for the direct children of a table row. */
 type Context = TextState & { inRow: boolean; cell?: boolean };
 type Fonts = ReadonlyMap<string, FontSlots>;
+/** What a document needs before its first record: the ids links name, and whether to bookmark headings. */
+type Navigation = {
+	/** Each id a link names, with its element. */
+	targets: ReadonlyMap<string, StyledElement>;
+	outline: boolean;
+	/** The targets whose anchor record is written. */
+	anchored: Set<string>;
+	/** Anchor records written, against the engine's cap. */
+	count: number;
+};
+/** Destinations and bookmarks per render, matching the engine's cap. */
+const MAX_ANCHORS = 10_000;
+const MAX_TITLE = 255;
 
 const ROOT: Context = {
 	size: 12,
@@ -52,6 +67,7 @@ const ROOT: Context = {
 	lineHeight: undefined,
 	link: undefined,
 	opacity: 1,
+	nav: undefined,
 	inRow: false,
 };
 
@@ -105,6 +121,7 @@ function inherit(style: NormalizedStyle, current: TextState, fonts: Fonts): Text
 		link: current.link,
 		opacity:
 			style.opacity === undefined ? current.opacity : current.opacity * opacity(style.opacity),
+		nav: current.nav,
 	};
 }
 
@@ -293,6 +310,7 @@ function element(
 	const style = node.style;
 	if (style.height !== undefined && node.tag !== "img" && node.tag !== "svg")
 		throw new Error("height applies only to <img> and <svg> (block height comes from content)");
+	anchor(writer, node, context.nav);
 	switch (node.tag) {
 		case "div":
 		case "main":
@@ -429,6 +447,81 @@ function element(
 			pageBreak(writer, style, "breakAfter", depth);
 			break;
 	}
+}
+
+function plain(nodes: readonly StyledNode[]): string {
+	return nodes
+		.map((node) =>
+			node.kind === "text" ? node.value : node.tag === "br" ? " " : plain(node.children),
+		)
+		.join("");
+}
+
+/** Writes the destination that a link to `node.id` or the outline needs, before the node's content.
+ *  The engine places it at the top of the next line, so it moves with the node across a page break. */
+function anchor(writer: ProtocolWriter, node: StyledElement, nav: Navigation | undefined) {
+	if (!nav) return;
+	const named = node.id !== undefined && nav.targets.has(node.id);
+	const heading = nav.outline && node.bookmark !== false && /^h([1-6])$/.exec(node.tag);
+	const level = heading ? Number(heading[1]) : 0;
+	const title = !level
+		? ""
+		: typeof node.bookmark === "string"
+			? node.bookmark
+			: [...plain(node.children).replace(/\s+/g, " ").trim()].slice(0, MAX_TITLE).join("");
+	if (!named && !title) return;
+	if (++nav.count > MAX_ANCHORS)
+		throw new Error(`more than ${MAX_ANCHORS} link targets and bookmarks`);
+	writer.anchor(named ? node.id! : "", title ? level : 0, title);
+	if (named) nav.anchored.add(node.id!);
+}
+
+/** The ids that `<a href="#id">` names, each with its element. Every one must be on exactly one element. */
+function linkTargets(nodes: readonly StyledNode[]): Map<string, StyledElement> {
+	const links = new Map<string, StyledElement>();
+	const owners = new Map<string, StyledElement>();
+	const twins = new Map<string, StyledElement>();
+	const walk = (list: readonly StyledNode[]) => {
+		for (const node of list) {
+			if (node.kind === "text") continue;
+			if (node.href?.startsWith("#") && !links.has(node.href.slice(1)))
+				links.set(node.href.slice(1), node);
+			if (node.id !== undefined)
+				if (owners.has(node.id)) twins.set(node.id, node);
+				else owners.set(node.id, node);
+			walk(node.children);
+		}
+	};
+	walk(nodes);
+	const targets = new Map<string, StyledElement>();
+	for (const [id, link] of links) {
+		const owner = owners.get(id);
+		if (!owner) throw locate(new Error(`link to #${id}: no element has id="${id}"`), link.where);
+		const twin = twins.get(id);
+		if (twin)
+			throw locate(new Error(`link to #${id}: id="${id}" is on more than one element`), twin.where);
+		targets.set(id, owner);
+	}
+	return targets;
+}
+
+/** Compiles the document body. A link target or a bookmarked heading gets an `anchor` record. */
+export function compileBody(
+	nodes: readonly StyledNode[],
+	writer: ProtocolWriter,
+	fonts: Fonts,
+	outline: boolean,
+) {
+	const nav: Navigation = { targets: linkTargets(nodes), outline, anchored: new Set(), count: 0 };
+	compile(nodes, writer, fonts, { ...ROOT, nav });
+	for (const [id, owner] of nav.targets)
+		if (!nav.anchored.has(id))
+			throw locate(
+				new Error(
+					`link to #${id}: its element cannot hold a destination; put the id on a block, heading, paragraph, image, table, or table cell`,
+				),
+				owner.where,
+			);
 }
 
 type RowGroup = { group?: StyledElement; rows: StyledElement[] };

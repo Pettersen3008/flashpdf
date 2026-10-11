@@ -76,6 +76,10 @@ impl<'a> LayoutEngine<'a> {
             Element::Row(row) => self.layout_row(row, area, output),
             Element::Table(table) => self.layout_table(table, area, output),
             Element::Image(image) => self.layout_image(image, area, output),
+            Element::Anchor(slot) => {
+                output.anchors.push((*slot, output.lines.len()));
+                Ok(Pt::ZERO)
+            }
         }
     }
 
@@ -284,9 +288,12 @@ impl<'a> LayoutEngine<'a> {
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
         let mut height = Pt::ZERO;
-        for (index, child) in stack.children.iter().enumerate() {
-            if index != 0 {
-                height += stack.gap;
+        // An anchor takes no space, so the gap sits between the children that do.
+        let mut gap = Pt::ZERO;
+        for child in &stack.children {
+            if !matches!(child, Element::Anchor(_)) {
+                height += gap;
+                gap = stack.gap;
             }
             height += self.layout(child, area.translated(Pt::ZERO, height), output)?;
         }
@@ -305,6 +312,10 @@ impl<'a> LayoutEngine<'a> {
         let mut height = Pt::ZERO;
         let mut placed = Vec::with_capacity(row.cells.len());
         for (cell, width) in row.cells.iter().zip(widths) {
+            let line = output.lines.len();
+            output
+                .anchors
+                .extend(cell.anchors.iter().map(|slot| (*slot, line)));
             let index = output.boxes.len();
             let cell_height = self.layout(
                 &cell.content,

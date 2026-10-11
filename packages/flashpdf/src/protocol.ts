@@ -41,6 +41,7 @@ const opcode = {
 	boxEnd: 18,
 	pdfa: 20,
 	attachment: 21,
+	anchor: 22,
 	end: 255,
 } as const;
 /** The core's caps; images are checked here because `add_image` copies the bytes into WASM memory. */
@@ -90,6 +91,16 @@ export class ProtocolWriter {
 			this.binary.text(name);
 			this.binary.text(mime);
 			this.binary.text(description);
+		});
+	}
+
+	/** A destination at the top of the next line laid out. `level` 1 to 6 also makes it a bookmark. */
+	anchor(name: string, level: number, title: string) {
+		this.body();
+		this.binary.record(opcode.anchor, () => {
+			this.binary.text(name);
+			this.binary.u8(level);
+			this.binary.text(title);
 		});
 	}
 

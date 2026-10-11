@@ -56,6 +56,7 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 ## Images and links
 
 `img` takes the PNG, JPEG, or SVG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
+`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element in the document with that `id`. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
 
 ```tsx
 const logo = new Uint8Array(await readFile('logo.png'));
@@ -63,7 +64,11 @@ const logo = new Uint8Array(await readFile('logo.png'));
   <img src={logo} alt="Acme Supply Co." style={{ width: 120 }} />
 </a>
 <p>Pay online at <a href="https://example.com/pay">the portal</a>.</p>
+<p>See the <a href="#terms">terms</a>.</p>
+<h2 id="terms">Terms</h2>
 ```
+
+A `#id` link jumps to the top of that element, even when it lands on a later page, and each target is also a named destination, so `invoice.pdf#nameddest=terms` opens there. A link to an id that is missing or on more than one element rejects naming the id. Set `outline: true` to give the PDF a bookmark tree built from `h1` to `h6`: each title is the heading's text, `data-bookmark="Title"` replaces it, and `data-bookmark={false}` skips the heading. [CSS.md](./CSS.md) lists which elements can be targets.
 
 PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](./CSS.md).
 
@@ -144,7 +149,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `QRCode` | `(props: QRCodeProps) => Element` | A vector QR code; see [QR codes and barcodes](#qr-codes-and-barcodes). |
 | `Barcode` | `(props: BarcodeProps) => Element` | A vector Code 128 barcode. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; outline?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';

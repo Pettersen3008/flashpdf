@@ -103,6 +103,10 @@ Build the CSS in your own step and pass it as a `stylesheets` entry, as [CSS.md]
 | `opacity-50`, `opacity-100` | Element opacity, as a number or a percent. |
 
 A rounded box needs the same border on all four sides, so `rounded-lg border border-solid border-gray-200` works and `rounded-lg border-b border-solid` rejects. `shadow-*`, `outline-*`, `ring-*`, and `bg-gradient-*` reject because shadows, outlines, and gradients are not drawn.
+| `href must be an absolute http, https, or mailto URL` | Links cannot be relative. | Use a full URL, or `#id` for an element in this document. |
+| `link to #terms: no element has id="terms"` | The `#id` names no element in the document body. | Add the `id`, or fix the spelling. The match is exact and case sensitive. |
+| `link to #terms: id="terms" is on more than one element` | A destination needs one element. | Give each element its own `id`. |
+| `link to #terms: its element cannot hold a destination` | The id is on an inline `span`, `b`, `strong`, or `a`, a `br`, or a table row. | Move the `id` to the paragraph, a heading, a block, or a table cell. |
 
 ## Recipes
 
@@ -223,6 +227,8 @@ The guidelines ask for error correction level M, a 46 mm square symbol (130.4 pt
 | `Svg`, `Path`, `Rect`, `G`, … | `svg`, `path`, `rect`, `g`, … in lowercase with the same attributes. Text, gradients, and clip paths reject. |
 | `Link src` | `a href`, absolute `http:`, `https:`, or `mailto:`. |
 | `borderRadius`, `borderStyle`, `opacity` | The same names with CSS meanings. A radius needs the same border on all four sides, and opacity applies per element rather than to the group. |
+| `id` with `Link src="#id"` | `id` with `a href="#id"`. The link lands on the page where the element does. |
+| `bookmark` | `outline: true` bookmarks `h1` to `h6`. `data-bookmark="Title"` renames one and `data-bookmark={false}` skips it. |
 | `StyleSheet.create` | A `style` object, or CSS strings in `stylesheets`. |
 | `Font.register` | `fonts: [{ family, regular, bold }]` with TTF bytes. Regular and bold only. |
 | `fixed` header or footer | The `header` and `footer` options, one text line each. |

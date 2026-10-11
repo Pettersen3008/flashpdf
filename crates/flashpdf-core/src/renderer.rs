@@ -1,19 +1,23 @@
+use std::ops::Range;
+
 use pdf_writer::Content;
 
 use crate::command::{CommandParser, OwnedCommand};
 use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, FontBook};
-use crate::geometry::{LayoutArea, PageCursor, PageLayout};
+use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
 use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
 use crate::paint::{PageLink, PageTag, PdfPainter};
-use crate::pdf::{finish_pdf, Metadata};
+use crate::pdf::{finish_pdf, Anchor, Metadata};
 use crate::{Command, Page, Pt, RenderError, TextStyle};
 
 /// Total content-stream bytes a document may paint before `finish`.
 pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
 /// Pages per document; a five-byte page break must not buy an unbounded page list.
 pub const MAX_PAGES: usize = 10_000;
+/// Destinations and bookmarks per render; each is a PDF object.
+const MAX_ANCHORS: usize = 10_000;
 
 pub fn render(page: Page, commands: &[Command<'_>]) -> Result<Vec<u8>, RenderError> {
     let mut renderer = Renderer::new(page);
@@ -39,6 +43,8 @@ pub struct Renderer {
     header: Option<Furniture>,
     footer: Option<Furniture>,
     metadata: Metadata,
+    /// Anchors with no line yet, waiting for the next one painted.
+    pending: Vec<u16>,
 }
 
 /// A header or footer line, painted on every page in `finish`.
@@ -71,6 +77,7 @@ impl Renderer {
             header: None,
             footer: None,
             metadata: Metadata::default(),
+            pending: Vec::new(),
         }
     }
 
@@ -191,6 +198,32 @@ impl Renderer {
         self.metadata = metadata;
     }
 
+    /// Registers a destination, named for links and `#nameddest=` and bookmarked when
+    /// `level` is a heading level. Names the invalid field on failure.
+    pub(crate) fn add_anchor(
+        &mut self,
+        name: &str,
+        level: u8,
+        title: &str,
+    ) -> Result<u16, &'static str> {
+        let slot = u16::try_from(self.metadata.anchors.len())
+            .ok()
+            .filter(|slot| usize::from(*slot) < MAX_ANCHORS)
+            .ok_or("anchor count")?;
+        if !name.is_empty() {
+            let Err(index) = self.metadata.find(name) else {
+                return Err("anchor name: already used");
+            };
+            self.metadata.names.insert(index, (name.to_owned(), slot));
+        }
+        self.metadata.anchors.push(Anchor {
+            level,
+            title: title.to_owned(),
+            at: None,
+        });
+        Ok(slot)
+    }
+
     fn push_document(&mut self, document: &Document<'_>) -> Result<(), RenderError> {
         for block in &document.blocks {
             self.push_block(block)?;
@@ -272,7 +305,7 @@ impl Renderer {
                 continue;
             }
             let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
-            self.painter().paint(layout, start..index, origin);
+            self.paint(layout, start..index, origin);
             if index == lines {
                 let rest = (height - offset).get().min(available.get());
                 self.cursor.advance(Pt(rest.max(0.0)));
@@ -356,9 +389,42 @@ impl Renderer {
     /// Checks the cap per paint: a repeated table header multiplies one block's bytes.
     fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) -> Result<(), RenderError> {
         let origin = self.cursor.origin(self.page);
-        self.painter().paint(layout, 0..layout.lines.len(), origin);
+        self.paint(layout, 0..layout.lines.len(), origin);
         self.cursor.advance(height);
         self.check_size()
+    }
+
+    /// Paints `lines`, then places each anchor on the first line at or after it, with the
+    /// first fragment winning. An anchor with no line left in `layout` waits for the next one.
+    fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        self.painter().paint(layout, lines.clone(), origin);
+        let page = self.contents.len() - 1;
+        let at = |line: usize| {
+            let line = &layout.lines[line];
+            (
+                page,
+                (origin.x + line.origin.x).get(),
+                (origin.y - line.top).get(),
+            )
+        };
+        let anchors = &mut self.metadata.anchors;
+        if !lines.is_empty() {
+            for slot in self.pending.drain(..) {
+                if let Some(anchor) = anchors.get_mut(usize::from(slot)) {
+                    anchor.at.get_or_insert_with(|| at(lines.start));
+                }
+            }
+        }
+        for &(slot, line) in &layout.anchors {
+            let Some(anchor) = anchors.get_mut(usize::from(slot)) else {
+                continue;
+            };
+            if lines.contains(&line) {
+                anchor.at.get_or_insert_with(|| at(line));
+            } else if line == lines.end && line == layout.lines.len() && anchor.at.is_none() {
+                self.pending.push(slot);
+            }
+        }
     }
 
     fn painter(&mut self) -> PdfPainter<'_> {
@@ -424,6 +490,21 @@ impl Renderer {
                 return Err(RenderError::DocumentTooLarge);
             }
         }
+        // What no line claimed, such as an empty last element, sits where the content ends.
+        let end = (
+            self.contents.len() - 1,
+            self.page.margin().get(),
+            self.cursor.origin(self.page).y.get(),
+        );
+        for anchor in &mut self.metadata.anchors {
+            anchor.at.get_or_insert(end);
+        }
+        let metadata = &self.metadata;
+        if (self.links.iter().flatten()).any(|link| {
+            (link.uri.strip_prefix('#')).is_some_and(|name| metadata.find(name).is_err())
+        }) {
+            return Err(RenderError::UnknownDestination);
+        }
         let (fonts, used) = self.fonts.into_parts();
         Ok(finish_pdf(
             self.page.page(),
@@ -444,7 +525,7 @@ impl Renderer {
 /// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
 fn splittable(element: &Element<'_>) -> bool {
     match element {
-        Element::Paragraph(_) | Element::Image(_) => true,
+        Element::Paragraph(_) | Element::Image(_) | Element::Anchor(_) => true,
         Element::Box(node) => {
             node.style.background.is_none()
                 && node

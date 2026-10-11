@@ -52,6 +52,9 @@ pub enum Command<'a> {
         alt: &'a str,
         alpha: u8,
     },
+    /// The destination slot of a registered anchor, set at the top of the next line laid out,
+    /// which a page break may carry onto a later page.
+    Anchor(u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -74,6 +77,7 @@ pub(crate) enum OwnedCommand {
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
     Image(u16, ImageSize, Option<Pt>, Option<String>, String, u8),
+    Anchor(u16),
 }
 
 impl OwnedCommand {
@@ -106,6 +110,7 @@ impl OwnedCommand {
                 alt,
                 alpha: *alpha,
             },
+            Self::Anchor(slot) => Command::Anchor(*slot),
         }
     }
 }
@@ -223,6 +228,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 alpha,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
+            Command::Anchor(slot) => Ok(Element::Anchor(slot)),
             Command::BoxStart { style } => {
                 self.check_depth(depth)?;
                 let children = self.parse_children(Command::BoxEnd, depth + 1)?;
@@ -240,8 +246,15 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 }
                 let mut cells = Vec::with_capacity(columns.len());
                 for width in columns {
+                    // Anchors before a cell belong to it, so they do not count as cells.
+                    let mut anchors = Vec::new();
+                    while let Some(Command::Anchor(slot)) = self.peek() {
+                        self.index += 1;
+                        anchors.push(slot);
+                    }
                     cells.push(Cell {
                         width: *width,
+                        anchors,
                         content: self.parse_element(depth + 1)?,
                     });
                 }
@@ -328,6 +341,10 @@ fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
         Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {
             children.iter().all(|child| uniform_rows(child, columns))
         }
-        Element::Paragraph(_) | Element::Spacer(_) | Element::Table(_) | Element::Image(_) => false,
+        Element::Paragraph(_)
+        | Element::Spacer(_)
+        | Element::Table(_)
+        | Element::Image(_)
+        | Element::Anchor(_) => false,
     }
 }

@@ -3,7 +3,7 @@ use pdf_writer::types::{
     StructRole,
 };
 use pdf_writer::writers::{ExtGraphicsState, Resources, StructTreeRoot};
-use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
+use pdf_writer::{Content, Filter, Finish, Name, Null, Pdf, Rect, Ref, Str, TextStr};
 
 use crate::font::{font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
@@ -24,6 +24,25 @@ pub(crate) struct Metadata {
     pub(crate) facturx: Option<(&'static str, &'static str)>,
     /// Sorted by name, as the EmbeddedFiles name tree requires.
     pub(crate) attachments: Vec<Attachment>,
+    /// In document order. Each becomes a destination object, and a bookmark when it has a level.
+    pub(crate) anchors: Vec<Anchor>,
+    /// Destination name and anchor slot, sorted by name as the Dests name tree requires.
+    pub(crate) names: Vec<(String, u16)>,
+}
+
+impl Metadata {
+    /// Where `name` sits in `names`, or where it would go.
+    pub(crate) fn find(&self, name: &str) -> Result<usize, usize> {
+        (self.names).binary_search_by(|(other, _)| other.as_str().cmp(name))
+    }
+}
+
+pub(crate) struct Anchor {
+    /// The heading level of a bookmark, or 0.
+    pub(crate) level: u8,
+    pub(crate) title: String,
+    /// Page index, then the left and top of the destination; set once a line paints.
+    pub(crate) at: Option<(usize, f32, f32)>,
 }
 
 pub(crate) struct Attachment {
@@ -137,6 +156,15 @@ pub(crate) fn finish_pdf(
         .iter()
         .map(|_| (allocate(), allocate()))
         .collect();
+    let dests: Vec<Ref> = metadata.anchors.iter().map(|_| allocate()).collect();
+    let bookmarks: Vec<Bookmark> = metadata
+        .anchors
+        .iter()
+        .zip(&dests)
+        .filter(|(anchor, _)| anchor.level > 0)
+        .map(|(anchor, dest)| (allocate(), *dest, anchor))
+        .collect();
+    let outline = (!bookmarks.is_empty()).then(&mut allocate);
     let first_page = next;
     let count = contents.len();
     let page_refs = (0..count).map(|index| Ref::new(first_page + index as i32 * 2));
@@ -146,6 +174,11 @@ pub(crate) fn finish_pdf(
     catalog_writer.pages(pages);
     if !metadata.language.is_empty() {
         catalog_writer.lang(pdf_writer::TextStr(&metadata.language));
+    }
+    if let Some(root) = outline {
+        catalog_writer
+            .outlines(root)
+            .pair(Name(b"PageMode"), Name(b"UseOutlines"));
     }
     if let Some((root, _)) = structure {
         catalog_writer.pair(Name(b"StructTreeRoot"), root);
@@ -165,11 +198,22 @@ pub(crate) fn finish_pdf(
             .insert(Name(b"AF"))
             .array()
             .items(files.iter().map(|(spec, _)| *spec));
+    }
+    if !files.is_empty() || !metadata.names.is_empty() {
         let mut names = catalog_writer.names();
-        let mut tree = names.embedded_files();
-        let mut entries = tree.names();
-        for (attachment, (spec, _)) in metadata.attachments.iter().zip(&files) {
-            entries.insert(Str(attachment.name.as_bytes()), *spec);
+        if !metadata.names.is_empty() {
+            let mut tree = names.destinations();
+            let mut entries = tree.names();
+            for (name, slot) in &metadata.names {
+                entries.insert(Str(name.as_bytes()), dests[usize::from(*slot)]);
+            }
+        }
+        if !files.is_empty() {
+            let mut tree = names.embedded_files();
+            let mut entries = tree.names();
+            for (attachment, (spec, _)) in metadata.attachments.iter().zip(&files) {
+                entries.insert(Str(attachment.name.as_bytes()), *spec);
+            }
         }
     }
     drop(catalog_writer);
@@ -189,6 +233,26 @@ pub(crate) fn finish_pdf(
         }
     }
     pdf.pages(pages).kids(page_refs.clone()).count(count as i32);
+
+    // `[page /XYZ left top null]`, as an object so the name tree and bookmarks share it.
+    for (anchor, reference) in metadata.anchors.iter().zip(&dests) {
+        let (page_index, left, top) = anchor.at.unwrap();
+        pdf.indirect(*reference)
+            .array()
+            .item(Ref::new(first_page + page_index as i32 * 2))
+            .item(Name(b"XYZ"))
+            .item(left)
+            .item(top)
+            .item(Null);
+    }
+    if let Some(root) = outline {
+        let last = write_outline(&mut pdf, root, &bookmarks);
+        let mut writer = pdf.outline(root);
+        writer
+            .first(bookmarks[0].0)
+            .last(last)
+            .count(bookmarks.len() as i32);
+    }
 
     if let Some((root, document)) = structure {
         let mut tree = pdf.indirect(root).start::<StructTreeRoot>();
@@ -331,10 +395,15 @@ pub(crate) fn finish_pdf(
                 .rect(Rect::new(x1, y1, x2, y2))
                 .flags(AnnotationFlags::PRINT)
                 .border(0.0, 0.0, 0.0, None);
-            annotation
-                .action()
-                .action_type(ActionType::Uri)
-                .uri(Str(link.uri.as_bytes()));
+            let mut action = annotation.action();
+            match link.uri.strip_prefix('#') {
+                Some(name) => action
+                    .action_type(ActionType::GoTo)
+                    .pair(Name(b"D"), Str(name.as_bytes())),
+                None => action
+                    .action_type(ActionType::Uri)
+                    .uri(Str(link.uri.as_bytes())),
+            };
         }
     }
 
@@ -351,6 +420,41 @@ pub(crate) fn finish_pdf(
         pdf.set_file_id((id.clone(), id));
     }
     pdf.finish()
+}
+
+/// An outline item: its object, its destination object, and its anchor.
+type Bookmark<'a> = (Ref, Ref, &'a Anchor);
+
+/// Writes `items` as siblings under `parent` and returns the last one. An item's children are
+/// the items after it with a higher level, so a heading nests under the nearest earlier
+/// heading of a lower level.
+fn write_outline(pdf: &mut Pdf, parent: Ref, items: &[Bookmark]) -> Ref {
+    let level = items[0].2.level;
+    let starts: Vec<usize> = (0..items.len())
+        .filter(|&index| items[index].2.level <= level)
+        .collect();
+    let ends = starts.iter().skip(1).copied().chain([items.len()]);
+    let mut prev = None;
+    for (&start, end) in starts.iter().zip(ends) {
+        let (object, dest, anchor) = items[start];
+        let kids = &items[start + 1..end];
+        let last = (!kids.is_empty()).then(|| write_outline(pdf, object, kids));
+        let mut item = pdf.outline_item(object);
+        item.title(TextStr(&anchor.title))
+            .parent(parent)
+            .pair(Name(b"Dest"), dest);
+        if let Some(prev) = prev {
+            item.prev(prev);
+        }
+        if let Some((next, ..)) = items.get(end) {
+            item.next(*next);
+        }
+        if let (Some((first, ..)), Some(last)) = (kids.first(), last) {
+            item.first(*first).last(last).count(kids.len() as i32);
+        }
+        prev = Some(object);
+    }
+    prev.unwrap()
 }
 
 /// XMP must agree with the Info dictionary, so it repeats the same fields plus the language.

@@ -324,4 +324,6 @@ pub enum RenderError {
     DocumentTooLarge,
     ImageTooWide,
     TooManyPages,
+    /// A link names a destination no element registered.
+    UnknownDestination,
 }
