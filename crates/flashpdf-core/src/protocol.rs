@@ -20,7 +20,9 @@ use pdf_writer::types::AssociationKind;
 use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
-use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle};
+use crate::{
+    Edges, FontId, LineStyle, OwnedCommand, Radii, RunDecoration, TextRun, TextStyle, OPAQUE,
+};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
@@ -33,7 +35,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 8;
+const VERSION: u16 = 13;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -401,9 +403,9 @@ impl Decoder {
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
                     // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-                    // 4 an f32 line height follows.
+                    // 4 an f32 line height follows, 5 a u8 alpha follows.
                     let flags = cursor.take(1)?[0];
-                    if flags > 0x1f {
+                    if flags > 0x3f {
                         return Err(ProtocolError::InvalidValue("run flags"));
                     }
                     let link = if flags & 8 != 0 {
@@ -419,6 +421,11 @@ impl Decoder {
                     } else {
                         None
                     };
+                    let alpha = if flags & 32 != 0 {
+                        cursor.take(1)?[0]
+                    } else {
+                        OPAQUE
+                    };
                     let run = cursor.text(false)?;
                     text.push_str(run);
                     runs.push(TextRun {
@@ -432,6 +439,7 @@ impl Decoder {
                             underline: flags & 2 != 0,
                             line_through: flags & 4 != 0,
                             link,
+                            alpha,
                         },
                     });
                 }
@@ -455,8 +463,9 @@ impl Decoder {
                     _ => return Err(ProtocolError::InvalidValue("image link flag")),
                 };
                 let alt = cursor.alt()?.to_owned();
+                let alpha = cursor.take(1)?[0];
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt))
+                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt, alpha))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -488,17 +497,51 @@ impl Decoder {
                     bottom: cursor.rgb()?,
                     left: cursor.rgb()?,
                 };
+                let alpha = cursor.take(1)?[0];
+                // Two bits per side, top first: 0 solid, 1 dashed, 2 dotted.
+                let styles = cursor.take(1)?[0];
+                let side = |index: u8| match styles >> (index * 2) & 3 {
+                    0 => Ok(LineStyle::Solid),
+                    1 => Ok(LineStyle::Dashed),
+                    2 => Ok(LineStyle::Dotted),
+                    _ => Err(ProtocolError::InvalidValue("border style")),
+                };
+                let border_style = Edges {
+                    top: side(0)?,
+                    right: side(1)?,
+                    bottom: side(2)?,
+                    left: side(3)?,
+                };
+                let radius = match cursor.take(1)?[0] {
+                    0 => None,
+                    1 => {
+                        let percent = cursor.take(1)?[0];
+                        let mut values = [0.0; 8];
+                        for value in &mut values {
+                            *value = cursor.nonnegative_f32("border radius")?;
+                        }
+                        Some(Radii { values, percent })
+                    }
+                    _ => return Err(ProtocolError::InvalidValue("border radius flag")),
+                };
                 cursor.done()?;
-                self.open(
-                    Frame::Box,
-                    OwnedCommand::BoxStart(crate::BoxStyle {
-                        margin,
-                        padding,
-                        border,
-                        background,
-                        border_color,
-                    }),
-                )
+                let style = crate::BoxStyle {
+                    margin,
+                    padding,
+                    border,
+                    background,
+                    border_color,
+                    border_style,
+                    radius,
+                    alpha,
+                };
+                // One stroke follows the rounded outline; four different sides would need mitred joins.
+                if radius.is_some() && !style.uniform_border() {
+                    return Err(ProtocolError::InvalidValue(
+                        "border radius with unequal borders",
+                    ));
+                }
+                self.open(Frame::Box, OwnedCommand::BoxStart(style))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
@@ -591,7 +634,7 @@ impl Decoder {
                         .sum::<usize>()
             }
             OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
-            OwnedCommand::Image(_, _, _, link, alt) => {
+            OwnedCommand::Image(_, _, _, link, alt, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
             _ => 0,

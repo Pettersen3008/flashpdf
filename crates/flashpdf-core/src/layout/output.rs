@@ -37,6 +37,7 @@ pub(crate) struct Decoration {
     pub(crate) line_through: bool,
     /// Index into `LayoutBuffer::links`.
     pub(crate) link: Option<usize>,
+    pub(crate) alpha: u8,
     /// Font ascent and (positive) descent at the segment size, for the link rectangle.
     pub(crate) ascent: Pt,
     pub(crate) descent: Pt,
@@ -49,6 +50,7 @@ pub(crate) struct PositionedImage {
     pub(crate) slot: u16,
     pub(crate) link: Option<usize>,
     pub(crate) alt: String,
+    pub(crate) alpha: u8,
     /// The empty pseudo-line whose box carries the image through page splitting.
     pub(crate) line: usize,
 }

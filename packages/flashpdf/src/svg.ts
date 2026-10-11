@@ -136,7 +136,7 @@ function paint(value: unknown, name: string): Paint {
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(
-			message === "opacity is not supported"
+			message.startsWith("a colour with alpha")
 				? `${name}: a colour with alpha is not supported; use ${name}Opacity`
 				: `${name}: ${message}`,
 		);
@@ -726,8 +726,15 @@ export function frame(
 	return [drawing.width, drawing.height];
 }
 
-/** The engine's vector format: the drawing fitted to the unit square, y up, as an image fills it. */
-export function encode(drawing: Drawing, box: readonly [number, number], current: Rgb): Uint8Array {
+/** The engine's vector format: the drawing fitted to the unit square, y up, as an image fills it.
+ *  `opacity` is the element's CSS opacity, folded into each shape because a shape's own alpha
+ *  replaces the page's inside a form XObject. */
+export function encode(
+	drawing: Drawing,
+	box: readonly [number, number],
+	current: Rgb,
+	opacity = 1,
+): Uint8Array {
 	const [width, height] = box;
 	const [vx, vy, vw, vh] = drawing.viewBox;
 	let [sx, sy] = [width / vw, height / vh];
@@ -776,9 +783,9 @@ export function encode(drawing: Drawing, box: readonly [number, number], current
 				(shape.join << 5),
 		);
 		for (const value of multiply(fit, shape.matrix)) f32(value);
-		if (shape.fill) rgba(shape.fill, shape.fillOpacity * shape.opacity);
+		if (shape.fill) rgba(shape.fill, shape.fillOpacity * shape.opacity * opacity);
 		if (shape.stroke) {
-			rgba(shape.stroke, shape.strokeOpacity * shape.opacity);
+			rgba(shape.stroke, shape.strokeOpacity * shape.opacity * opacity);
 			f32(shape.strokeWidth);
 			f32(shape.miter);
 			u8(shape.dashes.length);

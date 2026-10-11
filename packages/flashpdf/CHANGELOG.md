@@ -8,10 +8,16 @@
 - `<img src={bytes}>` accepts an SVG file with the same subset.
 - `QRCode` draws a QR code as vector paths: numeric, alphanumeric, or UTF-8 byte mode, error correction L, M, Q, or H (default M), the smallest version from 1 to 40, the standard's mask selection, and a quiet zone in modules. Children draw over the symbol, for a logo or the Swiss cross. The encoder is a port of Project Nayuki's MIT-licensed QR Code generator.
 - `Barcode` draws Code 128 with automatic code set B and C switching and the checksum, a module width and bar height in points, and the value printed below unless `text={false}`.
+- `border-radius` and its four corner longhands, with one or two lengths or percents per corner. The background fills the rounded shape and a border with one width, colour, and style on all four sides follows it. Radii that overrun a side shrink together, so `9999px` and Tailwind's `rounded-full` make a pill. A radius with differing sides, and a radius on `img` or `svg`, reject with a reason. A box with a background or border still moves whole to the next page, so its corners are never cut at a break.
+- `border-style` and the four side longhands, plus the style word in `border` and its side shorthands: `none`, `hidden`, `solid`, `dashed`, `dotted`. Dashes follow Chrome's proportions, dots are round-capped, and each side stretches its gaps so whole dashes fill it. `double`, `groove`, `ridge`, `inset`, and `outset` reject. Tailwind's `border-dashed` and `border-dotted` work.
+- `opacity` on boxes, text, underlines, images, and drawings, as a number or percent, multiplied down the tree. Each element draws with its own graphics-state alpha instead of a transparency group, so a translucent card's background shows through its text. PDF/A-3b output stays valid; veraPDF accepts it.
 
 ### Changed
 
 - The binary protocol is version 8: image registration also accepts a vector drawing, which the engine writes as a form XObject. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 8.7 KB raw (3.9 KB gzip).
+- The binary protocol is version 13: `BoxStart` carries opacity, border styles, and corner radii, a paragraph run can carry an alpha, and an image record ends with one. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 5.2 KB raw (1.7 KB gzip).
+- `box-shadow`, `outline`, `border-image`, and `background-image` reject with a reason, as does a gradient in `background`. They rejected without one before. A colour with alpha now says to use `opacity`.
+- `border: 1pt dashed red` and `border-style: dashed` no longer reject. `<br>` rejects `opacity` like its other box properties, and a `header` or `footer` rejects it too.
 
 ### Changed
 

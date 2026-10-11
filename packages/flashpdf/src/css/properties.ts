@@ -3,7 +3,14 @@ import type { Style } from "../element.js";
 export type RejectedProperty =
 	| "minWidth"
 	| "maxWidth"
-	| "borderRadius"
+	| "boxShadow"
+	| "outline"
+	| "outlineColor"
+	| "outlineOffset"
+	| "outlineStyle"
+	| "outlineWidth"
+	| "borderImage"
+	| "backgroundImage"
 	| "letterSpacing"
 	| "verticalAlign"
 	| "objectFit"
@@ -11,6 +18,7 @@ export type RejectedProperty =
 	| "borderSpacing";
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
 type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: string };
+const NO_OUTLINE = "outlines are not drawn; use a border";
 const properties = {
 	display: {},
 	flexDirection: { css: "flex-direction" },
@@ -34,6 +42,18 @@ const properties = {
 	borderRight: { css: "border-right" },
 	borderBottom: { css: "border-bottom" },
 	borderLeft: { css: "border-left" },
+	borderStyle: { css: "border-style" },
+	borderTopStyle: { css: "border-top-style" },
+	borderRightStyle: { css: "border-right-style" },
+	borderBottomStyle: { css: "border-bottom-style" },
+	borderLeftStyle: { css: "border-left-style" },
+	borderRadius: { css: "border-radius" },
+	borderTopLeftRadius: { css: "border-top-left-radius" },
+	borderTopRightRadius: { css: "border-top-right-radius" },
+	borderBottomRightRadius: { css: "border-bottom-right-radius" },
+	borderBottomLeftRadius: { css: "border-bottom-left-radius" },
+	// Not inherited: the compiler multiplies it down the tree.
+	opacity: {},
 	background: {},
 	backgroundColor: { css: "background-color" },
 	gap: {},
@@ -57,7 +77,23 @@ const properties = {
 		css: "max-width",
 		unsupported: "only width on a flex row child is implemented",
 	},
-	borderRadius: { css: "border-radius", unsupported: "box corners are square" },
+	boxShadow: {
+		css: "box-shadow",
+		unsupported: "shadows are not drawn; use a border or a background",
+	},
+	outline: { css: "outline", unsupported: NO_OUTLINE },
+	outlineColor: { css: "outline-color", unsupported: NO_OUTLINE },
+	outlineOffset: { css: "outline-offset", unsupported: NO_OUTLINE },
+	outlineStyle: { css: "outline-style", unsupported: NO_OUTLINE },
+	outlineWidth: { css: "outline-width", unsupported: NO_OUTLINE },
+	borderImage: {
+		css: "border-image",
+		unsupported: "border images are not drawn; use a solid, dashed, or dotted border",
+	},
+	backgroundImage: {
+		css: "background-image",
+		unsupported: "gradients and background images are not drawn; use background-color",
+	},
 	letterSpacing: {
 		css: "letter-spacing",
 		unsupported: "text shaping is not implemented",

@@ -82,12 +82,18 @@ fn plain(value: &[u8]) -> Vec<u8> {
 }
 
 fn box_start() -> Vec<u8> {
+    decorated_box(0.0, &[255, 0, 0])
+}
+
+/// A box with `border` on every side, then the opacity, border styles, and radius bytes.
+fn decorated_box(border: f32, tail: &[u8]) -> Vec<u8> {
     let mut payload = Vec::new();
-    for _ in 0..12 {
-        payload.extend(0.0_f32.to_le_bytes());
+    for edge in [0.0; 8].into_iter().chain([border; 4]) {
+        payload.extend(edge.to_le_bytes());
     }
     payload.extend([1, 0xee, 0xee, 0xee]);
     payload.extend([0, 0, 0].repeat(4));
+    payload.extend(tail);
     record(17, &payload)
 }
 
@@ -321,7 +327,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&bad_length), "truncated record");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
-    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 32, b"x")]));
+    bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 64, b"x")]));
     assert_eq!(push_error(&bad_flags), "invalid run flags");
 
     let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);
@@ -362,6 +368,36 @@ fn given_a_batch_with_a_bad_record_when_pushing_then_records_is_its_index() {
         "invalid nesting"
     );
     assert_eq!(decoder.records(), 2);
+}
+
+#[test]
+fn given_invalid_box_decoration_when_decoding_then_rejects() {
+    let radius = |first: f32| {
+        let mut tail = vec![255, 0, 1, 0];
+        for value in [first, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] {
+            tail.extend(value.to_le_bytes());
+        }
+        tail
+    };
+    let mut unequal = radius(2.0);
+    unequal[1] = 1; // the top border is dashed and the others solid
+    for (border, tail, message) in [
+        (1.0, vec![255, 3, 0], "invalid border style"),
+        (1.0, vec![255, 0, 2], "invalid border radius flag"),
+        (1.0, radius(f32::NAN), "invalid border radius"),
+        (1.0, radius(-1.0), "invalid border radius"),
+        (1.0, unequal, "invalid border radius with unequal borders"),
+    ] {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        bytes.extend(decorated_box(border, &tail));
+        assert_eq!(push_error(&bytes), message);
+    }
+    let mut rounded = header(VERSION, 120.0, 60.0, 10.0);
+    rounded.extend(decorated_box(1.0, &radius(2.0)));
+    rounded.extend(plain(b"x"));
+    rounded.extend(record(18, &[]));
+    rounded.extend(record(255, &[]));
+    assert!(decode(&rounded).is_ok());
 }
 
 #[test]
@@ -534,6 +570,7 @@ fn image_record(
         None => payload.push(0),
     }
     payload.extend(text(b"Company logo"));
+    payload.push(255);
     record(12, &payload)
 }
 

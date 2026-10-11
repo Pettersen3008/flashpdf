@@ -43,8 +43,13 @@ impl Reader<'_> {
 /// One call site for every numeric operator, because pdf-writer inlines its
 /// float formatting into each caller and that would grow the WASM.
 #[inline(never)]
-fn op(content: &mut Content, operator: &str, operands: &[f32]) {
+pub(crate) fn op(content: &mut Content, operator: &str, operands: &[f32]) {
     content.op(operator).operands(operands.iter().copied());
+}
+
+#[inline(never)]
+pub(crate) fn dash(content: &mut Content, dashes: &[f32], phase: f32) {
+    content.set_dash_pattern(dashes.iter().copied(), phase);
 }
 
 /// `MAGIC`, the intrinsic size in points, then per path: flags (bit 0 fill, 1 even-odd,
@@ -101,7 +106,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Image, String> {
             op(&mut content, "j", &[f32::from(join)]);
             op(&mut content, "M", &[miter]);
             if count > 0 {
-                content.set_dash_pattern(dashes.iter().copied(), phase);
+                dash(&mut content, dashes, phase);
             }
         }
         if alpha != [255; 2] {

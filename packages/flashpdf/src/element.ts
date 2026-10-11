@@ -6,6 +6,8 @@ export type Edges =
 	| `${Length} ${Length} ${Length}`
 	| `${Length} ${Length} ${Length} ${Length}`;
 
+export type BorderStyle = "none" | "hidden" | "solid" | "dashed" | "dotted";
+
 export type Style = {
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
@@ -30,6 +32,21 @@ export type Style = {
 	borderRight?: string | number;
 	borderBottom?: string | number;
 	borderLeft?: string | number;
+	/** One to four of `none`, `solid`, `dashed`, `dotted`, top first. */
+	borderStyle?: string;
+	borderTopStyle?: BorderStyle;
+	borderRightStyle?: BorderStyle;
+	borderBottomStyle?: BorderStyle;
+	borderLeftStyle?: BorderStyle;
+	/** One to four lengths or percents, then optionally `/` and one to four vertical ones. */
+	borderRadius?: string | number;
+	/** One or two lengths or percents: horizontal, then vertical. */
+	borderTopLeftRadius?: string | number;
+	borderTopRightRadius?: string | number;
+	borderBottomRightRadius?: string | number;
+	borderBottomLeftRadius?: string | number;
+	/** A number from 0 to 1, or a percent; it multiplies down the tree. */
+	opacity?: number | string;
 	background?: string;
 	backgroundColor?: string;
 	gap?: Length;

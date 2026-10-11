@@ -1,8 +1,9 @@
 import { number } from "../assert.js";
 
 export const SIDES = ["Top", "Right", "Bottom", "Left"] as const;
+export const CORNERS = ["TopLeft", "TopRight", "BottomRight", "BottomLeft"] as const;
 
-export function edgeValues(value: unknown, name: "margin" | "padding"): unknown[] {
+export function edgeValues(value: unknown, name: string): unknown[] {
 	const values = typeof value === "string" ? value.trim().split(/\s+/) : [value];
 	if (values.length < 1 || values.length > 4) throw new Error(`invalid ${name}: ${value}`);
 	return values.length === 1
@@ -14,14 +15,41 @@ export function edgeValues(value: unknown, name: "margin" | "padding"): unknown[
 				: values;
 }
 
+const NUMBER = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?`;
+const LENGTH = new RegExp(`^(${NUMBER})(pt|px|em|rem)$`);
+const PERCENT = new RegExp(`^(${NUMBER})%$`);
+
 export function point(value: unknown, parent = 12, positive = false): number {
 	if (typeof value === "number") return number(value, positive);
 	if (value === "0") return 0;
 	if (typeof value !== "string") throw new Error(`invalid length: ${String(value)}`);
-	const match = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|em|rem)$/.exec(value.trim());
+	const match = LENGTH.exec(value.trim());
 	if (!match) throw new Error(`invalid length: ${value}`);
 	const scale = match[2] === "px" ? 0.75 : match[2] === "em" ? parent : match[2] === "rem" ? 12 : 1;
 	return number(Number(match[1]) * scale, positive);
+}
+
+/** One radius: points, or a percent of the box side, which only the engine can resolve. */
+type Radius = [amount: number, percent: boolean];
+/** A corner's radius, horizontal then vertical; one value serves both. */
+export function corner(value: unknown, parent: number): [Radius, Radius] {
+	const tokens = typeof value === "string" ? value.trim().split(/\s+/) : [value];
+	if (tokens.length > 2) throw new Error(`invalid border radius: ${String(value)}`);
+	const radius = (token: unknown): Radius => {
+		const percent = typeof token === "string" ? PERCENT.exec(token) : null;
+		return percent ? [number(Number(percent[1])), true] : [point(token, parent), false];
+	};
+	return [radius(tokens[0]), radius(tokens[1] ?? tokens[0])];
+}
+
+/** A number or percent, clamped to 0 through 1 as CSS does. */
+export function opacity(value: unknown): number {
+	const percent =
+		typeof value === "string" ? /^(\d+(?:\.\d*)?|\.\d+)(%?)$/.exec(value.trim()) : null;
+	const amount =
+		typeof value === "number" ? value : percent ? Number(percent[1]) / (percent[2] ? 100 : 1) : NaN;
+	if (Number.isNaN(amount)) throw new Error(`invalid opacity: ${String(value)}`);
+	return Math.min(1, Math.max(0, amount));
 }
 
 const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|rem|%)$/;

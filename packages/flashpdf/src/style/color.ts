@@ -34,7 +34,8 @@ white ffffff whitesmoke f5f5f5 yellow ffff00 yellowgreen 9acd32
 type Rgb = [number, number, number];
 
 function opaque(alpha: number) {
-	if (Math.abs(alpha - 1) > 1e-6) throw new Error("opacity is not supported");
+	if (Math.abs(alpha - 1) > 1e-6)
+		throw new Error("a colour with alpha is not supported; use the opacity property");
 }
 /** `50%` → 0.5, otherwise the number scaled by `scale`; NaN for anything else. */
 function fraction(token: string, scale: number) {

@@ -16,7 +16,12 @@ export type Run = {
 	underline: boolean;
 	lineThrough: boolean;
 	link: string | undefined;
+	/** 0 to 1, with every ancestor's opacity multiplied in. */
+	opacity: number;
 };
+
+/** The engine's alpha byte; 255 is opaque. */
+const alpha = (opacity: number) => Math.round(opacity * 255);
 
 const opcode = {
 	spacer: 2,
@@ -96,6 +101,8 @@ export class ProtocolWriter {
 				throw new Error(`${this.repeating} must be a single text line`);
 			if (only!.underline || only!.lineThrough || only!.link !== undefined)
 				throw new Error(`${this.repeating} text cannot be underlined or linked`);
+			if (alpha(only!.opacity) !== 255)
+				throw new Error(`${this.repeating} text cannot take opacity`);
 			this.repeatWritten = true;
 			this.binary.record(opcode[this.repeating], () => {
 				this.binary.f32(only!.size);
@@ -121,16 +128,19 @@ export class ProtocolWriter {
 					this.binary.f32(run.size);
 					for (const channel of run.color) this.binary.u8(channel);
 					// Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-					// 4 an f32 line height follows.
+					// 4 an f32 line height follows, 5 a u8 alpha follows.
+					const translucent = alpha(run.opacity) !== 255;
 					this.binary.u8(
 						(run.break ? 1 : 0) |
 							(run.underline ? 2 : 0) |
 							(run.lineThrough ? 4 : 0) |
 							(run.link === undefined ? 0 : 8) |
-							(run.lineHeight ? 16 : 0),
+							(run.lineHeight ? 16 : 0) |
+							(translucent ? 32 : 0),
 					);
 					if (run.link !== undefined) this.binary.u16(links.indexOf(run.link));
 					if (run.lineHeight) this.binary.f32(run.lineHeight);
+					if (translucent) this.binary.u8(alpha(run.opacity));
 					this.binary.text(run.text);
 				}
 			});
@@ -147,6 +157,7 @@ export class ProtocolWriter {
 		height: number | undefined,
 		alt: string,
 		link: string | undefined,
+		opacity: number,
 	) {
 		this.body();
 		let slot = this.images.get(src);
@@ -180,6 +191,7 @@ export class ProtocolWriter {
 				this.binary.text(link);
 			}
 			this.binary.text(alt);
+			this.binary.u8(alpha(opacity));
 		});
 	}
 
@@ -267,6 +279,17 @@ export class ProtocolWriter {
 				for (const channel of box.background) this.binary.u8(channel);
 			} else this.binary.u8(0);
 			for (const edge of box.borderColor) for (const channel of edge) this.binary.u8(channel);
+			this.binary.u8(alpha(box.opacity));
+			// Two bits per side, top first.
+			this.binary.u8(
+				box.borderStyle.reduce((bits, style, side) => bits | (style << (side * 2)), 0),
+			);
+			const { radius } = box;
+			this.binary.u8(radius ? 1 : 0);
+			if (radius) {
+				this.binary.u8(radius.percent);
+				for (const value of radius.values) this.binary.f32(value);
+			}
 		});
 	}
 

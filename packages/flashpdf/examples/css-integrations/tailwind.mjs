@@ -27,7 +27,8 @@ try {
 	);
 	// Utilities that use calc() or color-mix() pass here and reject at render only where used.
 	const css = stylesheet(readFileSync(output, "utf8"));
-	const className = "text-right text-red-500 bg-blue-100 font-bold underline";
+	const className =
+		"text-right text-red-500 bg-blue-100 font-bold underline rounded-lg border border-dashed border-gray-200 opacity-50";
 	const pdf = await render(jsx("p", { className, children: "Tailwind" }), { stylesheets: [css] });
 	assert.equal(new TextDecoder().decode(pdf.subarray(0, 5)), "%PDF-");
 } finally {
