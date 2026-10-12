@@ -11,6 +11,21 @@ const resolve = async (children, props = { viewBox: "0 0 100 100" }) => {
 };
 const round = (values) => values.map((value) => Math.round(value * 1000) / 1000);
 
+test("given long unterminated XML tokens, when reading SVG bytes, then rejects at the first token", async () => {
+	for (const markup of [
+		"<!--".repeat(100_000),
+		"<?".repeat(100_000),
+		"<!DOCTYPE".repeat(10_000),
+		`<svg ${"-".repeat(100_000)}/>`,
+		"<!-- malformed --!><svg/>",
+		"<!-- malformed --!> still malformed --><svg/>",
+	])
+		await assert.rejects(
+			resolveTree(jsx("img", { src: new TextEncoder().encode(markup) })),
+			/unsupported SVG markup at offset 0/,
+		);
+});
+
 test("given path data with relative, smooth, quadratic, and arc commands, when resolving, then emits absolute moves, lines, and cubics", async () => {
 	const svg = await resolve([
 		jsx("path", { d: "m10 10 h5 v5 l-5 0 z l1 1" }),

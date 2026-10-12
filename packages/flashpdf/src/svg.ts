@@ -810,8 +810,8 @@ export function isMarkup(bytes: Uint8Array): boolean {
 }
 
 const TOKEN =
-	/(<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!DOCTYPE[^[>]*>)|<(\/?)([A-Za-z][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/y;
-const ATTRIBUTE = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+	/<(\/?)([A-Za-z][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/y;
+const ATTRIBUTE = /\s+([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/y;
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 
 function entities(value: string): string {
@@ -844,16 +844,35 @@ export function markup(bytes: Uint8Array): Markup {
 	}
 	const root: Markup = { type: "", props: { children: [] } };
 	const stack = [root];
-	for (let index = 0; index < source.length; index = TOKEN.lastIndex) {
+	for (let index = 0; index < source.length;) {
+		const terminator = source.startsWith("<!--", index)
+			? "-->"
+			: source.startsWith("<?", index)
+				? "?>"
+				: source.startsWith("<!DOCTYPE", index)
+					? ">"
+					: undefined;
+		if (terminator) {
+			const start = index + (terminator === "-->" ? 4 : terminator === "?>" ? 2 : 9);
+			const end = source.indexOf(terminator, start);
+			if (
+				end < 0 ||
+				(terminator === "-->" && source.indexOf("--", start) !== end) ||
+				(terminator === ">" && source.slice(start, end).includes("["))
+			)
+				throw new Error(`unsupported SVG markup at offset ${index}`);
+			index = end + terminator.length;
+			continue;
+		}
 		TOKEN.lastIndex = index;
 		const match = TOKEN.exec(source);
 		if (!match)
 			throw new Error(
 				`unsupported SVG markup at offset ${index}: ${JSON.stringify(source.slice(index, index + 24))}`,
 			);
-		const [, skipped, closing, name, attributes, selfClosing, content] = match;
+		index = TOKEN.lastIndex;
+		const [, closing, name, attributes, selfClosing, content] = match;
 		const parent = stack.at(-1)!;
-		if (skipped) continue;
 		if (content !== undefined) parent.props.children.push(entities(content));
 		else if (closing) {
 			if (parent.type !== name || attributes || selfClosing)
@@ -861,7 +880,12 @@ export function markup(bytes: Uint8Array): Markup {
 			stack.pop();
 		} else {
 			const element: Markup = { type: name!, props: { children: [] } };
-			for (const [, key, double, single] of attributes!.matchAll(ATTRIBUTE)) {
+			for (let offset = 0; offset < attributes!.length;) {
+				ATTRIBUTE.lastIndex = offset;
+				const attribute = ATTRIBUTE.exec(attributes!);
+				if (!attribute) throw new Error("invalid SVG attribute");
+				const [, key, double, single] = attribute;
+				offset = ATTRIBUTE.lastIndex;
 				if (key! in element.props) throw new Error(`SVG markup repeats attribute ${key}`);
 				element.props[key!] = entities(double ?? single!);
 			}
