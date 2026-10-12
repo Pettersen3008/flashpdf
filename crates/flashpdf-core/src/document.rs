@@ -17,6 +17,8 @@ pub(crate) enum Element<'a> {
     Row(Row<'a>),
     Table(Table<'a>),
     Image(ImageNode<'a>),
+    /// A destination slot; zero height.
+    Anchor(u16),
 }
 
 pub(crate) struct Paragraph<'a> {
@@ -32,6 +34,7 @@ pub(crate) struct ImageNode<'a> {
     pub(crate) height: Option<Pt>,
     pub(crate) link: Option<&'a str>,
     pub(crate) alt: &'a str,
+    pub(crate) alpha: u8,
 }
 
 pub(crate) struct Spacer {
@@ -54,6 +57,8 @@ pub(crate) struct Row<'a> {
 
 pub(crate) struct Cell<'a> {
     pub(crate) width: ColumnWidth,
+    /// Anchors written before the cell, which sit at its first line.
+    pub(crate) anchors: Vec<u16>,
     pub(crate) content: Element<'a>,
 }
 

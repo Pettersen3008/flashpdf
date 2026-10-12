@@ -1,11 +1,17 @@
 use std::ops::Range;
 
+use std::f32::consts::FRAC_PI_4;
+
+use pdf_writer::types::LineCapStyle;
 use pdf_writer::{Content, Name, Str};
 
 use crate::font::font_name;
 use crate::geometry::Point;
-use crate::layout::{LayoutBuffer, Segment};
-use crate::{Pt, Rgb, TextAlign};
+use crate::layout::{Gap, LayoutBuffer, Segment, MARKER_SHAPE};
+use crate::vector::{alpha_name, dash, op};
+use crate::{BoxStyle, LineStyle, Pt, Radii, Rgb, TextAlign, OPAQUE};
+
+type Corners = [[f32; 2]; 4];
 
 /// A `/Link` annotation rectangle in page coordinates: `[x1, y1, x2, y2]`.
 pub(crate) struct PageLink {
@@ -22,6 +28,10 @@ pub(crate) struct PdfPainter<'a> {
     content: &'a mut Content,
     links: &'a mut Vec<PageLink>,
     tags: Option<&'a mut Vec<PageTag>>,
+    /// Alphas this page's `/ExtGState` must define.
+    alphas: &'a mut Vec<[u8; 2]>,
+    /// The fill and stroke alpha in force; every `paint` ends opaque.
+    alpha: u8,
 }
 
 impl<'a> PdfPainter<'a> {
@@ -29,11 +39,26 @@ impl<'a> PdfPainter<'a> {
         content: &'a mut Content,
         links: &'a mut Vec<PageLink>,
         tags: Option<&'a mut Vec<PageTag>>,
+        alphas: &'a mut Vec<[u8; 2]>,
     ) -> Self {
         Self {
             content,
             links,
             tags,
+            alphas,
+            alpha: OPAQUE,
+        }
+    }
+
+    #[inline(never)]
+    fn set_alpha(&mut self, alpha: u8) {
+        if alpha != self.alpha {
+            self.alpha = alpha;
+            if !self.alphas.contains(&[alpha; 2]) {
+                self.alphas.push([alpha; 2]);
+            }
+            self.content
+                .set_parameters(Name(&alpha_name([alpha, alpha])));
         }
     }
 
@@ -72,33 +97,150 @@ impl<'a> PdfPainter<'a> {
         }
         self.paint_images(layout, lines.clone(), origin, &ids);
         self.paint_text(layout, lines, origin, &ids);
+        self.set_alpha(OPAQUE);
     }
 
     fn paint_boxes(&mut self, layout: &LayoutBuffer, origin: Point) {
         for paint in &layout.boxes {
+            let style = &paint.style;
             let x = origin.x.get() + paint.origin.x.get();
             let y = origin.y.get() - paint.origin.y.get() - paint.height.get();
-            if let Some(color) = paint.style.background {
-                self.set_fill(color);
-                self.content
-                    .rect(x, y, paint.width.get(), paint.height.get())
-                    .fill_nonzero();
-            }
-            let [top, right, bottom, left] = paint.style.border.into_array().map(|edge| edge.get());
-            for (color, (x, y, width, height)) in
-                paint.style.border_color.into_array().iter().zip([
-                    (x, y + paint.height.get() - top, paint.width.get(), top),
-                    (x + paint.width.get() - right, y, right, paint.height.get()),
-                    (x, y, paint.width.get(), bottom),
-                    (x, y, left, paint.height.get()),
-                ])
+            let (width, height) = (paint.width.get(), paint.height.get());
+            self.set_alpha(style.alpha);
+            // Four overlapping rectangles would composite their corners twice under an alpha.
+            if style.radius.is_some()
+                || (style.alpha != OPAQUE
+                    && style.uniform_border()
+                    && style.border_style.top == LineStyle::Solid)
             {
-                if width > 0.0 && height > 0.0 {
-                    self.set_fill(*color);
+                self.paint_outline(style, [x, y, width, height]);
+                continue;
+            }
+            if let Some(color) = style.background {
+                self.set_fill(color);
+                self.content.rect(x, y, width, height).fill_nonzero();
+            }
+            let [top, right, bottom, left] = style.border.into_array().map(|edge| edge.get());
+            for (index, ((color, line), (x, y, width, height))) in style
+                .border_color
+                .into_array()
+                .into_iter()
+                .zip(style.border_style.into_array())
+                .zip([
+                    (x, y + height - top, width, top),
+                    (x + width - right, y, right, height),
+                    (x, y, width, bottom),
+                    (x, y, left, height),
+                ])
+                .enumerate()
+            {
+                if width <= 0.0 || height <= 0.0 {
+                    continue;
+                }
+                if line == LineStyle::Solid {
+                    self.set_fill(color);
                     self.content.rect(x, y, width, height).fill_nonzero();
+                } else if index % 2 == 0 {
+                    // Top and bottom run the full width, so the corners belong to them.
+                    let cross = y + height / 2.0;
+                    self.dashed_side(color, line, height, true, cross, x..x + width);
+                } else {
+                    // Left and right run between the top and bottom borders.
+                    let cross = x + width / 2.0;
+                    self.dashed_side(
+                        color,
+                        line,
+                        width,
+                        false,
+                        cross,
+                        y + bottom..y + height - top,
+                    );
                 }
             }
         }
+    }
+
+    /// A box with rounded corners, or a uniform border under an alpha: the background fills the
+    /// outline, and the border strokes the outline's centre line, which is its own width inside.
+    #[inline(never)]
+    fn paint_outline(&mut self, style: &BoxStyle, rect: [f32; 4]) {
+        let [x, y, width, height] = rect;
+        let corners = corners(style.radius, width, height);
+        if let Some(color) = style.background {
+            self.set_fill(color);
+            outline(self.content, rect, corners);
+            op(self.content, "f", &[]);
+        }
+        let border = style.border.top.get();
+        if border > 0.0 {
+            let half = border / 2.0;
+            let middle = [x + half, y + half, width - border, height - border];
+            let corners = shrink(corners, half);
+            let length = perimeter(middle, corners);
+            let (color, line) = (style.border_color.top, style.border_style.top);
+            self.begin_stroke(color, line, border, length, true);
+            outline(self.content, middle, corners);
+            self.content.stroke().restore_state();
+        }
+    }
+
+    /// One dashed or dotted side as a line along `span` at `cross`, which is y when `horizontal`.
+    #[inline(never)]
+    fn dashed_side(
+        &mut self,
+        color: Rgb,
+        line: LineStyle,
+        width: f32,
+        horizontal: bool,
+        cross: f32,
+        span: Range<f32>,
+    ) {
+        // A dot's edge, not its centre, meets the end of the side.
+        let inset = if line == LineStyle::Dotted {
+            width / 2.0
+        } else {
+            0.0
+        };
+        let start = span.start + inset;
+        let end = (span.end - inset).max(start);
+        let point = |along: f32| {
+            if horizontal {
+                [along, cross]
+            } else {
+                [cross, along]
+            }
+        };
+        self.begin_stroke(color, line, width, end - start, false);
+        op(self.content, "m", &point(start));
+        op(self.content, "l", &point(end));
+        self.content.stroke().restore_state();
+    }
+
+    /// Opens a `q` that the caller closes after drawing a path `length` long. Browsers draw
+    /// dashes two or three widths long and dots as round-capped zero-length dashes; the gap
+    /// stretches so whole dashes fill the path.
+    #[inline(never)]
+    fn begin_stroke(&mut self, color: Rgb, line: LineStyle, width: f32, length: f32, closed: bool) {
+        let content = &mut *self.content;
+        content.save_state();
+        op(content, "RG", &color.normalized());
+        op(content, "w", &[width]);
+        if line == LineStyle::Solid {
+            return;
+        }
+        let (dash_length, gap) = match line {
+            LineStyle::Dotted => (0.0, 2.0 * width),
+            _ if width >= 3.0 => (2.0 * width, width),
+            _ => (3.0 * width, 2.0 * width),
+        };
+        if line == LineStyle::Dotted {
+            content.set_line_cap(LineCapStyle::RoundCap);
+        }
+        dash(
+            content,
+            &[dash_length, fit(length, dash_length, gap, closed)],
+            0.0,
+        );
     }
 
     /// `q w 0 0 h x y cm /ImN Do Q`; only images whose pseudo-line is in range.
@@ -114,6 +256,7 @@ impl<'a> PdfPainter<'a> {
             .iter()
             .filter(|image| lines.contains(&image.line))
         {
+            self.set_alpha(image.alpha);
             if let Some(id) = ids.get(image.line - lines.start).copied().flatten() {
                 self.content
                     .begin_marked_content_with_properties(Name(b"Figure"))
@@ -163,7 +306,6 @@ impl<'a> PdfPainter<'a> {
                     .properties()
                     .identify(id);
             }
-            self.content.begin_text();
             let x = origin.x
                 + aligned(
                     line.origin.x,
@@ -172,8 +314,37 @@ impl<'a> PdfPainter<'a> {
                     line.text_width,
                 );
             let baseline = (origin.y - line.origin.y).get();
+            // A segment's start and width on the line; it ends where the next one starts.
+            let extent = |index: usize| {
+                let segment = &segments[index];
+                let end = segments
+                    .get(index + 1)
+                    .map_or(line.text_width, |next| next.x);
+                ((x + segment.x).get(), (end - segment.x).get())
+            };
+            for (index, segment) in segments.iter().enumerate() {
+                let decoration = &layout.decorations[line.segments.start + index];
+                if let Some(color) = decoration.background {
+                    self.set_alpha(decoration.alpha);
+                    let (start, width) = extent(index);
+                    self.set_fill(color);
+                    let (bottom, top) = (
+                        baseline + segment.rise - decoration.descent.get(),
+                        baseline + segment.rise + decoration.ascent.get(),
+                    );
+                    self.polygon(&[
+                        (start, bottom),
+                        (start + width, bottom),
+                        (start + width, top),
+                        (start, top),
+                    ]);
+                    self.content.fill_nonzero();
+                }
+            }
+            self.content.begin_text();
             let mut previous: Option<&Segment> = None;
-            for segment in segments {
+            for (index, segment) in segments.iter().enumerate() {
+                self.set_alpha(layout.decorations[line.segments.start + index].alpha);
                 if previous.is_none_or(|last| last.color != segment.color) {
                     self.set_fill(segment.color);
                 }
@@ -186,36 +357,70 @@ impl<'a> PdfPainter<'a> {
                         segment.size.get(),
                     );
                 }
+                let spacing = previous.map_or(0.0, |last| last.letter_spacing);
+                if segment.letter_spacing != spacing {
+                    self.content.set_char_spacing(segment.letter_spacing);
+                }
                 match previous {
-                    None => self.content.next_line(x.get(), baseline),
-                    Some(last) => self.content.next_line((segment.x - last.x).get(), 0.0),
+                    Some(last) if last.oblique == segment.oblique => self
+                        .content
+                        .next_line((segment.x - last.x).get(), segment.rise - last.rise),
+                    None if !segment.oblique => self
+                        .content
+                        .next_line((x + segment.x).get(), baseline + segment.rise),
+                    _ => self.content.set_text_matrix(slant(
+                        segment.oblique,
+                        (x + segment.x).get(),
+                        baseline + segment.rise,
+                    )),
                 };
-                self.content.show(Str(&layout.text[segment.text.clone()]));
+                let first = layout
+                    .gaps
+                    .partition_point(|gap| gap.at as usize <= segment.text.start);
+                let last = layout
+                    .gaps
+                    .partition_point(|gap| (gap.at as usize) < segment.text.end);
+                if segment.shape == 0 {
+                    show(
+                        self.content,
+                        &layout.text[segment.text.clone()],
+                        segment.text.start,
+                        &layout.gaps[first..last],
+                    );
+                }
                 previous = Some(segment);
+            }
+            // Text state outlives the text object, and every other line starts from Tc 0.
+            if previous.is_some_and(|last| last.letter_spacing != 0.0) {
+                self.content.set_char_spacing(0.0);
             }
             self.content.end_text();
             for (index, segment) in segments.iter().enumerate() {
                 let decoration = &layout.decorations[line.segments.start + index];
-                let start = (x + segment.x).get();
-                let end = segments
-                    .get(index + 1)
-                    .map_or(line.text_width, |next| next.x);
-                let width = (end - segment.x).get();
-                let size = segment.size.get();
-                let thickness = size / 14.0;
-                if decoration.underline || decoration.line_through {
-                    self.set_fill(segment.color);
+                self.set_alpha(decoration.alpha);
+                let (start, width) = extent(index);
+                let baseline = baseline + segment.rise;
+                let scale = segment.size.get() / 1000.0;
+                if segment.shape != 0 {
+                    self.set_fill(decoration.color);
+                    let middle = baseline + decoration.ascent.get() / 2.0;
+                    self.marker_shape(
+                        segment.shape,
+                        start,
+                        middle,
+                        segment.size.get() * MARKER_SHAPE,
+                    );
                 }
-                if decoration.underline {
-                    self.content
-                        .rect(start, baseline - size / 8.0 - thickness, width, thickness)
-                        .fill_nonzero();
+                let strokes = [decoration.underline, decoration.line_through];
+                if strokes.iter().any(Option::is_some) {
+                    self.set_fill(decoration.color);
                 }
-                if decoration.line_through {
+                for stroke in strokes.into_iter().flatten() {
+                    let thickness = stroke.thickness * scale;
                     self.content
                         .rect(
                             start,
-                            baseline + size * 0.3 - thickness / 2.0,
+                            baseline + stroke.offset * scale - thickness / 2.0,
                             width,
                             thickness,
                         )
@@ -239,9 +444,52 @@ impl<'a> PdfPainter<'a> {
         }
     }
 
+    /// A list marker's disc, ring, or square: `size` wide with its left edge at `x`, centred at `y`.
+    /// Discs and rings are 12-sided polygons, which read as round at marker size.
+    #[inline(never)]
+    fn marker_shape(&mut self, shape: u8, x: f32, y: f32, size: f32) {
+        let half = size / 2.0;
+        // A disc is one outline, a ring two, and a square four corners.
+        let rings = if shape == 3 { 0 } else { usize::from(shape) };
+        if shape == 3 {
+            self.polygon(&[
+                (x, y - half),
+                (x + size, y - half),
+                (x + size, y + half),
+                (x, y + half),
+            ]);
+        }
+        for radius in [half, half * 0.65].into_iter().take(rings) {
+            let (mut dx, mut dy) = (radius, 0.0);
+            let mut points = [(0.0, 0.0); 12];
+            for point in &mut points {
+                *point = (x + half + dx, y + dy);
+                (dx, dy) = (dx * 0.866 - dy * 0.5, dx * 0.5 + dy * 0.866);
+            }
+            self.polygon(&points);
+        }
+        if shape == 2 {
+            self.content.fill_even_odd();
+        } else {
+            self.content.fill_nonzero();
+        }
+    }
+
+    /// Every marker and background outline goes through here, so the float formatting is compiled once.
+    #[inline(never)]
+    fn polygon(&mut self, points: &[(f32, f32)]) {
+        for (index, point) in points.iter().enumerate() {
+            self.content
+                .op(if index == 0 { "m" } else { "l" })
+                .operands([point.0, point.1]);
+        }
+        self.content.close_path();
+    }
+
     pub(crate) fn paint_line(
         &mut self,
         text: &[u8],
+        gaps: &[Gap],
         style: crate::TextStyle,
         origin: Point,
         available_width: Pt,
@@ -252,9 +500,21 @@ impl<'a> PdfPainter<'a> {
         let mut buffer = [0_u8; 4];
         self.content
             .set_font(Name(font_name(style.font, &mut buffer)), style.size.get());
+        let spacing = style.typography.letter_spacing;
+        if spacing != 0.0 {
+            self.content.set_char_spacing(spacing);
+        }
         let x = aligned(origin.x, style.align, available_width, text_width);
-        self.content.next_line(x.get(), origin.y.get());
-        self.content.show(Str(text));
+        if style.typography.oblique {
+            self.content
+                .set_text_matrix(slant(true, x.get(), origin.y.get()));
+        } else {
+            self.content.next_line(x.get(), origin.y.get());
+        }
+        show(self.content, text, 0, gaps);
+        if spacing != 0.0 {
+            self.content.set_char_spacing(0.0);
+        }
         self.content.end_text();
     }
 
@@ -264,9 +524,41 @@ impl<'a> PdfPainter<'a> {
     }
 }
 
+/// Shows `text`, which starts at byte `start`, with each nonzero gap as a `TJ` adjustment.
+fn show(content: &mut Content, text: &[u8], start: usize, gaps: &[Gap]) {
+    if gaps.iter().all(|gap| gap.amount == 0.0) {
+        content.show(Str(text));
+        return;
+    }
+    let mut operation = content.show_positioned();
+    let mut items = operation.items();
+    let mut from = 0;
+    for gap in gaps.iter().filter(|gap| gap.amount != 0.0) {
+        let at = gap.at as usize - start;
+        items.show(Str(&text[from..at])).adjust(-gap.amount);
+        from = at;
+    }
+    items.show(Str(&text[from..]));
+}
+
+/// Chrome's synthetic italic skews by a quarter, about 14 degrees.
+const OBLIQUE_SKEW: f32 = 0.25;
+
+fn slant(oblique: bool, x: f32, y: f32) -> [f32; 6] {
+    [
+        1.0,
+        0.0,
+        if oblique { OBLIQUE_SKEW } else { 0.0 },
+        1.0,
+        x,
+        y,
+    ]
+}
+
 fn aligned(x: Pt, align: TextAlign, available_width: Pt, text_width: Pt) -> Pt {
     match align {
-        TextAlign::Left => x,
+        // A wrapped justified line fills its width, and its last line starts left.
+        TextAlign::Left | TextAlign::Justify => x,
         TextAlign::Center => x + Pt((available_width - text_width).get() / 2.0),
         TextAlign::Right => x + available_width - text_width,
     }
@@ -279,4 +571,103 @@ pub(crate) fn image_name(slot: u16, buffer: &mut [u8; 8]) -> &[u8] {
     buffer[..2].copy_from_slice(b"Im");
     buffer[2..2 + number.len()].copy_from_slice(number.as_bytes());
     &buffer[..2 + number.len()]
+}
+
+/// Radii as `[horizontal, vertical]` per corner, clockwise from the top left. Percentages
+/// resolve against the box, and radii that overrun a side all shrink by the same factor
+/// (CSS Backgrounds 3, section 5.5). The sums use f64 because Tailwind's `rounded-full`
+/// is 3.4e38 and two of them overflow f32.
+#[inline(never)]
+fn corners(radii: Option<Radii>, width: f32, height: f32) -> Corners {
+    let Some(Radii { values, percent }) = radii else {
+        return [[0.0; 2]; 4];
+    };
+    let side = [f64::from(width), f64::from(height)];
+    let mut corner = [[0.0_f64; 2]; 4];
+    for (index, value) in values.iter().enumerate() {
+        let value = f64::from(*value);
+        corner[index / 2][index % 2] = if percent >> index & 1 != 0 {
+            value / 100.0 * side[index % 2]
+        } else {
+            value
+        };
+    }
+    let [tl, tr, br, bl] = corner;
+    let scale = [
+        (side[0], tl[0] + tr[0]),
+        (side[1], tr[1] + br[1]),
+        (side[0], br[0] + bl[0]),
+        (side[1], bl[1] + tl[1]),
+    ]
+    .into_iter()
+    .fold(1.0, |scale, (length, sum)| {
+        if sum > length && length / sum < scale {
+            length / sum
+        } else {
+            scale
+        }
+    });
+    corner.map(|pair| pair.map(|value| (value * scale) as f32))
+}
+
+fn shrink(corners: Corners, by: f32) -> Corners {
+    corners.map(|pair| pair.map(|value| (value - by).max(0.0)))
+}
+
+/// A closed rectangle path whose corners are quarter ellipses; plain `re` when all are square.
+#[inline(never)]
+fn outline(content: &mut Content, rect: [f32; 4], corners: Corners) {
+    if corners == [[0.0; 2]; 4] {
+        return op(content, "re", &rect);
+    }
+    // A cubic follows a quarter ellipse to 0.03% when its handles reach this far along each edge.
+    const KAPPA: f32 = 0.552_284_8;
+    let [x, y, width, height] = rect;
+    // Each corner's point, and the direction into the box along its horizontal and vertical edge.
+    let anchors = [
+        (x, y + height, 1.0, -1.0),
+        (x + width, y + height, -1.0, -1.0),
+        (x + width, y, -1.0, 1.0),
+        (x, y, 1.0, 1.0),
+    ];
+    for (index, ((ax, ay, dx, dy), [rx, ry])) in anchors.into_iter().zip(corners).enumerate() {
+        let horizontal = (ax + dx * rx, ay);
+        let vertical = (ax, ay + dy * ry);
+        // Clockwise, a top-left or bottom-right corner arrives along its vertical edge.
+        let (from, to) = if index % 2 == 0 {
+            (vertical, horizontal)
+        } else {
+            (horizontal, vertical)
+        };
+        op(
+            content,
+            if index == 0 { "m" } else { "l" },
+            &[from.0, from.1],
+        );
+        let handle = |(px, py): (f32, f32)| [px + KAPPA * (ax - px), py + KAPPA * (ay - py)];
+        let [a, b] = handle(from);
+        let [c, d] = handle(to);
+        op(content, "c", &[a, b, c, d, to.0, to.1]);
+    }
+    op(content, "h", &[]);
+}
+
+/// Length of the `outline` path. A quarter ellipse is a quarter circle of the mean radius, which
+/// is exact for the circular corners nearly every border uses, so each corner cuts
+/// `(rx + ry) * (1 - pi / 4)` from the rectangle's perimeter.
+fn perimeter(rect: [f32; 4], corners: Corners) -> f32 {
+    let cut: f32 = corners.iter().flatten().sum();
+    2.0 * (rect[2] + rect[3]) - cut * (1.0 - FRAC_PI_4)
+}
+
+/// The gap that spreads whole dashes evenly over `length`; a closed path has as many gaps as dashes.
+fn fit(length: f32, dash: f32, gap: f32, closed: bool) -> f32 {
+    let open = if closed { 0.0 } else { gap };
+    let count = ((length + open) / (dash + gap)).floor().max(1.0);
+    let gaps = if closed { count } else { count - 1.0 };
+    if gaps > 0.0 {
+        ((length - count * dash) / gaps).max(0.0)
+    } else {
+        gap
+    }
 }

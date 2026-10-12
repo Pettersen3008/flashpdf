@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 
-import { jsx, jsxs } from "react/jsx-runtime";
 import { test } from "vitest";
 
-import { render } from "../dist/index.js";
+import { cssInvoice } from "../examples/css-invoice.tsx";
 
 const repo = new URL("../../../", import.meta.url);
 const golden = new URL("tests/golden/css-invoice.txt", repo);
@@ -21,70 +20,12 @@ const invoice = {
 	})),
 };
 
-/** The CSS invoice from examples/css-invoice.tsx, wired through the consumer's CSS build. */
-function document_() {
-	return jsxs("main", {
-		className: "invoice",
-		children: [
-			jsxs("header", {
-				className: "header",
-				children: [
-					jsxs("div", {
-						children: [
-							jsx("h1", { children: invoice.title }),
-							jsxs("p", {
-								className: "muted",
-								children: ["Invoice ", jsx("b", { children: `#${invoice.number}` })],
-							}),
-						],
-					}),
-					jsxs("p", {
-						style: { textAlign: "right", fontSize: 12 },
-						children: ["Due ", jsx("b", { children: invoice.dueDate })],
-					}),
-				],
-			}),
-			jsxs("table", {
-				className: "items",
-				children: [
-					jsx("thead", {
-						children: jsxs("tr", {
-							children: [
-								jsx("th", { children: "Item" }),
-								jsx("th", { className: "amount", children: "Amount" }),
-							],
-						}),
-					}),
-					jsx("tbody", {
-						children: invoice.items.map((item) =>
-							jsxs(
-								"tr",
-								{
-									children: [
-										jsx("td", { children: item.name }),
-										jsx("td", { className: "amount", children: item.total }),
-									],
-								},
-								item.id,
-							),
-						),
-					}),
-				],
-			}),
-		],
-	});
-}
-
 // ponytail: the content stream is the drawing program, so this catches any
 // position, colour, font or pagination change. Rasterise with pdfium instead if
 // a future change can alter pixels without altering operators.
 test("given the CSS invoice example, when rendering, then every page draws the golden content stream", async () => {
-	const css = readFileSync(new URL("../examples/invoice.module.css", import.meta.url), "utf8");
-	const pdf = await render(document_(), { pageFormat: "A4", margin: 36, stylesheets: [css] });
-	assert.deepEqual(
-		pdf,
-		await render(document_(), { pageFormat: "A4", margin: 36, stylesheets: [css] }),
-	);
+	const pdf = await cssInvoice(invoice);
+	assert.deepEqual(pdf, await cssInvoice(invoice));
 
 	const path = new URL("target/css-invoice.pdf", repo);
 	writeFileSync(path, pdf);

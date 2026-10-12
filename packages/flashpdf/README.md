@@ -25,6 +25,45 @@ function Invoice({ total }: { total: string }) {
 const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', margin: 36 });
 ```
 
+## Tables
+
+A `<table>` splits between rows and repeats its `<thead>` on every page. Column widths come from the first row's cells, cells stretch to the row height, and `th` is bold by default.
+
+```tsx
+<table>
+  <thead>
+    <tr>
+      <th>Description</th>
+      <th style={{ width: '90pt', textAlign: 'right' }}>Amount</th>
+    </tr>
+  </thead>
+  <tbody>
+    {items.map((item) => (
+      <tr key={item.id}>
+        <td style={{ borderBottom: '0.5pt solid #ddd' }}>{item.description}</td>
+        <td style={{ borderBottom: '0.5pt solid #ddd', textAlign: 'right' }}>{item.amount}</td>
+      </tr>
+    ))}
+  </tbody>
+</table>
+```
+
+`colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](https://github.com/pettersen3008/flashpdf/blob/main/CSS.md).
+
+## Images and links
+
+`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
+
+```tsx
+const logo = new Uint8Array(await readFile('logo.png'));
+<a href="https://example.com/invoices/42">
+  <img src={logo} alt="Acme Supply Co." style={{ width: 120 }} />
+</a>
+<p>Pay online at <a href="https://example.com/pay">the portal</a>.</p>
+```
+
+PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](https://github.com/pettersen3008/flashpdf/blob/main/CSS.md).
+
 ## Install
 
 Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
@@ -63,7 +102,7 @@ CSS Modules, minification, and syntax transforms belong to the frontend build. L
 
 Runnable Tailwind, StyleX, and styled-components build-step examples live in [`examples/css-integrations`](./examples/css-integrations). They compile or extract static CSS, then pass that string through `render({ stylesheets })`.
 
-FlashPDF rejects any declaration it cannot honour, naming the property, the selector, and the source position. It never silently drops one.
+FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules, and selectors that match nothing in a PDF (`:hover`, `::before`) are skipped. A selector it cannot evaluate, such as `[href]` or `:has()`, rejects.
 
 ## API
 
@@ -89,7 +128,7 @@ const pdf = await render(<Invoice />, {
 
 ## Embedded fonts
 
-The host provides TTF bytes for each family. `fontFamily` selects the first registered family in a list; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
+The host provides TTF bytes for each family. `fontFamily` selects the first entry in a list that is a registered family or a built-in name; `fontWeight: 'bold'` selects its optional bold file. Helvetica, Times (`serif`), and Courier (`monospace`) are built in, and Helvetica is the default.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());
@@ -99,19 +138,22 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 });
 ```
 
-Embedded TrueType files are subset to used glyphs and support Unicode through cmap formats 4 and 12. Regular and bold faces are supported; italic/variable-face selection and Unicode shaping are not.
+Embedded TrueType files are subset to used glyphs and support Unicode through cmap formats 4 and 12. Regular, bold, italic, and bold italic faces are supported, and a missing italic face is slanted from the upright one; variable-face selection and Unicode shaping are not.
 
 ## Compatibility
 
 | Target | `render` |
-| --- | --- | --- |
+| --- | --- |
 | Browser via Vite, webpack, or Rollup | Yes, including host-provided `Uint8Array` TTFs, the bundler emits the WASM as an asset |
-| Node 20+ | Yes, including host-provided `Uint8Array` TTFs |
+| Node 20.19+ | Yes, including host-provided `Uint8Array` TTFs |
 | Bun 1.x | Yes, including host-provided `Uint8Array` TTFs |
-| AWS Lambda Node.js 20+ | Yes, include the package's `wasm/` directory in the deployment artifact |
+| AWS Lambda Node.js 20.19+ | Yes, include the package's `wasm/` directory in the deployment artifact |
 | Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
+| Vercel Edge | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
 
-Every target runs the same decoder, so a document that renders in one produces identical bytes in the others. `tests/e2e.mjs` proves this against a packed tarball with Node, AWS Lambda handler packaging, Bun, Vite, Chromium, and Wrangler's local Workers runtime. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+Every target runs the same decoder. The repository's `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+
+Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common rejections, recipes, and a react-pdf migration map live in the [guide](https://github.com/pettersen3008/flashpdf/blob/main/docs/guide.md).
 
 ## Assets
 

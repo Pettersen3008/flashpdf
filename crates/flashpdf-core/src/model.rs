@@ -138,6 +138,16 @@ pub struct FontId(u8);
 impl FontId {
     pub const HELVETICA: Self = Self(0);
     pub const HELVETICA_BOLD: Self = Self(1);
+    pub const HELVETICA_OBLIQUE: Self = Self(2);
+    pub const HELVETICA_BOLD_OBLIQUE: Self = Self(3);
+    pub const TIMES: Self = Self(4);
+    pub const TIMES_BOLD: Self = Self(5);
+    pub const TIMES_ITALIC: Self = Self(6);
+    pub const TIMES_BOLD_ITALIC: Self = Self(7);
+    pub const COURIER: Self = Self(8);
+    pub const COURIER_BOLD: Self = Self(9);
+    pub const COURIER_OBLIQUE: Self = Self(10);
+    pub const COURIER_BOLD_OBLIQUE: Self = Self(11);
 
     pub(crate) const fn new(value: u8) -> Self {
         Self(value)
@@ -152,14 +162,28 @@ impl FontId {
     }
 }
 
-/// Font slots 0 and 1 preserve the regular and bold Helvetica fallback.
+/// Font slots 0 to 11 are the built-in Helvetica, Times, and Courier faces; embedded fonts follow.
 pub const HELVETICA: FontId = FontId::HELVETICA;
 pub const HELVETICA_BOLD: FontId = FontId::HELVETICA_BOLD;
+pub const HELVETICA_OBLIQUE: FontId = FontId::HELVETICA_OBLIQUE;
+pub const HELVETICA_BOLD_OBLIQUE: FontId = FontId::HELVETICA_BOLD_OBLIQUE;
+pub const TIMES: FontId = FontId::TIMES;
+pub const TIMES_BOLD: FontId = FontId::TIMES_BOLD;
+pub const TIMES_ITALIC: FontId = FontId::TIMES_ITALIC;
+pub const TIMES_BOLD_ITALIC: FontId = FontId::TIMES_BOLD_ITALIC;
+pub const COURIER: FontId = FontId::COURIER;
+pub const COURIER_BOLD: FontId = FontId::COURIER_BOLD;
+pub const COURIER_OBLIQUE: FontId = FontId::COURIER_OBLIQUE;
+pub const COURIER_BOLD_OBLIQUE: FontId = FontId::COURIER_BOLD_OBLIQUE;
+pub(crate) const BUILT_IN: usize = 12;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TextAlign {
     Left,
     Center,
     Right,
+    /// Stretches the spaces of every wrapped line; the last line and a line
+    /// ending in a hard break stay left-aligned.
+    Justify,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -168,6 +192,7 @@ pub struct TextStyle {
     pub align: TextAlign,
     pub color: Rgb,
     pub font: FontId,
+    pub typography: Typography,
 }
 
 impl TextStyle {
@@ -177,8 +202,49 @@ impl TextStyle {
             align: TextAlign::Left,
             color: Rgb::BLACK,
             font: FontId::HELVETICA,
+            typography: Typography::NORMAL,
         }
     }
+}
+
+/// A list marker: hung before the paragraph's first line, or filling its start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Marker {
+    None,
+    Outside,
+    Inside,
+}
+
+/// Spacing, slant, and placement of a run; `NORMAL` changes nothing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Typography {
+    /// CSS `letter-spacing` in points, added after every character.
+    pub letter_spacing: f32,
+    /// CSS `word-spacing` in points, added after every space and no-break space.
+    pub word_spacing: f32,
+    /// Slants the upright face, for italic text in a family without an italic face.
+    pub oblique: bool,
+    /// CSS `font-kerning`: `auto` and `normal` kern pairs within a word.
+    pub kerning: bool,
+    /// Baseline shift in points, up positive: `vertical-align: sub | super`.
+    pub rise: f32,
+    /// A word wider than its line is an error, not a break: `white-space: pre | nowrap`.
+    pub nowrap: bool,
+    /// Only the first run of a paragraph may be a marker. The shapes U+2022, U+25E6, and
+    /// U+25AA draw a disc, circle, or square; any other text is shown in the run's font.
+    pub marker: Marker,
+}
+
+impl Typography {
+    pub const NORMAL: Self = Self {
+        letter_spacing: 0.0,
+        word_spacing: 0.0,
+        oblique: false,
+        kerning: true,
+        rise: 0.0,
+        nowrap: false,
+        marker: Marker::None,
+    };
 }
 
 /// One styled slice of a paragraph's text; `len` bytes follow the previous run's.
@@ -193,16 +259,38 @@ pub struct TextRun {
     /// Ends the line after this run without adding a space.
     pub hard_break: bool,
     pub decoration: RunDecoration,
+    pub typography: Typography,
 }
 
-/// Underline, strike-through, and link of a run; painted per line segment.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Underline, strike-through, link, and opacity of a run; painted per line segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RunDecoration {
     pub underline: bool,
     pub line_through: bool,
+    /// CSS `text-decoration-color`; `None` is the run's colour.
+    pub color: Option<Rgb>,
     /// Index into the paragraph's URI table.
     pub link: Option<u16>,
+    pub alpha: u8,
+    /// CSS `background-color` of an inline element, painted behind each line segment.
+    pub background: Option<Rgb>,
 }
+
+impl Default for RunDecoration {
+    fn default() -> Self {
+        Self {
+            underline: false,
+            line_through: false,
+            link: None,
+            color: None,
+            background: None,
+            alpha: OPAQUE,
+        }
+    }
+}
+
+/// An alpha of 255 paints without a graphics state.
+pub const OPAQUE: u8 = 255;
 
 /// An image's requested width; `Auto` is the intrinsic size at 96 px per inch, capped to the container.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -212,6 +300,21 @@ pub enum ImageSize {
     Percent(Percent),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineStyle {
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+/// Elliptical corner radii, clockwise from the top left, each a horizontal then a vertical value.
+/// Bit `i` of `percent` makes `values[i]` a percent of the box width (even `i`) or height (odd `i`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Radii {
+    pub values: [f32; 8],
+    pub percent: u8,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BoxStyle {
     pub margin: Edges<Pt>,
@@ -219,6 +322,27 @@ pub struct BoxStyle {
     pub border: Edges<Pt>,
     pub background: Option<Rgb>,
     pub border_color: Edges<Rgb>,
+    pub border_style: Edges<LineStyle>,
+    /// Rounds the background, and the border when all four sides match.
+    pub radius: Option<Radii>,
+    pub alpha: u8,
+}
+
+impl BoxStyle {
+    /// Whether the four borders share one width, colour, and style, which one stroked outline can draw.
+    /// Borders with no width need no more.
+    pub(crate) fn uniform_border(&self) -> bool {
+        self.border.iter().all(|edge| *edge == self.border.top)
+            && (self.border.top == Pt::ZERO
+                || (self
+                    .border_color
+                    .iter()
+                    .all(|color| *color == self.border_color.top)
+                    && self
+                        .border_style
+                        .iter()
+                        .all(|line| *line == self.border_style.top)))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -264,6 +388,8 @@ pub enum RenderError {
     InvalidFontSize,
     UnsupportedCharacter(char),
     TextTooWide,
+    /// A `white-space: pre` or `nowrap` line is wider than its container.
+    LineTooWide,
     PageOverflow,
     /// A table row and its repeated header exceed an empty page; the index is the table child.
     TableRowOverflow(usize),
@@ -272,4 +398,7 @@ pub enum RenderError {
     MissingGlyph(char),
     DocumentTooLarge,
     ImageTooWide,
+    TooManyPages,
+    /// A link names a destination no element registered.
+    UnknownDestination,
 }

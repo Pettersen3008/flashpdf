@@ -2,6 +2,132 @@
 
 ## Unreleased
 
+### Added
+
+- Inline `<svg>` for logos, icons, and charts: `g`, `rect` with `rx`/`ry`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, and `path` with the full `d` grammar, arcs included. Elements take `transform`, the fill and stroke presentation attributes or a `style` object, opacity, and `currentColor`. The drawing lays out like `img`, honours `viewBox` and `preserveAspectRatio`, clips to its box, and in tagged mode becomes a figure described by `aria-label` or `<title>`. Text, gradients, patterns, filters, masks, `clipPath`, `use`, `image`, `foreignObject`, CSS inside the drawing, and unknown attributes reject with a reason.
+- `<img src={bytes}>` accepts an SVG file with the same subset.
+- `QRCode` draws a QR code as vector paths: numeric, alphanumeric, or UTF-8 byte mode, error correction L, M, Q, or H (default M), the smallest version from 1 to 40, the standard's mask selection, and a quiet zone in modules. Children draw over the symbol, for a logo or the Swiss cross. The encoder is a port of Project Nayuki's MIT-licensed QR Code generator.
+- `Barcode` draws Code 128 with automatic code set B and C switching and the checksum, a module width and bar height in points, and the value printed below unless `text={false}`.
+- `border-radius` and its four corner longhands, with one or two lengths or percents per corner. The background fills the rounded shape and a border with one width, colour, and style on all four sides follows it. Radii that overrun a side shrink together, so `9999px` and Tailwind's `rounded-full` make a pill. A radius with differing sides, and a radius on `img` or `svg`, reject with a reason. A box with a background or border still moves whole to the next page, so its corners are never cut at a break.
+- `border-style` and the four side longhands, plus the style word in `border` and its side shorthands: `none`, `hidden`, `solid`, `dashed`, `dotted`. Dashes follow Chrome's proportions, dots are round-capped, and each side stretches its gaps so whole dashes fill it. `double`, `groove`, `ridge`, `inset`, and `outset` reject. Tailwind's `border-dashed` and `border-dotted` work.
+- `opacity` on boxes, text, underlines, images, and drawings, as a number or percent, multiplied down the tree. Each element draws with its own graphics-state alpha instead of a transparency group, so a translucent card's background shows through its text. PDF/A-3b output stays valid; veraPDF accepts it.
+
+### Changed
+
+- The binary protocol is version 8: image registration also accepts a vector drawing, which the engine writes as a form XObject. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 8.7 KB raw (3.9 KB gzip).
+- The binary protocol is version 13: `BoxStart` carries opacity, border styles, and corner radii, a paragraph run can carry an alpha, and an image record ends with one. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 5.2 KB raw (1.7 KB gzip).
+- `box-shadow`, `outline`, `border-image`, and `background-image` reject with a reason, as does a gradient in `background`. They rejected without one before. A colour with alpha now says to use `opacity`.
+- `border: 1pt dashed red` and `border-style: dashed` no longer reject. `<br>` rejects `opacity` like its other box properties, and a `header` or `footer` rejects it too.
+
+### Changed
+
+- Paragraphs, headings, and horizontal rules use Chromium's default vertical margins, and table headers centre their text. Author styles override these defaults, and adjoining margins collapse. Existing documents that relied on zero paragraph or heading margins should set `margin: 0`.
+
+- Vertical margins collapse as in CSS 2.1. Adjacent siblings, a box and its first or last child with no border or padding between them, and an empty block share the largest margin instead of adding them up, so two `blockquote`s in a row are `1em` apart, not `2em`. Flex items and table cells keep their margins. Documents with adjoining vertical margins get less space between blocks.
+- A margin that does not fit at the bottom of a page no longer moves to the top of the next one, and a forced page break drops the margin before it. Before, such a margin could push the next block a page further or leave a blank page.
+- The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
+- A styled 10,000-row invoice renders about 68% faster (630 ms to 200 ms). Elements with the same parent style, tag, id, classes, and inline style share one computed style; box styles and colours are parsed once; stylesheets are parsed once per render instead of once each for the body, header, and footer. Protocol records go to WASM up to 64 KiB per batch instead of one call per record, and `PdfRenderer.records()` reports which record the engine rejected, so errors still name the element that caused them. The protocol framing and output bytes are unchanged.
+- `render` resolves `header` and `footer` components before it registers fonts and attachments, so an error in one of them now comes before a font or attachment error.
+- A rule with an escaped selector, such as Tailwind's `.bg-black\/50`, now matches and validates instead of being skipped, so `stylesheet()` rejects one whose declarations the subset lacks.
+### Fixed
+
+- With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.
+- Blocks that move whole, such as decorated boxes, rows, and table rows, reject when they do not fit between the header and footer, instead of painting over the footer and into the bottom margin.
+- Headers, footers, and repeated table headers count toward the 16 MiB painted-content cap as they paint, so a long footer on thousands of pages rejects with `DocumentTooLarge` instead of growing to gigabytes.
+- A line that mixes font sizes or line heights is as tall as its highest ascent plus its lowest depth below the baseline, so it no longer overlaps the next line.
+### Fixed
+
+- A PNG with transparency stops inflating at the size its dimensions allow, so a small compressed image can no longer exhaust memory.
+- Embedded fonts use one `cmap` subtable: format 12 before format 4, then Windows before Unicode platform. A font with many records or overlapping format 4 segments no longer takes minutes to load, and a format 12 group that starts inside the previous one keeps its remaining characters.
+- Registered fonts are capped at 64 MiB per render, checked in JavaScript before the bytes are copied into WASM memory.
+- Page sides over 14,400 pt reject, the largest size PDF readers accept.
+- A document stops at 10,000 pages with `document exceeds 10000 pages`. JavaScript counts explicit page breaks and the engine counts every page. Pages no longer reserve 1 KB of content buffer each, so 9,999 page breaks take 2.8 MB of WASM memory instead of 14.4 MB.
+- Images are capped at 64 MiB per render in JavaScript before the bytes are copied into WASM memory, as fonts are.
+- A font or image that fails to register no longer counts toward its 64 MiB per-render cap.
+### Added
+
+- `oklch()` and `oklab()` colours, converted to sRGB and clipped per channel. Tailwind v4 emits them for every colour utility.
+- `inherit` and `initial` on every supported property, and `currentcolor` as the element's own `color`.
+- `text-decoration-line`, with the values `text-decoration` takes, so Tailwind's `underline` and `line-through` work.
+- `rem` for `width` and image `height`, as minified Tailwind emits for `w-32`.
+- `calc()`, `min()`, `max()`, and `clamp()` over lengths and plain numbers, evaluated after `var()` substitution, so Tailwind's `calc(0.25rem * 4)` spacing renders. A percentage result works for `width`, `height`, and `line-height`; a percentage mixed with a length rejects with a reason.
+- Logical `margin-inline`, `margin-block`, `padding-inline`, `padding-block`, and their `-start` and `-end` longhands, mapped for horizontal left-to-right text. Tailwind's `px-*`, `py-*`, `mx-*`, and `my-*` use them.
+- `border-style` with `solid`, `none`, and `hidden`, and per-side `border-*-style`, `border-*-width`, and `border-*-color`. Other styles reject.
+- `@property`: `initial-value` is the default for an unset custom property, and `inherits: false` stops inheritance. Tailwind's `border` utility needs it for `--tw-border-style`.
+- Escaped selectors such as `.w-1\/2` and `.w-\[120px\]` match the unescaped class name.
+- `@media`: `print` and `all` apply, `screen` is skipped, and width conditions compare the page content width. Any other query rejects with a reason where a rule inside it matches an element.
+- Structural selectors: `:first-child`, `:last-child`, `:only-child`, `:nth-child()`, `:nth-last-child()`, the five `-of-type` forms, `:empty`, `:root`, and `*`. Siblings are the element children of a parent on the resolved tree, so text, fragments, and arrays do not count.
+- `:is()`, `:where()`, and `:not()` with selector lists, complex selectors included, and the next-sibling `+` and subsequent-sibling `~` combinators. `:is()` and `:not()` take their most specific argument and `:where()` adds nothing.
+- Tailwind v4's `first:`, `last:`, `only:`, `odd:`, `even:`, `empty:`, `nth-*:`, `*:`, `space-y-*`, and `divide-y` utilities render. They compile to these selectors, and FlashPDF skipped them before.
+
+### Fixed
+
+- The package root exports `createElement`. TypeScript and Babel import it for `<Row {...row} key={row.id} />`, a spread before `key`, so such a module failed to load.
+- `<hr>` draws its one-point rule. The default border never reached the box, so a plain `<hr>` painted nothing.
+- Whitespace-only text between block-level children or flex items, such as Prettier's `{" "}`, no longer adds an empty flex column or a second `gap`.
+- A `border` or `background` shorthand in a later rule overrides an earlier `border-bottom` or `background-color`. Previously the longhand always won, whatever the cascade order.
+- An inline style value of `undefined` no longer erases the stylesheet's value for that property.
+- A `var()` fallback may hold parentheses and nested `var()`, such as `var(--c, rgb(0, 0, 0))`. A malformed `var()` rejects naming the reference.
+- A failed WASM load is no longer cached, so the next `render` retries it.
+- Stylesheet error positions count the lines inside comments.
+- `render` checks its options before it runs any component. Fonts are still checked when they are registered.
+- Descendant selectors match in polynomial time. A long selector such as `section div div div div div div div div` on a 40-deep tree took 5.6 s.
+- Arrays nested directly in arrays count toward the 64-level nesting limit, so deeply nested arrays reject instead of overflowing the stack. The children array React puts under each element stays free.
+- A style object with an own `__proto__` key, as `JSON.parse` makes, rejects instead of skipping validation.
+- Type selectors are case-insensitive, so `P { }` matches `<p>`.
+- `<hr>` honours `break-before` and `break-after`.
+- An engine `InvalidLayout`, `TextTooWide`, or `PageOverflow` now says what to change and names the element.
+- `stylesheet()` and `render` no longer fail to parse a sheet whose escaped class name holds a quote, such as Tailwind's `.\[\&_svg\:not\(\[class\*\=\'size-\'\]\)\]`.
+- A non-element object child, such as a `Date`, rejects naming its type instead of `unsupported element undefined`.
+
+### Changed
+
+- `font-weight` rejects values other than `normal`, `bold`, and 1 to 1000, such as `bolder` or a typo. They rendered regular before.
+- `<hr>` and `<br>` reject children, `<br>` rejects box and layout styles, and `width` on an `<hr>` outside a flex row rejects. All were dropped before.
+- `<td>` and `<th>` outside a table row reject. They rendered as a `<div>` before.
+- `stylesheet()` validates declaration values, not only property names, so `.a { color: notacolor }` rejects up front, naming the selector and position. Custom property definitions and values that use `var()`, `calc()`, `min()`, `max()`, `clamp()`, or `color-mix()` are checked at `render` where a rule applies, so a Tailwind v4 build still passes `stylesheet()`.
+- Rules whose type selector names a tag FlashPDF never renders, such as `html`, `body`, or `button`, are skipped like other selectors that cannot match.
+- A camelCase property name in a stylesheet, such as `fontSize`, rejects with its kebab-case spelling. Property names are now case-insensitive, as in CSS.
+- An `http:` or `https:` `href` must spell out its host, so `http:foo` rejects.
+- A `flex` grow above 0 with a length basis, or with `auto` beside a `width`, rejects. Columns keep only the grow factor, so the basis was dropped.
+- U+001E and U+001F reject in user text. They are the page number and total pages tokens, so they threw in body text and became page numbers in a footer. `PageNumber` and `TotalPages` still emit them.
+- A `width` or image `height` too large for a 32-bit float rejects as an invalid width instead of reaching the engine.
+### Added
+
+- `RenderOptions.pdfa: '3b'` writes PDF/A-3b: XMP metadata that repeats `metadata`, an sRGB output intent, and a document ID hashed from the content. In this mode, text that would use the unembedded Helvetica and CMYK JPEGs reject.
+- `RenderOptions.attachments` embeds files with an `AFRelationship`, listed in the catalog's `/AF` array and the EmbeddedFiles name tree. Names, MIME types, and relationships are validated, with a 64 MiB cap per render.
+- Internal links: `<a href="#id">` jumps to the element with that `id`, on whatever page it lands. The id must be on one element, and a link to a missing or repeated id rejects naming it.
+- Named destinations: every element a link targets is in the `/Dests` name tree, so `invoice.pdf#nameddest=terms` opens there in a viewer.
+- `RenderOptions.outline` writes bookmarks for `h1` to `h6`, nested by level and titled with the heading's text. `data-bookmark="Title"` renames a heading's bookmark and `data-bookmark={false}` skips it.
+- `RenderOptions.facturx: { xml, profile }` embeds Factur-X or ZUGFeRD XML as `factur-x.xml` (`xrechnung.xml` for `XRECHNUNG`) with the Factur-X XMP extension schema, and implies `pdfa: '3b'`. FlashPDF does not validate the XML content.
+- Italic text: `font-style: italic | oblique`, and `em`, `i`, and `cite` default to italic. Helvetica gains Helvetica-Oblique and Helvetica-BoldOblique, `fonts` entries take optional `italic` and `boldItalic` files, and a family without the italic file for a weight slants its upright face by a quarter, as browsers do.
+- `letter-spacing` and `word-spacing`, negative values included. Both count when lines break. Embedded fonts get word spacing through `TJ` positioning, because PDF word spacing skips their two-byte codes.
+- `text-align: justify`. Wrapped lines stretch their spaces to the full width; the last line and a line ending in `<br>` stay left-aligned.
+- `text-transform: uppercase | lowercase | capitalize | none`, with locale-independent case mapping.
+- `text-decoration-color`, and a colour in the `text-decoration` shorthand.
+- Kerning, on by default, with `font-kerning: auto | normal | none`. Helvetica uses Adobe's AFM pairs; embedded fonts use GPOS pair adjustment under the `kern` feature, or the `kern` table. Line breaking measures kerned widths.
+- Times and Courier built-in fonts, each in regular, bold, italic or oblique, and bold italic, with Adobe's AFM widths and, for Times, its kerning pairs. `font-family` takes `serif`, `Times`, and `Times New Roman` for Times, and `monospace`, `Courier`, and `Courier New` for Courier. Output of a document that uses neither is unchanged.
+- Lists: `ul`, `ol`, and `li`, with `list-style-type` (`disc`, `circle`, `square`, `decimal`, `decimal-leading-zero`, `lower-alpha`, `lower-latin`, `upper-alpha`, `upper-latin`, `lower-roman`, `upper-roman`, `none`), `list-style-position`, the `list-style` shorthand, `ol` `start` and `reversed`, and `li` `value`. A `ul` nested one and two lists deep uses circles and squares, as browsers do. Bullets are shapes the engine draws, so they need no font glyph, and a marker stays with its item's first line across pages.
+- `dl`, `dt`, `dd`, `blockquote`, `address`, `figure`, `figcaption`, `nav`, and `aside` as blocks with the browser's default margins, indent, and italic.
+- `small`, `sub`, `sup`, `u`, `ins`, `s`, `del`, `mark`, `code`, `kbd`, and `samp`, with `vertical-align: baseline | sub | super` on inline elements. `mark` paints a yellow background behind each line of its text.
+- `pre` and `white-space: normal | nowrap | pre | pre-wrap | pre-line`, with tabs to the next multiple of 8 characters. A `pre` or `nowrap` line wider than its container rejects with `LineTooWide`.
+
+### Changed
+
+- Link annotations carry the print flag, which PDF/A requires.
+- A selector that could match an element but is outside the subset rejects at `stylesheet()` and `render`, naming the selector and reason, instead of being skipped. This covers attribute selectors such as `[href]`, `:has()`, `:lang()`, namespaces, unknown pseudo-classes, and malformed selectors. Pseudo-elements, state pseudo-classes such as `:hover` and `:disabled`, `:host`, and tags FlashPDF never renders can never match in a PDF, so they stay skipped. Move a rule that uses `[href]` or `:has()` out of the sheet, or select a class.
+- Rules with `*` or `:root` apply instead of being skipped, so an unlayered Tailwind preflight now rejects at its `box-sizing` declaration. Tailwind puts the preflight and theme in `@layer`, which FlashPDF still skips.
+- The binary protocol is version 17: an `Anchor` record places a destination and an optional bookmark at the top of the next line. The JavaScript and WASM halves ship together, so this affects no public API.
+- Underlines and line-throughs use the font's metrics: Helvetica's AFM underline position and thickness, or an embedded font's `post` and `OS/2` values. They were 1/14 em thick at fixed offsets before.
+- The binary protocol is version 8: run flags are a u16 with slant, letter spacing, word spacing, decoration colour, and kerning off, headers and footers carry the same typography flags, alignment 3 is justify, and embedded font slots start at 4 after the four Helvetica faces. The JavaScript and WASM halves ship together, so this affects no public API.
+- `font-family` reads its list in order and takes the first registered family or built-in name. A name that is neither, such as `Georgia`, is skipped for the next entry, and a list where nothing matches still rejects with `unregistered font family`. `serif` and `ui-serif` select Times, where they selected Helvetica.
+- The glyph error for a character outside WinAnsi reads `the built-in font has no glyph for ...`, because Times and Courier share the limit. PDF/A rejects text in any built-in font.
+- The binary protocol is version 15: embedded font slots start at 12 after the twelve built-in faces. The JavaScript and WASM halves ship together, so this affects no public API.
+- `ul`, `ol`, and `li` no longer reject as unsupported elements, and `vertical-align` works on inline elements. It still rejects on blocks and table cells.
+- A font without a U+00A0 glyph shows its space glyph for it, where it rejected the character. `pre` relies on this.
+- The binary protocol is version 16: run flags carry a background colour, a baseline shift, no-wrap, and a list marker. The JavaScript and WASM halves ship together, so this affects no public API.
+- `line-height: normal` for the built-in fonts matches browsers. It was the AFM ascender plus descender (Helvetica 0.925em, Times 0.900em, Courier 0.786em), tighter than the metric-compatible Arial, Times New Roman, and Courier New a browser uses. It is now their hhea ascent, descent, and line gap: 1.150em for Helvetica and Times, 1.133em for Courier, with the gap split above and below the text. Every document that uses a built-in font spaces its lines more widely, and header, footer, and link-box heights follow. Embedded fonts keep their own metrics, and an explicit `line-height` keeps its height, with the text about 0.1em lower inside it, where a browser puts it.
+
 ## 0.4.0 - 2026-10-02
 
 ### Added

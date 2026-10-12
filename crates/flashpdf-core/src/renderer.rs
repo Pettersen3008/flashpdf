@@ -1,22 +1,28 @@
+use std::ops::Range;
+
 use pdf_writer::Content;
 
 use crate::command::{CommandParser, OwnedCommand};
 use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, FontBook};
-use crate::geometry::{LayoutArea, PageCursor, PageLayout};
+use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
-use crate::layout::{table_width, LayoutBuffer, LayoutEngine};
+use crate::layout::{table_width, Gap, LayoutBuffer, LayoutEngine};
 use crate::paint::{PageLink, PageTag, PdfPainter};
-use crate::pdf::{finish_pdf, Metadata};
-use crate::{Command, Page, Pt, RenderError, TextStyle};
+use crate::pdf::{finish_pdf, Anchor, Metadata};
+use crate::{Command, Page, Pt, RenderError, TextStyle, Typography};
 
 /// Total content-stream bytes a document may paint before `finish`.
 pub const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
+/// Pages per document; a five-byte page break must not buy an unbounded page list.
+pub const MAX_PAGES: usize = 10_000;
+/// Destinations and bookmarks per render; each is a PDF object.
+const MAX_ANCHORS: usize = 10_000;
 
 pub fn render(page: Page, commands: &[Command<'_>]) -> Result<Vec<u8>, RenderError> {
     let mut renderer = Renderer::new(page);
     renderer.push(commands)?;
-    Ok(renderer.finish())
+    renderer.finish()
 }
 
 pub struct Renderer {
@@ -31,17 +37,21 @@ pub struct Renderer {
     /// Link annotations per page, parallel to `contents`.
     links: Vec<Vec<PageLink>>,
     tags: Vec<Vec<PageTag>>,
+    /// Alphas each page draws with, parallel to `contents`.
+    alphas: Vec<Vec<[u8; 2]>>,
     layout: LayoutBuffer,
-    footer: Option<Footer>,
-    footer_height: crate::Pt,
-    header: Option<Footer>,
-    header_height: crate::Pt,
+    header: Option<Furniture>,
+    footer: Option<Furniture>,
     metadata: Metadata,
+    /// Anchors with no line yet, waiting for the next one painted.
+    pending: Vec<u16>,
 }
 
-struct Footer {
+/// A header or footer line, painted on every page in `finish`.
+struct Furniture {
     template: String,
     style: TextStyle,
+    /// Baseline y from the page bottom.
     baseline: Pt,
 }
 
@@ -54,7 +64,7 @@ impl Renderer {
         let page = PageLayout::new(page);
         Self {
             page,
-            contents: vec![Content::new()],
+            contents: vec![Content::with_capacity(0)],
             content_bytes: 0,
             cursor: PageCursor::new(page),
             fonts: FontBook::new(embedded),
@@ -62,12 +72,12 @@ impl Renderer {
             used_images: Vec::new(),
             links: vec![Vec::new()],
             tags: vec![Vec::new()],
+            alphas: vec![Vec::new()],
             layout: LayoutBuffer::default(),
-            footer: None,
-            footer_height: crate::Pt::ZERO,
             header: None,
-            header_height: crate::Pt::ZERO,
+            footer: None,
             metadata: Metadata::default(),
+            pending: Vec::new(),
         }
     }
 
@@ -120,37 +130,13 @@ impl Renderer {
         if self.footer.is_some() {
             return Err(RenderError::InvalidLayout);
         }
-        let font = self
-            .fonts
-            .get(style.font)
-            .ok_or(RenderError::InvalidLayout)?;
-        let mut digit = '0';
-        let mut width = 0;
-        let mut scratch = Vec::new();
-        for candidate in '0'..='9' {
-            let candidate_width = font.encode_into(candidate, &mut scratch)?;
-            if candidate_width > width {
-                digit = candidate;
-                width = candidate_width;
-            }
-        }
-        let placeholder = digit.to_string().repeat(10);
-        let (_, text_width) = footer_line(&template, &placeholder, &placeholder, font, style)?;
-        if text_width > self.page.content_width() {
-            return Err(RenderError::TextTooWide);
-        }
-        let (ascent, descent, gap) = font.metrics();
-        let scale = style.size.get() / 1000.0;
-        let ascent = Pt(ascent * scale);
-        let height = Pt((ascent.get() - descent * scale + gap * scale).max(0.0));
-        self.page.validate_block(height + self.header_height)?;
-        self.fonts.mark_used(style.font, &[]);
-        self.footer_height = height;
-        self.footer = Some(Footer {
+        let (ascent, height) = self.measure_furniture(&template, style)?;
+        self.footer = Some(Furniture {
             template,
             style,
-            baseline: height - ascent,
+            baseline: self.page.bottom() + (height - ascent),
         });
+        self.page.footer = height;
         Ok(())
     }
 
@@ -162,6 +148,24 @@ impl Renderer {
         if self.header.is_some() {
             return Err(RenderError::InvalidLayout);
         }
+        let (ascent, height) = self.measure_furniture(&template, style)?;
+        self.header = Some(Furniture {
+            template,
+            style,
+            baseline: self.page.top() - ascent,
+        });
+        self.page.header = height;
+        self.cursor.reset(self.page);
+        Ok(())
+    }
+
+    /// Checks that the line fits the page with ten-digit page numbers and
+    /// returns its ascent and height.
+    fn measure_furniture(
+        &mut self,
+        template: &str,
+        style: TextStyle,
+    ) -> Result<(Pt, Pt), RenderError> {
         let font = self
             .fonts
             .get(style.font)
@@ -177,27 +181,47 @@ impl Renderer {
             }
         }
         let placeholder = digit.to_string().repeat(10);
-        let (_, text_width) = footer_line(&template, &placeholder, &placeholder, font, style)?;
+        let (_, _, text_width) = footer_line(template, &placeholder, &placeholder, font, style)?;
         if text_width > self.page.content_width() {
             return Err(RenderError::TextTooWide);
         }
         let (ascent, descent, gap) = font.metrics();
         let scale = style.size.get() / 1000.0;
-        let height = Pt(((ascent - descent + gap) * scale).max(0.0));
-        self.page.validate_block(height + self.footer_height)?;
+        let ascent = ascent * scale;
+        let height = Pt((ascent - descent * scale + gap * scale).max(0.0));
+        self.page.validate_block(height)?;
         self.fonts.mark_used(style.font, &[]);
-        self.header_height = height;
-        self.cursor.advance(height);
-        self.header = Some(Footer {
-            template,
-            style,
-            baseline: Pt(ascent * scale),
-        });
-        Ok(())
+        Ok((Pt(ascent), height))
     }
 
     pub(crate) fn set_metadata(&mut self, metadata: Metadata) {
         self.metadata = metadata;
+    }
+
+    /// Registers a destination, named for links and `#nameddest=` and bookmarked when
+    /// `level` is a heading level. Names the invalid field on failure.
+    pub(crate) fn add_anchor(
+        &mut self,
+        name: &str,
+        level: u8,
+        title: &str,
+    ) -> Result<u16, &'static str> {
+        let slot = u16::try_from(self.metadata.anchors.len())
+            .ok()
+            .filter(|slot| usize::from(*slot) < MAX_ANCHORS)
+            .ok_or("anchor count")?;
+        if !name.is_empty() {
+            let Err(index) = self.metadata.find(name) else {
+                return Err("anchor name: already used");
+            };
+            self.metadata.names.insert(index, (name.to_owned(), slot));
+        }
+        self.metadata.anchors.push(Anchor {
+            level,
+            title: title.to_owned(),
+            at: None,
+        });
+        Ok(slot)
     }
 
     fn push_document(&mut self, document: &Document<'_>) -> Result<(), RenderError> {
@@ -209,17 +233,21 @@ impl Renderer {
 
     fn push_block(&mut self, block: &Block<'_>) -> Result<(), RenderError> {
         match block {
-            Block::PageBreak => self.start_page(),
+            Block::PageBreak => self.start_page()?,
             Block::Element(element) => self.render_element(element)?,
         }
+        self.check_size()
+    }
+
+    fn check_size(&self) -> Result<(), RenderError> {
         if self.content_bytes + self.contents.last().unwrap().len() > MAX_CONTENT_BYTES {
             return Err(RenderError::DocumentTooLarge);
         }
         Ok(())
     }
 
-    pub(crate) fn page_break(&mut self) {
-        self.start_page();
+    pub(crate) fn page_break(&mut self) -> Result<(), RenderError> {
+        self.start_page()
     }
 
     fn render_element(&mut self, element: &Element<'_>) -> Result<(), RenderError> {
@@ -249,21 +277,22 @@ impl Renderer {
     ) -> Result<(), RenderError> {
         let lines = layout.lines.len();
         if !splittable(element) {
-            self.page.validate_block(height + self.footer_height)?;
-            if !self.cursor.fits(height + self.footer_height, self.page) {
-                self.start_page();
+            self.page.validate_block(height)?;
+            if !self.cursor.fits(height, self.page) {
+                // CSS truncates a margin at an unforced page break.
+                if let Element::Spacer(_) = element {
+                    return self.paint_block(layout, self.cursor.remaining(self.page));
+                }
+                self.start_page()?;
             }
-            let origin = self.cursor.origin(self.page);
-            self.painter().paint(layout, 0..lines, origin);
-            self.cursor.advance(height);
-            return Ok(());
+            return self.paint_block(layout, height);
         }
         // Stream positioned lines page by page; `offset` is the block y where
         // the current page starts, so gaps straddling a break collapse.
         let mut offset = Pt::ZERO;
         let mut index = 0;
         loop {
-            let available = self.cursor.remaining(self.page) - self.footer_height;
+            let available = self.cursor.remaining(self.page);
             let start = index;
             while layout
                 .lines
@@ -276,18 +305,18 @@ impl Renderer {
                 if self.cursor.at_top(self.page) {
                     return Err(RenderError::PageOverflow);
                 }
-                self.start_page();
+                self.start_page()?;
                 continue;
             }
             let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
-            self.painter().paint(layout, start..index, origin);
+            self.paint(layout, start..index, origin);
             if index == lines {
                 let rest = (height - offset).get().min(available.get());
                 self.cursor.advance(Pt(rest.max(0.0)));
                 return Ok(());
             }
             offset = layout.lines[index].top;
-            self.start_page();
+            self.start_page()?;
         }
     }
 
@@ -299,16 +328,15 @@ impl Renderer {
         let split = table.rows.len() - table.footer_rows;
         let (header, header_height) = self.layout_rows(&table.rows[..table.header_rows], area)?;
         let (footer, footer_height) = self.layout_rows(&table.rows[split..], area)?;
-        let reserved = header_height + footer_height + self.footer_height;
+        let reserved = header_height + footer_height;
         self.page.validate_block(reserved)?;
         let body = &table.rows[table.header_rows..split];
         if body.is_empty() {
             if !self.cursor.fits(reserved, self.page) {
-                self.start_page();
+                self.start_page()?;
             }
-            self.paint_block(&header, header_height);
-            self.paint_block(&footer, footer_height);
-            return Ok(());
+            self.paint_block(&header, header_height)?;
+            return self.paint_block(&footer, footer_height);
         }
         let mut header_on_page = false;
         for (index, row) in body.iter().enumerate() {
@@ -322,26 +350,26 @@ impl Renderer {
             }
             let needed = height
                 + if header_on_page {
-                    footer_height + self.footer_height
+                    footer_height
                 } else {
                     reserved
                 };
             if !self.cursor.fits(needed, self.page) {
                 if header_on_page {
-                    self.paint_block(&footer, footer_height);
+                    self.paint_block(&footer, footer_height)?;
                 }
-                self.start_page();
+                self.start_page()?;
                 header_on_page = false;
             }
             if !header_on_page {
-                self.paint_block(&header, header_height);
+                self.paint_block(&header, header_height)?;
                 header_on_page = true;
             }
-            self.paint_block(&layout, height);
+            let painted = self.paint_block(&layout, height);
             self.layout = layout;
+            painted?;
         }
-        self.paint_block(&footer, footer_height);
-        Ok(())
+        self.paint_block(&footer, footer_height)
     }
 
     fn layout_rows(
@@ -362,10 +390,45 @@ impl Renderer {
         Ok((buffer, height))
     }
 
-    fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) {
+    /// Checks the cap per paint: a repeated table header multiplies one block's bytes.
+    fn paint_block(&mut self, layout: &LayoutBuffer, height: Pt) -> Result<(), RenderError> {
         let origin = self.cursor.origin(self.page);
-        self.painter().paint(layout, 0..layout.lines.len(), origin);
+        self.paint(layout, 0..layout.lines.len(), origin);
         self.cursor.advance(height);
+        self.check_size()
+    }
+
+    /// Paints `lines`, then places each anchor on the first line at or after it, with the
+    /// first fragment winning. An anchor with no line left in `layout` waits for the next one.
+    fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        self.painter().paint(layout, lines.clone(), origin);
+        let page = self.contents.len() - 1;
+        let at = |line: usize| {
+            let line = &layout.lines[line];
+            (
+                page,
+                (origin.x + line.origin.x).get(),
+                (origin.y - line.top).get(),
+            )
+        };
+        let anchors = &mut self.metadata.anchors;
+        if !lines.is_empty() {
+            for slot in self.pending.drain(..) {
+                if let Some(anchor) = anchors.get_mut(usize::from(slot)) {
+                    anchor.at.get_or_insert_with(|| at(lines.start));
+                }
+            }
+        }
+        for &(slot, line) in &layout.anchors {
+            let Some(anchor) = anchors.get_mut(usize::from(slot)) else {
+                continue;
+            };
+            if lines.contains(&line) {
+                anchor.at.get_or_insert_with(|| at(line));
+            } else if line == lines.end && line == layout.lines.len() && anchor.at.is_none() {
+                self.pending.push(slot);
+            }
+        }
     }
 
     fn painter(&mut self) -> PdfPainter<'_> {
@@ -373,45 +436,52 @@ impl Renderer {
             self.contents.last_mut().unwrap(),
             self.links.last_mut().unwrap(),
             self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
+            self.alphas.last_mut().unwrap(),
         )
     }
 
-    fn start_page(&mut self) {
+    fn start_page(&mut self) -> Result<(), RenderError> {
+        if self.contents.len() >= MAX_PAGES {
+            return Err(RenderError::TooManyPages);
+        }
         self.content_bytes += self.contents.last().unwrap().len();
-        self.contents.push(Content::new());
+        self.contents.push(Content::with_capacity(0));
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
+        self.alphas.push(Vec::new());
         self.cursor.reset(self.page);
-        self.cursor.advance(self.header_height);
+        Ok(())
     }
 
-    pub fn finish(mut self) -> Vec<u8> {
-        if let Some(header) = self.header.take() {
-            let total = self.contents.len() as i32;
-            for (index, (content, links)) in
-                self.contents.iter_mut().zip(&mut self.links).enumerate()
-            {
+    pub fn finish(mut self) -> Result<Vec<u8>, RenderError> {
+        // The header and footer repeat on every page, so they count against the cap too.
+        let mut bytes = self.content_bytes + self.contents.last().unwrap().len();
+        let total = self.contents.len() as i32;
+        for (index, (content, links)) in self.contents.iter_mut().zip(&mut self.links).enumerate() {
+            let before = content.len();
+            for furniture in self.header.iter().chain(&self.footer) {
                 let mut page_buffer = itoa::Buffer::new();
                 let mut total_buffer = itoa::Buffer::new();
-                let font = self.fonts.get(header.style.font).unwrap();
-                let (text, width) = footer_line(
-                    &header.template,
+                let font = self.fonts.get(furniture.style.font).unwrap();
+                let (text, gaps, width) = footer_line(
+                    &furniture.template,
                     page_buffer.format(index as i32 + 1),
                     total_buffer.format(total),
                     font,
-                    header.style,
+                    furniture.style,
                 )
                 .unwrap();
-                self.fonts.mark_used(header.style.font, &text);
+                self.fonts.mark_used(furniture.style.font, &text);
                 if self.metadata.tagged {
                     content.begin_marked_content(pdf_writer::Name(b"Artifact"));
                 }
-                PdfPainter::new(content, links, None).paint_line(
+                PdfPainter::new(content, links, None, &mut Vec::new()).paint_line(
                     &text,
-                    header.style,
+                    &gaps,
+                    furniture.style,
                     crate::geometry::Point {
                         x: self.page.margin(),
-                        y: self.page.top() - header.baseline,
+                        y: furniture.baseline,
                     },
                     self.page.content_width(),
                     width,
@@ -420,46 +490,28 @@ impl Renderer {
                     content.end_marked_content();
                 }
             }
-        }
-        if let Some(footer) = self.footer.take() {
-            let total = self.contents.len() as i32;
-            for (index, (content, links)) in
-                self.contents.iter_mut().zip(&mut self.links).enumerate()
-            {
-                let mut page_buffer = itoa::Buffer::new();
-                let mut total_buffer = itoa::Buffer::new();
-                let page_number = page_buffer.format(index as i32 + 1);
-                let total_pages = total_buffer.format(total);
-                let font = self.fonts.get(footer.style.font).unwrap();
-                let (text, text_width) = footer_line(
-                    &footer.template,
-                    page_number,
-                    total_pages,
-                    font,
-                    footer.style,
-                )
-                .unwrap();
-                self.fonts.mark_used(footer.style.font, &text);
-                if self.metadata.tagged {
-                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
-                }
-                PdfPainter::new(content, links, None).paint_line(
-                    &text,
-                    footer.style,
-                    crate::geometry::Point {
-                        x: self.page.margin(),
-                        y: self.page.margin() + footer.baseline,
-                    },
-                    self.page.content_width(),
-                    text_width,
-                );
-                if self.metadata.tagged {
-                    content.end_marked_content();
-                }
+            bytes += content.len() - before;
+            if bytes > MAX_CONTENT_BYTES {
+                return Err(RenderError::DocumentTooLarge);
             }
         }
+        // What no line claimed, such as an empty last element, sits where the content ends.
+        let end = (
+            self.contents.len() - 1,
+            self.page.margin().get(),
+            self.cursor.origin(self.page).y.get(),
+        );
+        for anchor in &mut self.metadata.anchors {
+            anchor.at.get_or_insert(end);
+        }
+        let metadata = &self.metadata;
+        if (self.links.iter().flatten()).any(|link| {
+            (link.uri.strip_prefix('#')).is_some_and(|name| metadata.find(name).is_err())
+        }) {
+            return Err(RenderError::UnknownDestination);
+        }
         let (fonts, used) = self.fonts.into_parts();
-        finish_pdf(
+        Ok(finish_pdf(
             self.page.page(),
             self.contents,
             fonts,
@@ -468,8 +520,9 @@ impl Renderer {
             self.used_images,
             self.links,
             self.tags,
+            self.alphas,
             self.metadata,
-        )
+        ))
     }
 }
 
@@ -477,7 +530,7 @@ impl Renderer {
 /// protocol has no break-inside flag, so the compiler emits Stack for `avoid`.
 fn splittable(element: &Element<'_>) -> bool {
     match element {
-        Element::Paragraph(_) | Element::Image(_) => true,
+        Element::Paragraph(_) | Element::Image(_) | Element::Anchor(_) => true,
         Element::Box(node) => {
             node.style.background.is_none()
                 && node
@@ -495,27 +548,63 @@ fn splittable(element: &Element<'_>) -> bool {
     }
 }
 
+/// The line's show string, kerning and word-spacing gaps, and width. Spaces stay as written.
 fn footer_line(
     text: &str,
     page_number: &str,
     total_pages: &str,
     font: &crate::font::Font,
     style: TextStyle,
-) -> Result<(Vec<u8>, Pt), RenderError> {
+) -> Result<(Vec<u8>, Vec<Gap>, Pt), RenderError> {
+    let Typography {
+        letter_spacing,
+        word_spacing,
+        kerning,
+        ..
+    } = style.typography;
     let mut bytes = Vec::new();
-    let mut width = 0_u32;
-    for character in text.chars() {
-        let token = match character {
-            crate::PAGE_NUMBER => page_number,
-            crate::TOTAL_PAGES => total_pages,
-            _ => {
-                width += u32::from(font.encode_into(character, &mut bytes)?);
-                continue;
+    let mut gaps = Vec::new();
+    let mut width = 0_i32;
+    let mut glyphs = 0_u32;
+    let mut spaces = 0_u32;
+    let mut previous: Option<std::ops::Range<usize>> = None;
+    let mut push = |character: char| -> Result<(), RenderError> {
+        let start = bytes.len();
+        width += i32::from(font.encode_into(character, &mut bytes)?);
+        glyphs += 1;
+        let code = start..bytes.len();
+        if character.is_whitespace() {
+            previous = None;
+        } else if let Some(last) = previous.replace(code.clone()).filter(|_| kerning) {
+            let amount = font.kern(&bytes[last], &bytes[code]);
+            if amount != 0 {
+                width += i32::from(amount);
+                gaps.push(Gap {
+                    at: start as u32,
+                    amount: f32::from(amount),
+                    stretch: false,
+                });
             }
-        };
-        for digit in token.chars() {
-            width += u32::from(font.encode_into(digit, &mut bytes)?);
+        }
+        if word_spacing != 0.0 && matches!(character, ' ' | '\u{a0}') {
+            spaces += 1;
+            gaps.push(Gap {
+                at: bytes.len() as u32,
+                amount: word_spacing * 1000.0 / style.size.get(),
+                stretch: false,
+            });
+        }
+        Ok(())
+    };
+    for character in text.chars() {
+        match character {
+            crate::PAGE_NUMBER => page_number.chars().try_for_each(&mut push)?,
+            crate::TOTAL_PAGES => total_pages.chars().try_for_each(&mut push)?,
+            _ => push(character)?,
         }
     }
-    Ok((bytes, Pt(width as f32 * style.size.get() / 1000.0)))
+    let width = width as f32 * style.size.get() / 1000.0
+        + glyphs as f32 * letter_spacing
+        + spaces as f32 * word_spacing;
+    Ok((bytes, gaps, Pt(width)))
 }

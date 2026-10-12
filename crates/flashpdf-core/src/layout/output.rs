@@ -1,7 +1,12 @@
 use std::ops::Range;
 
+use crate::font::Stroke;
 use crate::geometry::Point;
 use crate::{BoxStyle, FontId, Pt, Rgb, TextAlign};
+
+/// A drawn list marker's slot, with its gap to the text, and its size, in em.
+pub(crate) const MARKER_SLOT: f32 = 0.75;
+pub(crate) const MARKER_SHAPE: f32 = 0.3;
 
 pub(crate) struct PositionedLine {
     pub(crate) segments: Range<usize>,
@@ -21,6 +26,24 @@ pub(crate) struct Segment {
     pub(crate) font: FontId,
     pub(crate) size: Pt,
     pub(crate) color: Rgb,
+    /// `Tc`, in points.
+    pub(crate) letter_spacing: f32,
+    pub(crate) oblique: bool,
+    /// Baseline shift in points, up positive.
+    pub(crate) rise: f32,
+    /// 1, 2, or 3 draws a disc, circle, or square of this size instead of `text`, for a list marker.
+    pub(crate) shape: u8,
+}
+
+/// Extra advance before the code starting at byte `at` of `LayoutBuffer::text`,
+/// in 1/1000 em of its segment, as a `TJ` adjustment with the sign flipped.
+/// Inside a segment it is painted; at a segment start it is already in `x`.
+#[derive(Clone, Copy)]
+pub(crate) struct Gap {
+    pub(crate) at: u32,
+    pub(crate) amount: f32,
+    /// After a space or no-break space, so `text-align: justify` widens it.
+    pub(crate) stretch: bool,
 }
 
 pub(crate) struct PositionedBox {
@@ -31,12 +54,15 @@ pub(crate) struct PositionedBox {
 }
 
 /// Paint attributes of the segment at the same index. The text layouter owns
-/// `Segment`, so these ride beside it instead of inside it.
+/// `Segment`, so these ride beside it instead of inside it. Strokes are in 1/1000 em.
 pub(crate) struct Decoration {
-    pub(crate) underline: bool,
-    pub(crate) line_through: bool,
+    pub(crate) underline: Option<Stroke>,
+    pub(crate) line_through: Option<Stroke>,
+    pub(crate) color: Rgb,
+    pub(crate) background: Option<Rgb>,
     /// Index into `LayoutBuffer::links`.
     pub(crate) link: Option<usize>,
+    pub(crate) alpha: u8,
     /// Font ascent and (positive) descent at the segment size, for the link rectangle.
     pub(crate) ascent: Pt,
     pub(crate) descent: Pt,
@@ -49,6 +75,7 @@ pub(crate) struct PositionedImage {
     pub(crate) slot: u16,
     pub(crate) link: Option<usize>,
     pub(crate) alt: String,
+    pub(crate) alpha: u8,
     /// The empty pseudo-line whose box carries the image through page splitting.
     pub(crate) line: usize,
 }
@@ -59,9 +86,13 @@ pub(crate) struct LayoutBuffer {
     pub(crate) segments: Vec<Segment>,
     pub(crate) decorations: Vec<Decoration>,
     pub(crate) text: Vec<u8>,
+    /// Sorted by `at`.
+    pub(crate) gaps: Vec<Gap>,
     pub(crate) boxes: Vec<PositionedBox>,
     pub(crate) images: Vec<PositionedImage>,
     pub(crate) links: Vec<String>,
+    /// Anchor slot and the index of the line it waits for; `lines.len()` when none follows.
+    pub(crate) anchors: Vec<(u16, usize)>,
 }
 
 impl LayoutBuffer {
@@ -70,9 +101,11 @@ impl LayoutBuffer {
         self.segments.clear();
         self.decorations.clear();
         self.text.clear();
+        self.gaps.clear();
         self.boxes.clear();
         self.images.clear();
         self.links.clear();
+        self.anchors.clear();
     }
 
     #[cfg(test)]

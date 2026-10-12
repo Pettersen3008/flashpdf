@@ -5,7 +5,3 @@ allowBuilds:
   esbuild: true
   workerd: true
 minimumReleaseAge: 1440
-minimumReleaseAgeExclude:
-  - '@types/node@26.6.1'
-  - miniflare@5.20260917.0-alpha
-  - wrangler@4.134.0

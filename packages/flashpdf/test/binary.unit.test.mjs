@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { test } from "vitest";
 
 import { Binary } from "../dist/binary.js";
 import { ProtocolWriter } from "../dist/protocol.js";
 
-test("given a small backend window, when writing a record, then streams every byte in order", () => {
+test("given a small backend window, when flushing a queued record, then streams every byte in order", () => {
 	const memory = { buffer: new ArrayBuffer(3) };
 	const chunks = [];
 	let pointerReads = 0;
@@ -22,6 +23,8 @@ test("given a small backend window, when writing a record, then streams every by
 
 	const binary = new Binary(renderer, memory);
 	binary.record(7, () => binary.u8(9));
+	assert.deepEqual(chunks, []);
+	binary.flush();
 
 	assert.deepEqual(chunks, [7, 1, 0, 0, 0, 9]);
 	assert.equal(pointerReads, 1);
@@ -70,4 +73,60 @@ test("given the same Uint8Array used for two images, when writing them, then reg
 	writer.image(new Uint8Array([1, 2, 3]), undefined, undefined, "", undefined);
 	assert.equal(registered.length, 2);
 	assert.equal(registered[0], logo);
+});
+
+test("given images totalling over 64 MiB, when writing them, then rejects the last one before copying it into WASM", () => {
+	const memory = { buffer: new ArrayBuffer(4096) };
+	const copied = [];
+	const renderer = {
+		input_ptr: () => 0,
+		input_capacity: () => 4096,
+		push: () => {},
+		finish: () => new Uint8Array(),
+		add_image: (bytes) => copied.push(bytes.byteLength) - 1,
+	};
+	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
+	const half = new Uint8Array(32 * 1024 * 1024 + 1);
+	writer.image(half, undefined, undefined, "", undefined);
+	assert.throws(
+		() => writer.image(half.slice(), undefined, undefined, "", undefined),
+		/^Error: images exceed 64 MiB per render$/,
+	);
+	assert.deepEqual(copied, [half.byteLength]);
+});
+
+test("given page breaks past 10000 pages, when writing them, then rejects before the core sees the extra page", () => {
+	const memory = { buffer: new ArrayBuffer(4096) };
+	let bytes = 0;
+	const renderer = {
+		input_ptr: () => 0,
+		input_capacity: () => 4096,
+		push: (length) => {
+			bytes += length;
+		},
+		finish: () => new Uint8Array(),
+	};
+	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
+	for (let page = 1; page < 10_000; page++) writer.pageBreak();
+	assert.throws(() => writer.pageBreak(), /^Error: document exceeds 10000 pages; split it/);
+	writer.end();
+	assert.equal(bytes, 10_000 * 5);
+});
+
+test("given a WASM fetch that fails once, when loading again, then retries instead of keeping the failure", async () => {
+	const bytes = readFileSync(new URL("../wasm/flashpdf_wasm_bg.wasm", import.meta.url));
+	const original = globalThis.fetch;
+	let fetches = 0;
+	globalThis.fetch = async () => {
+		if (fetches++ === 0) throw new TypeError("network down");
+		return new Response(bytes, { headers: { "Content-Type": "application/wasm" } });
+	};
+	try {
+		const { loadWasm } = await import("../dist/wasm.browser.js");
+		await assert.rejects(loadWasm(), /network down/);
+		assert.ok((await loadWasm()).memory);
+		assert.equal(fetches, 2);
+	} finally {
+		globalThis.fetch = original;
+	}
 });

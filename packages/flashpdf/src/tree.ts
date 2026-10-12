@@ -1,6 +1,8 @@
 import { object, props, text } from "./assert.js";
 import type { Style } from "./element.js";
+import { PageToken } from "./page.js";
 import type { NormalizedStyle } from "./style.js";
+import { isMarkup, markup, vector, type Drawing } from "./svg.js";
 
 const REACT_FRAGMENT = Symbol.for("react.fragment");
 const FLASHPDF_FRAGMENT = Symbol.for("flashpdf.fragment");
@@ -13,10 +15,64 @@ const REACT_PROVIDER = Symbol.for("react.provider");
 type Render = (props: Record<string, unknown>) => unknown;
 type Component = { render: Render; name: string };
 
-export const blockTags = ["main", "div", "section", "article", "header", "footer"] as const;
-export const textTags = ["p", "span", "b", "strong", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
+export const blockTags = [
+	"main",
+	"div",
+	"section",
+	"article",
+	"header",
+	"footer",
+	"ul",
+	"ol",
+	"li",
+	"dl",
+	"dt",
+	"dd",
+	"blockquote",
+	"address",
+	"figure",
+	"figcaption",
+	"nav",
+	"aside",
+] as const;
+export const textTags = [
+	"p",
+	"span",
+	"b",
+	"strong",
+	"em",
+	"i",
+	"cite",
+	"small",
+	"sub",
+	"sup",
+	"u",
+	"ins",
+	"s",
+	"del",
+	"mark",
+	"code",
+	"kbd",
+	"samp",
+	"pre",
+	"h1",
+	"h2",
+	"h3",
+	"h4",
+	"h5",
+	"h6",
+] as const;
 export const tableTags = ["table", "thead", "tbody", "tfoot", "tr", "th", "td"] as const;
-export const tags = [...blockTags, ...textTags, ...tableTags, "a", "img", "hr", "br"] as const;
+export const tags = [
+	...blockTags,
+	...textTags,
+	...tableTags,
+	"a",
+	"img",
+	"svg",
+	"hr",
+	"br",
+] as const;
 export type BlockTag = (typeof blockTags)[number];
 export type TextTag = (typeof textTags)[number];
 export type TableTag = (typeof tableTags)[number];
@@ -33,18 +89,21 @@ export type ElementNode = {
 	readonly src?: Uint8Array | undefined;
 	readonly alt?: string | undefined;
 	readonly href?: string | undefined;
+	/** An `<svg>`, or an `<img>` whose `src` is SVG markup. */
+	readonly drawing?: Drawing | undefined;
+	/** `data-bookmark` on a heading: its outline title, or `false` to leave it out. */
+	readonly bookmark?: string | false | undefined;
+	/** `<ol start>`, `<ol reversed>`, and `<li value>`. */
+	readonly start?: number | undefined;
+	readonly reversed?: boolean | undefined;
+	readonly value?: number | undefined;
 };
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
-	em: "italic faces are not supported yet; use <span>",
-	i: "italic faces are not supported yet; use <span>",
 	colgroup: "column widths come from the first row's <th>/<td> width or flex",
 	col: "column widths come from the first row's <th>/<td> width or flex",
 	caption: "captions are not supported; use a <p> before the table",
-	ul: "lists are not supported yet; use one <p> per item",
-	ol: "lists are not supported yet; use one <p> per item",
-	li: "lists are not supported yet; use one <p> per item",
 };
 
 export function label(node: {
@@ -56,13 +115,28 @@ export function label(node: {
 }
 
 const located = new WeakSet<Error>();
+/** The innermost element path of each bare PageOverflow, for `pageOverflow()`. */
+const overflows = new WeakMap<Error, string>();
 /** Appends the element path once; a bare PageOverflow stays bare so `box()` can still recognise it. */
 export function locate(error: unknown, where: string): unknown {
-	if (!(error instanceof Error) || located.has(error) || error.message === "PageOverflow")
+	if (!(error instanceof Error) || located.has(error)) return error;
+	if (error.message === "PageOverflow") {
+		if (!overflows.has(error)) overflows.set(error, where);
 		return error;
+	}
 	error.message += ` on ${where}`;
 	located.add(error);
 	return error;
+}
+
+/** Explains a PageOverflow that no decorated box, image, or table claimed. */
+export function pageOverflow(error: unknown): unknown {
+	if (!(error instanceof Error) || error.message !== "PageOverflow") return error;
+	const where = overflows.get(error);
+	return new Error(
+		`PageOverflow: the content does not fit on an empty page; split it into smaller blocks${where ? ` on ${where}` : ""}`,
+		{ cause: error },
+	);
 }
 
 function displayName(type: { displayName?: unknown; name?: unknown }): string {
@@ -119,7 +193,7 @@ function list(values: Iterable<unknown>, depth: number): unknown[] | Promise<unk
 	let pending = false;
 	let unchanged = Array.isArray(values);
 	for (const value of values) {
-		const child = normalize(value, depth);
+		const child = normalize(value, depth, true);
 		pending ||= thenable(child);
 		unchanged &&= child === value;
 		result.push(child);
@@ -143,15 +217,17 @@ function invoke(component: Component, p: Record<string, unknown>, depth: number)
 	return Promise.resolve(result).then((value) => normalize(value, depth + 1), failed);
 }
 
-/** `depth` counts element levels only, matching the renderer's own limit; the
- *  children arrays React puts between them are transparent. */
-function normalize(value: unknown, depth: number): unknown {
+/** `depth` counts element levels, matching the renderer's own limit. The children
+ *  array React puts under an element is free; an array nested in an array (`nested`)
+ *  counts, so deep arrays cannot overflow the stack. */
+function normalize(value: unknown, depth: number, nested = false): unknown {
 	if (depth > 64) throw new Error("nesting exceeds 64");
 	if (typeof value === "bigint") return String(value);
-	if (Array.isArray(value)) return list(value, depth);
+	if (Array.isArray(value)) return list(value, depth + Number(nested));
 	if (typeof value !== "object" || value === null) return value;
 	const iterator = (value as { [Symbol.iterator]?: unknown })[Symbol.iterator];
-	if (typeof iterator === "function") return list(value as Iterable<unknown>, depth);
+	if (typeof iterator === "function")
+		return list(value as Iterable<unknown>, depth + Number(nested));
 
 	const node = object(value);
 	if (!("type" in node) || !("props" in node)) return value;
@@ -180,8 +256,13 @@ export async function reactTree(value: unknown, depth = 0): Promise<unknown> {
 export function href(value: unknown, where = ""): string {
 	if (typeof value !== "string" || !value)
 		throw new Error(`href must be an absolute http, https, or mailto URL${where}`);
-	if (value.startsWith("#"))
-		throw new Error(`internal anchor links (${value}) are not supported yet${where}`);
+	if (value.startsWith("#")) {
+		if (!/^#[\x21-\x7e]{1,255}$/.test(value))
+			throw new Error(
+				`a link to an id is # and 1 to 255 printable ASCII characters, not ${JSON.stringify(value)}${where}`,
+			);
+		return value;
+	}
 	let url: URL;
 	try {
 		url = new URL(value);
@@ -194,6 +275,11 @@ export function href(value: unknown, where = ""): string {
 		throw new Error(
 			`href scheme ${url.protocol} is not allowed; use http, https, or mailto${where}`,
 		);
+	// WHATWG parses `http:foo` as `http://foo/`; an absolute web URL must spell out its host.
+	if (url.protocol !== "mailto:" && !/^\s*https?:\/\/[^/\\?#\s]/i.test(value))
+		throw new Error(
+			`href must name a host, such as https://example.com/, not ${JSON.stringify(value)}${where}`,
+		);
 	if (!/^[\x21-\x7e]+$/.test(url.href))
 		throw new Error(
 			`href must be printable ASCII; percent-encode ${JSON.stringify(url.href)}${where}`,
@@ -201,19 +287,60 @@ export function href(value: unknown, where = ""): string {
 	return url.href;
 }
 
-function image(input: Record<string, unknown>, where: string) {
+/** `data-bookmark` is a heading's outline title, or `false` to leave it out. */
+function bookmark(value: unknown, where: string): { bookmark?: string | false } {
+	if (value === undefined) return {};
+	if (
+		value !== false &&
+		(typeof value !== "string" ||
+			!value.trim() ||
+			[...value].length > 255 ||
+			/[\p{Cc}\ud800-\udfff]/u.test(value))
+	)
+		throw new Error(
+			`data-bookmark must be 1 to 255 characters without control characters, or false${where}`,
+		);
+	return { bookmark: value as string | false };
+}
+
+function image(input: Record<string, unknown>, where: string, chain: string, depth: number) {
 	const { src, alt } = input;
 	if (typeof src === "string")
 		throw new Error(
-			`src must be the image's PNG or JPEG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes${where}`,
+			`src must be the image's PNG, JPEG, or SVG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes${where}`,
 		);
 	if (!(src instanceof Uint8Array) || !src.byteLength)
-		throw new Error(`src must be a non-empty Uint8Array of PNG or JPEG bytes${where}`);
+		throw new Error(`src must be a non-empty Uint8Array of PNG, JPEG, or SVG bytes${where}`);
 	if (alt !== undefined && (typeof alt !== "string" || /\p{Cc}/u.test(alt)))
 		throw new Error(`alt must be a string without control characters${where}`);
 	if (input.children !== undefined && input.children !== null)
 		throw new Error(`<img> has no children${where}`);
-	return { src, alt };
+	if (!isMarkup(src)) return { src, alt };
+	let root;
+	try {
+		root = markup(src);
+	} catch (error) {
+		if (error instanceof Error) error.message += where;
+		throw error;
+	}
+	const svg = vector(root.props, chain ? `<img> > ${chain}` : "<img>", depth + 1);
+	return { drawing: svg.drawing, alt: alt ?? svg.alt };
+}
+
+/** An `ol` `start` or `li` `value`: a 32-bit integer, as a number or an integer string. */
+function ordinal(value: unknown, name: string, where: string): number | undefined {
+	if (value === undefined) return undefined;
+	const number =
+		typeof value === "string" && /^[+-]?\d+$/.test(value.trim()) ? Number(value) : value;
+	if (typeof number !== "number" || !Number.isInteger(number) || Math.abs(number) > 2 ** 31 - 1)
+		throw new Error(`${name} must be an integer${where}`);
+	return number;
+}
+
+function reversed(value: unknown, where: string): boolean | undefined {
+	if (value !== undefined && typeof value !== "boolean")
+		throw new Error(`reversed must be a boolean${where}`);
+	return value;
 }
 
 function isTag(value: unknown): value is Tag {
@@ -227,15 +354,24 @@ function describe(type: unknown) {
 	return String(type);
 }
 
-function host(value: unknown, depth = 0, chain = ""): Node[] {
+function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 	if (depth > 64) throw new Error("nesting exceeds 64");
 	if (value === null || value === undefined || typeof value === "boolean") return [];
 	if (typeof value === "string" || typeof value === "number")
 		return [{ kind: "text", value: text(value) }];
-	if (Array.isArray(value)) return value.flatMap((child) => host(child, depth, chain));
+	if (value instanceof PageToken) return [{ kind: "text", value: value.token }];
+	if (Array.isArray(value))
+		return value.flatMap((child) => host(child, depth + Number(nested), chain, true));
 
-	const element = object(value);
 	const inside = chain ? ` in ${chain}` : "";
+	if (typeof value !== "object" || !("type" in value) || !("props" in value)) {
+		const kind =
+			typeof value === "object"
+				? `${Object.prototype.toString.call(value).slice(8, -1)} object`
+				: typeof value;
+		throw new Error(`unsupported child: a ${kind}${inside}; pass a string, number, or element`);
+	}
+	const element = object(value);
 	if (!isTag(element.type)) {
 		const hint = typeof element.type === "string" ? HINTS[element.type] : undefined;
 		throw new Error(
@@ -246,8 +382,24 @@ function host(value: unknown, depth = 0, chain = ""): Node[] {
 	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
 		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
-	const own = element.type === "img" ? ["src", "alt"] : element.type === "a" ? ["href"] : [];
+	const heading = /^h[1-6]$/.test(element.type);
+	const own =
+		element.type === "img"
+			? ["src", "alt"]
+			: element.type === "a"
+				? ["href"]
+				: element.type === "svg"
+					? Object.keys(object(element.props))
+					: heading
+						? ["data-bookmark"]
+						: element.type === "ol"
+							? ["start", "reversed"]
+							: element.type === "li"
+								? ["value"]
+								: [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
+	if ((element.type === "hr" || element.type === "br") && input.children != null)
+		throw new Error(`<${element.type}> has no children${where}`);
 	if (input.id !== undefined && typeof input.id !== "string")
 		throw new Error(`id must be a string${where}`);
 	if (input.className !== undefined && typeof input.className !== "string")
@@ -267,13 +419,22 @@ function host(value: unknown, depth = 0, chain = ""): Node[] {
 			typeof input.className === "string" ? input.className.split(/\s+/).filter(Boolean) : [],
 		style: input.style as Style | string | undefined,
 		children: [],
-		...(element.type === "img" ? image(input, where) : {}),
+		...(element.type === "img" ? image(input, where, chain, depth) : {}),
 		...(element.type === "a" ? { href: href(input.href, where) } : {}),
+		...(element.type === "svg" ? vector(input, chain, depth) : {}),
+		...(heading ? bookmark(input["data-bookmark"], where) : {}),
+		...(element.type === "ol"
+			? { start: ordinal(input.start, "start", where), reversed: reversed(input.reversed, where) }
+			: {}),
+		...(element.type === "li" ? { value: ordinal(input.value, "value", where) } : {}),
 	};
 	const self = label(node);
-	return [
-		{ ...node, children: host(input.children, depth + 1, chain ? `${self} > ${chain}` : self) },
-	];
+	// An svg's children became its drawing.
+	const children =
+		element.type === "svg"
+			? []
+			: host(input.children, depth + 1, chain ? `${self} > ${chain}` : self);
+	return [{ ...node, children }];
 }
 
 /** The React-compatible resolver owns all dynamic input. Everything after this

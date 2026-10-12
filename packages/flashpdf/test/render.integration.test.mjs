@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import zlib, { inflateSync } from "node:zlib";
 
 import { test } from "vitest";
 
-import { PageNumber, render, stylesheet, TotalPages } from "../dist/index.js";
+import { Barcode, PageNumber, QRCode, render, stylesheet, TotalPages } from "../dist/index.js";
 import { Fragment, jsx, jsxs } from "../dist/jsx-runtime.js";
 
 /** Latin-1 view of the PDF with FlateDecode streams inflated so content operators are greppable. */
@@ -19,11 +22,65 @@ const string = (pdf) =>
 				return match;
 			}
 		});
+/** `string` with kerned `TJ` arrays joined, so `/\(Invoice\)/` still finds a kerned word. */
+const shown = (pdf) => string(pdf).replace(/\) -?[\d.]+ \(/g, "");
 const font = new Uint8Array(readFileSync(new URL("./fixtures/Abel-Regular.ttf", import.meta.url)));
 
-test("given the package entry point, when importing it, then exposes only the renderer and stylesheet validator", async () => {
+test("given the package entry point, when importing it, then exposes only the renderer, stylesheet validator, components, and JSX fallback", async () => {
 	const api = await import("../dist/index.js");
-	assert.deepEqual(Object.keys(api).sort(), ["PageNumber", "TotalPages", "render", "stylesheet"]);
+	assert.deepEqual(Object.keys(api).sort(), [
+		"Barcode",
+		"PageNumber",
+		"QRCode",
+		"TotalPages",
+		"createElement",
+		"render",
+		"stylesheet",
+	]);
+});
+
+test("given a spread before key, when TypeScript compiles the JSX, then its createElement fallback renders", async () => {
+	const dir = new URL("../../../dist/jsx-spread-key/", import.meta.url);
+	mkdirSync(dir, { recursive: true });
+	writeFileSync(
+		new URL("document.tsx", dir),
+		'const row = { className: "row" };\nexport default <main><p {...row} key="k">Spread</p></main>;\n',
+	);
+	const typescript = dirname(createRequire(import.meta.url).resolve("typescript/package.json"));
+	const compiled = spawnSync(
+		process.execPath,
+		[
+			join(typescript, "bin", "tsc"),
+			"--jsx",
+			"react-jsx",
+			"--jsxImportSource",
+			"@pettersen3008/flashpdf",
+			"--noCheck",
+			"--module",
+			"esnext",
+			"--target",
+			"es2022",
+			"--outDir",
+			fileURLToPath(dir),
+			fileURLToPath(new URL("document.tsx", dir)),
+		],
+		{ encoding: "utf8" },
+	);
+	assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
+	const source = readFileSync(new URL("document.js", dir), "utf8");
+	assert.match(
+		source,
+		/import \{ createElement as _createElement \} from "@pettersen3008\/flashpdf"/,
+	);
+	// The output sits outside the package, so point its imports at this build.
+	writeFileSync(
+		new URL("document.mjs", dir),
+		source.replace(/"@pettersen3008\/flashpdf(\/jsx-runtime)?"/g, (_, runtime) =>
+			JSON.stringify(new URL(`../dist/${runtime ? "jsx-runtime" : "index"}.js`, import.meta.url)),
+		),
+	);
+	const { default: document } = await import(new URL("document.mjs", dir).href);
+	assert.match(string(await render(document)), /\(Spread\) Tj/);
 });
 
 test("given the rendering entry point, when following its imports, then it has no build-tool dependencies", () => {
@@ -57,15 +114,15 @@ test("given native JSX components and fragments, when rendering, then preserves 
 		],
 	});
 	const pdf = await render(document, { pageFormat: "A4", margin: 36 });
-	assert.match(string(pdf), /\(Invoice\)/);
-	assert.match(string(pdf), /\(1001\)/);
+	assert.match(shown(pdf), /\(Invoice\)/);
+	assert.match(shown(pdf), /\(1001\)/);
 	assert.deepEqual(pdf, await render(document, { pageFormat: "A4", margin: 36 }));
 
 	// A root fragment flattens to an array; the root check must look through it.
 	const siblings = jsxs(Fragment, {
 		children: [jsx("h1", { children: "One" }), jsx("p", { children: "Two" })],
 	});
-	assert.match(string(await render(siblings)), /\(Two\)/);
+	assert.match(shown(await render(siblings)), /\(Two\)/);
 	await assert.rejects(render("bare text"), /expected element or props/);
 });
 
@@ -90,9 +147,30 @@ test("given registered regular and bold fonts, when fontFamily selects them, the
 		}),
 		/font family has no bold face/,
 	);
+});
+
+test("given a font family that is neither registered nor built in, when rendering, then rejects naming it", async () => {
 	await assert.rejects(
 		render(jsx("main", { style: { fontFamily: "Missing" }, children: "x" })),
-		/unregistered font family/,
+		/unregistered font family: Missing .*on <main>/,
+	);
+});
+
+test("given serif and monospace font families, when rendering, then the PDF uses Times-Roman and Courier, which PDF/A rejects", async () => {
+	const document = jsxs("main", {
+		children: [
+			jsx("p", { style: { fontFamily: "Georgia, serif" }, children: "Serif" }),
+			jsx("p", { style: { fontFamily: "monospace", fontWeight: "bold" }, children: "Mono" }),
+			jsx("p", { style: { fontFamily: "Missing, sans-serif" }, children: "Helvetica" }),
+		],
+	});
+	const pdf = string(await render(document));
+	assert.match(pdf, /\/BaseFont \/Times-Roman/);
+	assert.match(pdf, /\/BaseFont \/Courier-Bold/);
+	assert.match(pdf, /\/BaseFont \/Helvetica\b/);
+	await assert.rejects(
+		render(document, { pdfa: "3b" }),
+		/PDF\/A embeds every font and the built-in Helvetica, Times, and Courier have none/,
 	);
 });
 
@@ -132,7 +210,96 @@ test("given text outside WinAnsi in an embedded font, when rendering, then emits
 	);
 	await assert.rejects(
 		render(jsx("p", { children: "中" })),
-		/Helvetica has no glyph for "中" \(U\+4E2D\); register a font that has it on <p>/,
+		/the built-in font has no glyph for "中" \(U\+4E2D\); register a font that has it on <p>/,
+	);
+});
+
+test("given an invoice with an embedded font and Factur-X XML, when rendering as PDF/A-3b, then writes XMP, an sRGB output intent, and the XML as an associated file", async () => {
+	const encode = (value) => new TextEncoder().encode(value);
+	const xml = encode(
+		'<?xml version="1.0" encoding="UTF-8"?>\n<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"/>\n',
+	);
+	const document = jsxs("main", {
+		style: { fontFamily: "Abel" },
+		children: [
+			jsx("p", { children: "Invoice 42" }),
+			jsxs("p", {
+				children: [
+					"Pay at ",
+					jsx("a", { href: "https://example.com/pay", children: "the portal" }),
+					" or ",
+					jsx("a", { href: "#bank", children: "by bank transfer" }),
+				],
+			}),
+			jsx("h2", { id: "bank", style: { fontWeight: "normal" }, children: "Bank transfer" }),
+		],
+	});
+	const note = { name: "delivery-note.csv", data: encode("item,qty\nA,1\n"), mimeType: "text/csv" };
+	const options = {
+		fonts: [{ family: "Abel", regular: font }],
+		metadata: { title: "Invoice 42 & Co", author: "Acme" },
+		facturx: { xml, profile: "EN 16931" },
+		attachments: [{ ...note, relationship: "Supplement" }],
+		outline: true,
+	};
+	const pdf = await render(document, options);
+	assert.deepEqual(pdf, await render(document, options));
+	const text = string(pdf);
+	assert.match(text, /<pdfaid:part>3<\/pdfaid:part><pdfaid:conformance>B<\/pdfaid:conformance>/);
+	assert.match(text, /\/Title \(Invoice 42 & Co\)/);
+	assert.match(
+		text,
+		/<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Invoice 42 &amp; Co<\/rdf:li>/,
+	);
+	assert.match(text, /<dc:creator><rdf:Seq><rdf:li>Acme<\/rdf:li>/);
+	assert.match(
+		text,
+		/<fx:DocumentFileName>factur-x\.xml<\/fx:DocumentFileName><fx:Version>1\.0<\/fx:Version><fx:ConformanceLevel>EN 16931</,
+	);
+	assert.match(text, /<pdfaSchema:prefix>fx<\/pdfaSchema:prefix>/);
+	assert.match(
+		text,
+		/\/S \/GTS_PDFA1\s+\/OutputConditionIdentifier \(sRGB IEC61966-2\.1\)\s+\/DestOutputProfile \d+ 0 R/,
+	);
+	// The catalog's /AF and the EmbeddedFiles name tree list the same file specs, sorted by name.
+	const [, delivery, invoice] = text.match(
+		/\/EmbeddedFiles <<\s+\/Names \[\(delivery-note\.csv\) (\d+ 0 R) \(factur-x\.xml\) (\d+ 0 R)\]/,
+	);
+	assert.ok(text.includes(`/AF [${delivery} ${invoice}]`));
+	assert.match(
+		text,
+		/\/F \(factur-x\.xml\)\s+\/UF \(factur-x\.xml\)\s+\/AFRelationship \/Alternative/,
+	);
+	assert.match(text, /\/AFRelationship \/Supplement/);
+	assert.match(
+		text,
+		/\/Subtype \/text#2Fxml\s+\/Filter \/FlateDecode\s+>>\s+stream\n<\?xml version/,
+	);
+	assert.match(text, /\/Subtype \/Link[^>]*\/F 4/);
+	// Internal links and the outline are plain PDF/A: a GoTo to a named destination and /Title text strings.
+	assert.match(text, /\/S \/GoTo\s+\/D \(bank\)/);
+	assert.match(text, /\/Dests <<\s+\/Names \[\(bank\) \d+ 0 R\]/);
+	assert.match(text, /\/Title \(Bank transfer\)/);
+	const id = (bytes) =>
+		Buffer.from(bytes)
+			.toString("latin1")
+			.match(/\/ID \[(<[0-9A-F]{32}>) \1\]/)?.[1];
+	const other = { ...options, facturx: { xml: encode("<Invoice/>"), profile: "EN 16931" } };
+	assert.ok(id(pdf));
+	assert.notEqual(id(await render(document, other)), id(pdf));
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-pdfa.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+	await assert.rejects(
+		render(jsx("p", { children: "Total" }), options),
+		/PDF\/A embeds every font and the built-in Helvetica, Times, and Courier have none; register one with `fonts` and set fontFamily on <p>/,
+	);
+	await assert.rejects(
+		render(document, { ...options, attachments: [{ ...note, relationship: "Related" }] }),
+		/attachment delivery-note\.csv: relationship must be one of Source, Data, Alternative/,
 	);
 });
 
@@ -155,13 +322,124 @@ test("given CSS cascade variables and a box, when rendering, then emits painted 
 	});
 	const pdf = await render(document, { stylesheets: [css] });
 	assert.match(string(pdf), /re\nf/);
-	assert.match(string(pdf), /\(\$100\)/);
+	assert.match(shown(pdf), /\(\$100\)/);
+});
+
+test("given rounded, dashed, and translucent boxes with an image, when rendering tagged PDF/A, then the page declares its graphic states and the bytes repeat", async () => {
+	const logo = png(2, 1, 2, [0, 255, 0, 0, 0, 0, 255]);
+	const document = jsxs("main", {
+		style: { fontFamily: "Abel" },
+		children: [
+			jsxs("div", {
+				style: {
+					opacity: 0.5,
+					backgroundColor: "#eef",
+					border: "2pt dashed #336",
+					borderRadius: "8pt",
+					padding: 6,
+				},
+				children: [
+					jsx("p", { children: "Draft" }),
+					jsx("img", { src: logo, alt: "Logo", style: { width: 40 } }),
+				],
+			}),
+			jsx("p", {
+				style: { border: "2pt dotted #333", borderRadius: "50%", padding: 4, marginTop: 8 },
+				children: "Paid",
+			}),
+		],
+	});
+	const options = {
+		fonts: [{ family: "Abel", regular: font }],
+		tagged: true,
+		pdfa: "3b",
+		metadata: { title: "Cards", language: "en" },
+	};
+	const pdf = await render(document, options);
+	assert.deepEqual(pdf, await render(document, options));
+	const text = string(pdf);
+	assert.match(
+		text,
+		/\/ExtGState <<\s+\/G8080 <<\s+\/Type \/ExtGState\s+\/ca 0\.5019608\s+\/CA 0\.5019608/,
+	);
+	assert.match(text, /\/G8080 gs[\s\S]*\/GFFFF gs/);
+	// The dotted outline strokes with round caps and zero-length dashes; the dashed one with butt caps.
+	assert.match(text, /1 J\n\[0 [\d.]+\] 0 d/);
+	assert.match(text, /\[6 [\d.]+\] 0 d/);
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-decoration.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+});
+
+test("given opacity on a header or footer, when rendering, then rejects instead of dropping it", async () => {
+	for (const position of ["header", "footer"])
+		await assert.rejects(
+			render(jsx("p", { children: "x" }), {
+				[position]: jsx("p", { style: { opacity: 0.5 }, children: "Page" }),
+			}),
+			new RegExp(`${position} text cannot take opacity`),
+		);
+});
+
+test("given paragraphs and headings in page furniture, when rendering, then default margins do not prevent their text", async () => {
+	const pdf = await render(jsx("p", { children: "Body" }), {
+		header: jsx("p", { children: "Header" }),
+		footer: jsx("h2", { children: "Footer" }),
+	});
+	for (const text of ["Body", "Header", "Footer"])
+		assert.match(shown(pdf), new RegExp(`\\(${text}\\)`));
+	await assert.rejects(
+		render(jsx("p", { children: "Body" }), {
+			header: jsx("p", { style: { marginTop: 10 }, children: "Header" }),
+		}),
+		/header must be a single text line/,
+	);
+});
+
+test("given collapsing margins around targeted headings, when adding bookmarks and links, then painted text keeps its position", async () => {
+	const document = jsxs("main", {
+		children: [
+			jsx("p", { children: "Before" }),
+			jsx("section", {
+				style: { marginTop: 20 },
+				children: jsx("h1", { id: "title", children: "Title" }),
+			}),
+			jsx("p", { children: "After" }),
+		],
+	});
+	const painted = (pdf) => string(pdf).match(/BT\n[\s\S]*?ET/g);
+	const plain = painted(await render(document));
+	assert.deepEqual(painted(await render(document, { outline: true })), plain);
+	const linked = jsxs("main", {
+		children: [document, jsx("p", { children: jsx("a", { href: "#title", children: "Jump" }) })],
+	});
+	assert.deepEqual(painted(await render(linked)).slice(0, plain.length), plain);
+});
+
+test("given Tailwind v4 border and md: utilities, when rendering with two margins, then draws the border and applies md: only to the wider content", async () => {
+	const css = readFileSync(new URL("./fixtures/tailwind-invoice.css", import.meta.url), "utf8");
+	const document = jsx("main", {
+		children: jsx("div", { className: "border border-gray-200 p-4 md:p-8", children: "Total" }),
+	});
+	// 48rem is 576 pt: the default margin leaves 523 pt, and no margin leaves 595 pt.
+	const narrow = shown(await render(document, { stylesheets: [css] }));
+	assert.match(narrow, /0\.898\d* 0\.905\d* 0\.921\d* rg\n36 805\.25 523 0\.75 re\nf/);
+	assert.match(narrow, /\n48\.75 [\d.]+ Td\n\[?\(Total\)/);
+	const wide = shown(await render(document, { stylesheets: [css], margin: 0 }));
+	assert.match(wide, /\n24\.75 [\d.]+ Td\n\[?\(Total\)/);
 });
 
 test("given a long native main with a page break rule, when rendering, then it paginates", async () => {
 	const document = jsx("main", {
 		children: Array.from({ length: 100 }, (_, index) =>
-			jsx("p", { className: index === 50 ? "new-page" : undefined, children: `Line ${index}` }),
+			jsx("p", {
+				style: { margin: 0 },
+				className: index === 50 ? "new-page" : undefined,
+				children: `Line ${index}`,
+			}),
 		),
 	});
 	const pdf = await render(document, { stylesheets: [".new-page { break-before: page }"] });
@@ -188,18 +466,59 @@ test("given a long native main with a page break rule, when rendering, then it p
 
 test("given a page footer, when rendering multiple pages, then repeats resolved page numbers", async () => {
 	const document = jsx("main", {
-		children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+		children: Array.from({ length: 100 }, (_, index) =>
+			jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+		),
 	});
 	const footer = jsxs("footer", {
 		style: { fontSize: "9pt", textAlign: "center" },
 		children: ["Page ", jsx(PageNumber, {}), " of ", jsx(TotalPages, {})],
 	});
 	const pdf = await render(document, { footer });
-	assert.match(string(pdf), /\(Page 1 of 2\)/);
-	assert.match(string(pdf), /\(Page 2 of 2\)/);
+	assert.match(shown(pdf), /\(Page 1 of 2\)/);
+	assert.match(shown(pdf), /\(Page 2 of 2\)/);
 	await assert.rejects(
 		render(jsx("main", { children: jsx(PageNumber, {}) })),
 		/only valid in a header or footer/,
+	);
+});
+
+test("given a page token character in user text, when it sits in a footer, then rejects it instead of numbering pages", async () => {
+	await assert.rejects(
+		render(jsx("main", { children: "x" }), { footer: jsx("footer", { children: "Page \u001e" }) }),
+		/unsupported control character/,
+	);
+});
+
+test("given layouts the engine rejects, when rendering, then explains the code and names the element", async () => {
+	const column = jsx("div", {
+		style: { display: "flex" },
+		children: jsx("span", { style: { width: "900%" }, children: "x" }),
+	});
+	await assert.rejects(
+		render(jsx("main", { children: column })),
+		/^Error: InvalidLayout: the content does not fit its container.* on <div> in <main>$/,
+	);
+	await assert.rejects(
+		render(
+			jsx("main", { children: jsx("p", { style: { fontSize: 3e38, margin: 0 }, children: "x" }) }),
+		),
+		/^Error: TextTooWide: .* on <p> in <main>$/,
+	);
+	await assert.rejects(
+		render(jsx("main", { children: jsx("div", { style: { marginTop: 3e38 }, children: "x" }) })),
+		/^Error: PageOverflow: the content does not fit on an empty page.* on <div> in <main>$/,
+	);
+});
+
+test("given an engine error queued in a batch before a compile error, when rendering, then names the element that wrote the failing record", async () => {
+	const lines = Array.from({ length: 50 }, (_, index) =>
+		jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+	);
+	const huge = jsx("p", { className: "huge", style: { fontSize: 3e38, margin: 0 }, children: "x" });
+	await assert.rejects(
+		render(jsx("main", { children: [...lines, huge, ...lines, jsx("td", { children: "x" })] })),
+		/^Error: TextTooWide: .* on <p\.huge> in <main>$/,
 	);
 });
 
@@ -208,7 +527,9 @@ test("given a repeating header and tagged metadata, when rendering two pages, th
 	const document = jsxs("main", {
 		children: [
 			jsx("img", { src: logo, alt: "Company logo", style: { width: 12 } }),
-			...Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+			...Array.from({ length: 100 }, (_, index) =>
+				jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+			),
 		],
 	});
 	const header = jsxs("header", {
@@ -219,7 +540,7 @@ test("given a repeating header and tagged metadata, when rendering two pages, th
 		metadata: { title: "Invoice", author: "Acme", language: "en-US" },
 		tagged: true,
 	});
-	const output = string(pdf);
+	const output = shown(pdf);
 	assert.match(output, /\(Report 1 of 2\)/);
 	assert.match(output, /\(Report 2 of 2\)/);
 	for (const part of [
@@ -270,20 +591,20 @@ test("given adjacent text and plain spans, when rendering, then keeps them in on
 			children: [jsx("span", { children: "Label:" }), " value"],
 		}),
 	);
-	assert.match(string(pdf), /\(Label: value\)/);
+	assert.match(shown(pdf), /\(Label: value\)/);
 });
 
 test("given inline bold inside a paragraph, when rendering, then paints both fonts in one text object", async () => {
 	const pdf = await render(
 		jsxs("p", { children: ["Hello ", jsx("b", { children: "World" }), " again"] }),
 	);
-	const objects = string(pdf)
+	const objects = shown(pdf)
 		.split("ET")
 		.filter((object) => object.includes("Tj"));
 	assert.equal(objects.length, 1, objects.join("\n"));
 	assert.match(
 		objects[0],
-		/\/F1 12 Tf\n[\d.]+ [\d.]+ Td\n\(Hello \) Tj\n\/F2 12 Tf\n[\d.]+ 0 Td\n\(World\) Tj\n\/F1 12 Tf\n[\d.]+ 0 Td\n\( again\) Tj/,
+		/\/F1 12 Tf\n[\d.]+ [\d.]+ Td\n\(Hello \) Tj\n\/F2 12 Tf\n[\d.]+ 0 Td\n\[\(World\)\] TJ\n\/F1 12 Tf\n[\d.]+ 0 Td\n\( again\) Tj/,
 	);
 });
 
@@ -291,7 +612,9 @@ test("given a long margin-only wrapper, when rendering, then it paginates", asyn
 	const pdf = await render(
 		jsx("main", {
 			style: { marginTop: "12pt" },
-			children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+			children: Array.from({ length: 100 }, (_, index) =>
+				jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+			),
 		}),
 	);
 	assert.match(string(pdf), /\/Count 2/);
@@ -306,7 +629,18 @@ test("given per-edge borders and hr, when rendering, then emits native rules", a
 			],
 		}),
 	);
-	assert.match(string(pdf), /1 0 0 rg/);
+	assert.match(string(pdf), /1 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
+	assert.match(string(pdf), /0 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
+});
+
+test("given an invalid option, when rendering, then rejects before running any component", async () => {
+	let ran = false;
+	const Page = () => {
+		ran = true;
+		return jsx("main", { children: "x" });
+	};
+	await assert.rejects(render(jsx(Page, {}), { pageFormat: "A5" }), /invalid page format/);
+	assert.equal(ran, false);
 });
 
 test("given an hr border, when rendering, then uses the author rule", async () => {
@@ -315,10 +649,7 @@ test("given an hr border, when rendering, then uses the author rule", async () =
 });
 
 test("given non-native JSX, when rendering, then rejects it", async () => {
-	await assert.rejects(
-		render({ type: "ul", props: {} }),
-		/unsupported element <ul>: lists are not supported yet/,
-	);
+	await assert.rejects(render({ type: "marquee", props: {} }), /unsupported element <marquee>/);
 });
 
 test("given a table that spans two pages, when rendering, then the header row repeats on the second page", async () => {
@@ -397,28 +728,56 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 			className: "row",
 			children: jsx("span", {
 				className: "total",
-				style: { color: "oklch(50% 0.1 20)" },
+				style: { color: "lab(50% 40 20)" },
 				children: "x",
 			}),
 		}),
 	});
 	await assert.rejects(
 		render(document),
-		/unsupported color: oklch\(50% 0.1 20\) on <span\.total> in <div\.row> > <main\.invoice>/,
+		/unsupported color: lab\(50% 40 20\) on <span\.total> in <div\.row> > <main\.invoice>/,
 	);
 	await assert.rejects(
 		render(jsx("p", { className: "text-red-500", children: "x" }), {
-			stylesheets: [".text-red-500 { color: oklch(63.7% 0.237 25.331) }"],
+			stylesheets: [".text-red-500 { color: lab(54% 77 49) }"],
 		}),
-		/unsupported color: oklch\(63.7% 0.237 25.331\) on <p\.text-red-500>/,
+		/unsupported color: lab\(54% 77 49\) on <p\.text-red-500>/,
 	);
 });
 
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
-		[{ height: 40 }, /height applies only to <img> \(block height comes from content\) on <main>/],
+		[
+			{ height: 40 },
+			/height applies only to <img> and <svg> \(block height comes from content\) on <main>/,
+		],
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
-		[{ borderRadius: 4 }, /border-?[Rr]adius \(box corners are square\) on <main>/],
+		[
+			{ boxShadow: "0 1px 2px red" },
+			/boxShadow \(shadows are not drawn; use a border or a background\) on <main>/,
+		],
+		[{ outline: "1px solid red" }, /outline \(outlines are not drawn; use a border\) on <main>/],
+		[
+			{ borderImage: "url(a.png) 30" },
+			/borderImage \(border images are not drawn; use a solid, dashed, or dotted border\) on <main>/,
+		],
+		[
+			{ backgroundImage: "linear-gradient(red, blue)" },
+			/backgroundImage \(gradients and background images are not drawn; use background-color\) on <main>/,
+		],
+		[
+			{ background: "linear-gradient(red, blue)" },
+			/unsupported background: linear-gradient\(red, blue\) \(gradients and background images are not drawn; use a solid colour\) on <main>/,
+		],
+		[
+			{ borderBottom: "1pt solid red", borderRadius: 4 },
+			/border-radius needs one width, colour, and style on all four borders, or none, because a curved border is drawn as one stroke on <main>/,
+		],
+		[
+			{ borderStyle: "double" },
+			/unsupported border style: double \(only none, solid, dashed, and dotted are drawn\) on <main>/,
+		],
+		[{ opacity: "half" }, /invalid opacity: half on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
 		[{ width: "40pt" }, /width applies only to a flex row child on <main>/],
@@ -522,8 +881,131 @@ test("given an invoice with a PNG logo on every row and a link, when rendering, 
 	);
 	await assert.rejects(
 		render(jsx("main", { children: jsx("img", { src: new Uint8Array([1, 2, 3]) }) })),
-		/unsupported image format; pass PNG or JPEG bytes on <img> in <main>/,
+		/unsupported image format; pass PNG, JPEG, or SVG bytes on <img> in <main>/,
 	);
+});
+
+test("given an svg with a viewBox, when rendering, then paints a tagged form fitted to its box, as the same file in an img does", async () => {
+	const options = { tagged: true, metadata: { language: "en" } };
+	const box = { width: 60, height: 60 };
+	const page = (child) => jsx("main", { style: { color: "#ff0000" }, children: child });
+	const pdf = await render(
+		page(
+			jsx("svg", {
+				viewBox: "0 0 20 10",
+				preserveAspectRatio: "xMinYMid meet",
+				"aria-label": "Acme",
+				style: box,
+				children: jsx("rect", { width: 20, height: 10, fill: "currentColor", fillOpacity: 0.5 }),
+			}),
+		),
+		options,
+	);
+	const text = string(pdf);
+	assert.match(
+		text,
+		/\/BBox \[0 0 1 1\]\s*\/Resources <<\s*\/ExtGState <<\s*\/G80FF <<\s*\/Type \/ExtGState\s*\/ca 0\.5019608\s*\/CA 1\s/,
+	);
+	// A 2:1 viewBox in a 60 pt square: scale 3, left-aligned, centred vertically, y up.
+	assert.match(
+		text,
+		/q\n0\.05 0 0 -0\.05 0 0\.75 cm\n1 0 0 rg\n\/G80FF gs\n0 0 m\n20 0 l\n20 10 l\n0 10 l\nh\nf\nQ/,
+	);
+	assert.match(text, /\/Figure <<\s*\/MCID 0\s*>> BDC\nq\n60 0 0 60 36 746 cm\n\/Im1 Do/);
+	assert.match(text, /\/Alt \(Acme\)/);
+	const file = new TextEncoder().encode(
+		'<svg viewBox="0 0 20 10" preserveAspectRatio="xMinYMid meet" aria-label="Acme"><rect width="20" height="10" fill="currentColor" fill-opacity="0.5"/></svg>',
+	);
+	assert.deepEqual(await render(page(jsx("img", { src: file, style: box })), options), pdf);
+	const rows = string(
+		await render(page([1, 2, 3].map(() => jsx("img", { src: file, style: box })))),
+	);
+	assert.equal(rows.match(/\/Subtype \/Form/g).length, 1, "one form for the repeated drawing");
+	assert.equal(rows.match(/\/Im1 Do/g).length, 3);
+	await assert.rejects(
+		render(page(jsx("svg", { viewBox: "0 0 1 1", style: { width: "50%", height: 20 } }))),
+		/a percent width with a height leaves the aspect ratio open; use a pt or px width, or preserveAspectRatio="none" on <svg> in <main>/,
+	);
+});
+
+test("given a QRCode and a Barcode, when rendering, then each draws its merged module runs as one tagged form", async () => {
+	const options = { tagged: true, metadata: { language: "en" } };
+	const pdf = await render(
+		jsxs("main", {
+			children: [
+				jsx(QRCode, {
+					value: "HELLO WORLD",
+					level: "Q",
+					alt: "Pay invoice 42",
+					style: { width: 87 },
+				}),
+				jsx(Barcode, { value: "0123456789" }),
+			],
+		}),
+		options,
+	);
+	const text = string(pdf);
+	assert.equal(text.match(/\/Subtype \/Form/g).length, 2);
+	// The first row, 1111111 0 11 0000 1111111, is three runs offset by the 4-module quiet zone.
+	assert.match(text, /4 4 m\n11 4 l\n11 5 l\n4 5 l\nh\n12 4 m\n14 4 l\n14 5 l\n12 5 l\nh\n18 4 m/);
+	assert.match(text, /\/Alt \(Pay invoice 42\)/);
+	assert.match(text, /\(0123456789\) Tj/);
+	for (const [element, message] of [
+		[jsx(QRCode, { value: "" }), /QRCode value must be a non-empty string/],
+		[jsx(QRCode, { value: "x", level: "X" }), /QRCode level must be L, M, Q, or H/],
+		[jsx(QRCode, { value: "x", size: 3 }), /unsupported property: size/],
+		[jsx(Barcode, { value: "Øre" }), /Barcode value must be printable ASCII/],
+		[jsx(Barcode, { value: "1", quietZone: 1.5 }), /quietZone must be a whole number/],
+	])
+		await assert.rejects(render(jsx("main", { children: element })), message);
+});
+
+test("given links to ids and headings with the outline option, when rendering, then writes GoTo links, a Dests entry on the target's page, and nested bookmarks", async () => {
+	const document = jsxs("main", {
+		children: [
+			jsx("h1", { children: "Invoice 42" }),
+			jsxs("p", { children: ["See the ", jsx("a", { href: "#terms", children: "terms" }), "."] }),
+			jsx("h2", {
+				id: "terms",
+				"data-bookmark": "Terms \u03a9",
+				style: { breakBefore: "page", margin: 0 },
+				children: "Terms",
+			}),
+			jsx("h3", { children: "Late fees" }),
+		],
+	});
+	const pdf = await render(document, { outline: true });
+	assert.deepEqual(pdf, await render(document, { outline: true }));
+	const text = string(pdf);
+	const [, , second] = text.match(/\/Kids \[(\d+) 0 R (\d+) 0 R\]/);
+	assert.match(text, /\/PageMode \/UseOutlines/);
+	assert.match(text, /\/Dests <<\s+\/Names \[\(terms\) \d+ 0 R\]/);
+	assert.match(text, new RegExp(`\\[${second} 0 R /XYZ 36 806 null\\]`));
+	assert.match(text, /\/S \/GoTo\s+\/D \(terms\)/);
+	assert.match(text, /\/Title \(Invoice 42\)/);
+	assert.match(
+		text,
+		/\/Title <FEFF005400650072006D0073002003A9>/,
+		"UTF-16BE, as PDFDocEncoding lacks Ω",
+	);
+	assert.match(text, /\/Type \/Outlines\s+\/First \d+ 0 R\s+\/Last \d+ 0 R\s+\/Count 3/);
+	const holds = (count) =>
+		new RegExp(`/Dest \\d+ 0 R\\s+/First \\d+ 0 R\\s+/Last \\d+ 0 R\\s+/Count ${count}\\b`);
+	assert.match(text, holds(2), "h1 holds h2 and h3");
+	assert.match(text, holds(1), "h2 holds h3");
+	const plain = string(await render(document));
+	assert.doesNotMatch(plain, /\/Outlines|\/PageMode/);
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-navigation.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+	await assert.rejects(
+		render(jsx("a", { href: "#nope", children: "x" })),
+		/link to #nope: no element has id="nope" on <a>/,
+	);
+	await assert.rejects(render(document, { outline: "yes" }), /invalid outline option/);
 });
 
 test("given two stylesheets of equal specificity, when rendering, then the later one wins", async () => {
@@ -532,4 +1014,96 @@ test("given two stylesheets of equal specificity, when rendering, then the later
 	});
 	assert.match(string(pdf), /0 0 1 rg/);
 	assert.doesNotMatch(string(pdf), /1 0 0 rg/);
+});
+
+test("given em text in a family with and without an italic face, when rendered, then it uses that face or slants the upright one", async () => {
+	const doc = jsx("p", { style: { fontFamily: "Abel" }, children: jsx("em", { children: "x" }) });
+	const slanted = string(await render(doc, { fonts: [{ family: "Abel", regular: font }] }));
+	assert.match(slanted, /\n1 0 0\.25 1 [\d.]+ [\d.]+ Tm\n/);
+	const italic = { fonts: [{ family: "Abel", regular: font, italic: font }] };
+	const faced = string(await render(doc, italic));
+	assert.doesNotMatch(faced, / Tm\n/);
+	assert.match(faced, /\/F6 12 Tf/);
+});
+
+test("given letter-spaced, word-spaced, justified text, when rendered, then the PDF sets Tc and widens spaces in TJ", async () => {
+	const pdf = string(
+		await render(
+			jsx("p", {
+				style: { textAlign: "justify", letterSpacing: "1pt", wordSpacing: "2pt" },
+				children: "word ".repeat(60),
+			}),
+		),
+	);
+	assert.match(pdf, /\n1 Tc\n/);
+	assert.match(pdf, / \) -[\d.]+ \(w/);
+});
+
+test("given AVA in Helvetica, when rendered, then TJ tightens both pairs unless font-kerning is none", async () => {
+	const show = async (fontKerning) =>
+		string(await render(jsx("p", { style: { fontKerning }, children: "AVA" })));
+	assert.match(await show("auto"), /\[\(A\) 70 \(V\) 80 \(A\)\] TJ/);
+	assert.match(await show("none"), /\(AVA\) Tj/);
+});
+
+test("given lists, a pre block, and inline elements, when rendered, then the PDF draws marker shapes, sets pre in Courier, and fills the mark", async () => {
+	const item = (children) => jsx("li", { children });
+	const document = jsxs("main", {
+		children: [
+			jsxs("ul", { children: [item("one"), item("two")] }),
+			jsxs("ol", { style: { listStyleType: "lower-roman" }, children: [item("three")] }),
+			jsx("pre", { children: "a\tb" }),
+			jsxs("p", {
+				children: [
+					"H",
+					jsx("sub", { children: "2" }),
+					"O ",
+					jsx("mark", { children: "mark" }),
+					jsx("code", { children: "code" }),
+				],
+			}),
+		],
+	});
+	const pdf = await render(document);
+	const text = string(pdf);
+	assert.match(text, /\/BaseFont \/Courier\b/);
+	// A disc is a polygon fill and the numeral is text; the mark's yellow fill comes before its text.
+	assert.match(text, /\nh\nf\n/);
+	assert.match(text, /\(i\. \) Tj/);
+	assert.match(text, /1 1 0 rg\n[^]*?\nf\n[^]*?BT/);
+	assert.deepEqual(pdf, await render(document));
+	if (spawnSync("qpdf", ["--version"]).status === 0) {
+		const path = new URL("../../../target/render-lists.pdf", import.meta.url);
+		writeFileSync(path, pdf);
+		const check = spawnSync("qpdf", ["--check", path.pathname], { encoding: "utf8" });
+		assert.equal(check.status, 0, check.stdout + check.stderr);
+	}
+});
+
+test("given a pre line wider than its container, when rendering, then rejects naming the element unless it is pre-wrap", async () => {
+	const line = "x".repeat(200);
+	await assert.rejects(
+		render(jsx("pre", { children: line })),
+		/LineTooWide: a line of white-space: pre or nowrap text is wider than its container.* on <pre>/,
+	);
+	await assert.rejects(
+		render(jsx("p", { style: { whiteSpace: "nowrap" }, children: line })),
+		/LineTooWide/,
+	);
+	await render(jsx("pre", { style: { whiteSpace: "pre-wrap" }, children: line }));
+});
+
+test("given a list and a pre block in an embedded font under PDF/A, when rendered, then markers are drawn and the spaces use the font", async () => {
+	const pdf = await render(
+		jsxs("main", {
+			style: { fontFamily: "Abel" },
+			children: [
+				jsx("ul", { children: jsx("li", { children: "Item" }) }),
+				jsx("pre", { style: { fontFamily: "Abel" }, children: "a  b" }),
+			],
+		}),
+		{ pdfa: "3b", fonts: [{ family: "Abel", regular: font }] },
+	);
+	assert.doesNotMatch(string(pdf), /\/Type1\b/);
+	assert.match(string(pdf), /\nh\nf\n/);
 });

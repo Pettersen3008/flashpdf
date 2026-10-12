@@ -1,4 +1,11 @@
-import { PageNumber, render, TotalPages, type EmbeddedFont } from "@pettersen3008/flashpdf";
+import {
+	Barcode,
+	PageNumber,
+	QRCode,
+	render,
+	TotalPages,
+	type EmbeddedFont,
+} from "@pettersen3008/flashpdf";
 
 const invoice = (
 	<main className="invoice" style={{ padding: "18pt", backgroundColor: "#fff" }}>
@@ -37,6 +44,13 @@ const _unknownProperty = <main potato={1}>Invoice</main>;
 const _grid = <main style={{ display: "grid" }}>Invoice</main>;
 // @ts-expect-error Margin and padding take one to four lengths, never "auto".
 const _auto = <main style={{ margin: "auto" }}>Invoice</main>;
+const _decorated = (
+	<main style={{ borderRadius: "4pt 8pt / 50%", borderTopStyle: "dashed", opacity: "50%" }}>x</main>
+);
+// @ts-expect-error Shadows are not drawn.
+const _shadow = <main style={{ boxShadow: "0 1px 2px #000" }}>Invoice</main>;
+// @ts-expect-error Only none, solid, dashed, and dotted borders are drawn.
+const _double = <main style={{ borderTopStyle: "double" }}>Invoice</main>;
 const _rich = (
 	<p>
 		Hello <b>World</b>
@@ -83,4 +97,43 @@ const _imgPath = <img src="/logo.png" />;
 const _bareLink = <a>site</a>;
 // @ts-expect-error Images have no children.
 const _imgChildren = <img src={new Uint8Array()}>x</img>;
+const _vector = (
+	<svg viewBox="0 0 24 24" width={32} aria-label="Paid" style={{ color: "#0a7", marginBottom: 4 }}>
+		<title>Paid</title>
+		<g transform="rotate(45 12 12)" opacity={0.8}>
+			<rect width={24} height={24} rx={4} fill="none" stroke="currentColor" strokeWidth={2} />
+			<path d="M7 12l3 3 7-7" fill="none" stroke="currentColor" strokeLinecap="round" />
+		</g>
+	</svg>
+);
+// @ts-expect-error Shapes take no children.
+const _shapeChildren = <circle r={2}>x</circle>;
+// @ts-expect-error A path needs its d.
+const _bareShape = <path />;
+const _codes = (
+	<main>
+		<QRCode value="https://example.com/pay" level="Q" alt="Pay" style={{ width: 90 }}>
+			<rect x={40} y={40} width={20} height={20} fill="#fff" />
+		</QRCode>
+		<Barcode value="INV-42" moduleWidth={1.2} height={30} text={false} />
+	</main>
+);
+// @ts-expect-error A QR code needs its value.
+const _qrWithoutValue = <QRCode level="M" />;
+// @ts-expect-error The level is L, M, Q, or H.
+const _qrLevel = <QRCode value="x" level="X" />;
+const _outline = (
+	<main>
+		<h2 id="terms" data-bookmark="Terms of payment">
+			Terms
+		</h2>
+		<h3 data-bookmark={false}>Skipped</h3>
+		<a href="#terms">terms</a>
+	</main>
+);
+void render(_outline, { outline: true });
+// @ts-expect-error A bookmark title is a string, or false to skip the heading.
+const _bookmarkTrue = <h2 data-bookmark={true}>Terms</h2>;
+// @ts-expect-error The outline option is a boolean.
+void render(_outline, { outline: "yes" });
 void import("@pettersen3008/flashpdf/jsx-runtime");

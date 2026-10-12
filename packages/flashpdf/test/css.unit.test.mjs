@@ -5,17 +5,15 @@ import { test } from "vitest";
 
 import { resolveStyles } from "../dist/css.js";
 import { stylesheet } from "../dist/index.js";
-import { boxStyle, color, style } from "../dist/style.js";
+import { boxStyle, color, opacity, style } from "../dist/style.js";
 import { resolveTree } from "../dist/tree.js";
 
-const resolve = async (value, sheets) => resolveStyles(await resolveTree(value), sheets);
+const resolve = async (value, sheets, width) =>
+	resolveStyles(await resolveTree(value), sheets, width);
 
 test("given CSS outside the supported subset, when parsing a stylesheet, then rejects it with its source position", () => {
 	for (const [source, message] of [
-		[
-			".a { letter-spacing: 1pt }",
-			/letter-spacing \(text shaping is not implemented\).*"\.a" at 1:1/,
-		],
+		[".a { box-shadow: 1pt }", /box-shadow.*"\.a" at 1:1/],
 		[
 			".a { grid-template-columns: 1fr }",
 			/unsupported CSS property: grid-template-columns.*"\.a" at 1:1/,
@@ -24,14 +22,17 @@ test("given CSS outside the supported subset, when parsing a stylesheet, then re
 		[".a { color: #000 } oops", /invalid CSS stylesheet at 1:20/],
 		["{bad}p { color: red }", /invalid CSS stylesheet/],
 		["@layer x { .a { color: red }", /invalid CSS stylesheet at 1:1/],
+		["/* one\n\n\n*/\n.a { box-shadow: 1pt }", /"\.a" at 5:1/],
 	]) {
 		assert.throws(() => stylesheet(source), message, source);
 	}
 });
 
-test("given at-rules and selectors outside the subset, when validating a stylesheet, then skips them instead of failing", () => {
+test("given at-rules and selectors that match nothing in a PDF, when validating a stylesheet, then skips them instead of failing", () => {
 	const source = `@import "x.css"; @layer a, b; @media print { .a { line-height: 1 } }
-		.a:hover, a[href], .a > *, :root, .md\\:flex, .a + .b, . { line-height: 1; content: "}" }
+		.a:hover, a[href]::after, .a::before, input[type=text]:focus, :host { line-height: 1; content: "}" }
+		html, body button { -webkit-text-size-adjust: 100%; color: notacolor }
+		@layer utilities { .\\[class\\*\\=\\'size-\\'\\] { width: 1rem } }
 		.a { color: red }`;
 	assert.equal(stylesheet(source), source);
 });
@@ -82,8 +83,8 @@ const tailwind = `/*! tailwindcss v4.1.0 | MIT License | https://tailwindcss.com
   }
 }
 @layer theme, base, components, utilities;
-:root, :host { --spacing: .25rem; --color-red-500: oklch(63.7% 0.237 25.331); }
-*, ::before, ::after { box-sizing: border-box; border: 0 solid; }
+@layer theme { :root, :host { --spacing: .25rem; --color-red-500: oklch(63.7% 0.237 25.331); } }
+@layer base { *, ::before, ::after { box-sizing: border-box; border: 0 solid; } }
 .p-4 { padding: 1rem; }
 .p-5 { padding: calc(var(--spacing) * 5); }
 .text-red-500 { color: oklch(63.7% 0.237 25.331); }
@@ -159,9 +160,9 @@ test("given cascading shorthands, selector whitespace, and transparent paint, wh
 	assert.throws(
 		() =>
 			resolveStyles(invalid, [
-				"main\n\tp.x { color: red; background: transparent; border: 1pt dashed red }",
+				"main\n\tp.x { color: red; background: transparent; border: 1pt double red }",
 			]),
-		/unsupported border style: dashed/,
+		/unsupported border style: double/,
 	);
 	const [resolved] = await resolve(
 		jsx("main", { children: jsx("p", { className: "x", children: "x" }) }),
@@ -187,11 +188,202 @@ test("given cascading shorthands, selector whitespace, and transparent paint, wh
 	assert.deepEqual(boxStyle(style({ border: "1pt solid transparent" }), 12).border, [0, 0, 0, 0]);
 	assert.deepEqual(boxStyle(style({ border: "none" }), 12).border, [0, 0, 0, 0]);
 	assert.throws(
-		() => boxStyle(style({ border: "1pt solid oklch(50% 0.1 20)" }), 12),
-		/unsupported color: oklch\(50% 0.1 20\)/,
+		() => boxStyle(style({ border: "1pt solid lab(50% 40 20)" }), 12),
+		/unsupported color: lab\(50% 40 20\)/,
 	);
 	assert.throws(
 		() => style({ color: "transparent" }) && color("transparent"),
 		/only to background/,
 	);
+});
+
+test("given a longhand then a shorthand in a later rule, when cascading, then the shorthand wins", async () => {
+	const [cell] = await resolve(jsx("div", { className: "cell last", children: "x" }), [
+		".cell { border-bottom: 1pt solid red; background-color: red }",
+		".cell.last { border: none; background: blue }",
+	]);
+	const box = boxStyle(cell.style, 12);
+	assert.deepEqual(box.border, [0, 0, 0, 0]);
+	assert.deepEqual(box.background, [0, 0, 255]);
+});
+
+test("given an undefined inline style value, when cascading, then the stylesheet value stays", async () => {
+	const [card] = await resolve(
+		jsx("div", { className: "card", style: { padding: undefined }, children: "x" }),
+		[".card { padding: 10pt }"],
+	);
+	assert.deepEqual(boxStyle(card.style, 12).padding, [10, 10, 10, 10]);
+});
+
+test("given a var() fallback with parentheses or a nested var(), when resolving styles, then substitutes it", async () => {
+	const [main] = await resolve(
+		jsx("main", { className: "a", children: jsx("p", { className: "b", children: "x" }) }),
+		[
+			".a { color: var(--missing, rgb(255, 0, 0)) }",
+			".b { --blue: blue; color: var(--missing, var(--blue)) }",
+		],
+	);
+	assert.equal(main.style.color, "rgb(255, 0, 0)");
+	assert.equal(main.children[0].style.color, "blue");
+});
+
+test("given one element under different parents, when resolving styles, then shares a result only between siblings", async () => {
+	const cell = () => jsx("span", { className: "cell", children: "x" });
+	const [main] = await resolve(
+		jsx("main", {
+			children: [
+				jsx("div", { className: "red", children: [cell(), cell()] }),
+				jsx("div", { style: { fontSize: 20 }, children: cell() }),
+				jsx("section", { children: cell() }),
+			],
+		}),
+		[".red { color: red } section .cell { font-weight: bold }"],
+	);
+	const [[first, second], [big], [nested]] = main.children.map((parent) =>
+		parent.children.map((child) => child.style),
+	);
+	assert.equal(first, second);
+	assert.equal(first.color, "red");
+	assert.equal(big.color, undefined);
+	assert.equal(big.fontSize, 20);
+	assert.equal(nested.fontWeight, "bold");
+	assert.equal(first.fontWeight, undefined);
+});
+
+test("given a long descendant selector that fails on a deep tree, when matching, then finishes quickly", async () => {
+	// Backtracking without memoization took over 5 s here.
+	let element = "x";
+	for (let index = 0; index < 40; index++) element = jsx("div", { children: element });
+	const tree = await resolveTree(element);
+	const started = performance.now();
+	resolveStyles(tree, [`section ${"div ".repeat(8)}{ color: red }`]);
+	assert.ok(performance.now() - started < 500);
+});
+
+test("given a style object with an own __proto__ key, when resolving styles, then rejects it", async () => {
+	const style = JSON.parse('{ "__proto__": { "color": "red" } }');
+	await assert.rejects(
+		async () => resolve(jsx("main", { style, children: "x" })),
+		/unsupported style property: __proto__ on <main>/,
+	);
+});
+
+test("given an uppercase type selector, when cascading, then it matches the lowercase tag", async () => {
+	const [paragraph] = await resolve(jsx("p", { children: "x" }), ["P { color: red }"]);
+	assert.equal(paragraph.style.color, "red");
+});
+
+test("given an invalid value without var(), when validating a stylesheet, then rejects naming the rule", () => {
+	assert.throws(
+		() => stylesheet(".a { color: notacolor }"),
+		/unsupported color: notacolor in selector "\.a" at 1:1/,
+	);
+	assert.throws(
+		() => stylesheet("\n.b { margin: banana }"),
+		/invalid length: banana.*"\.b" at 2:1/,
+	);
+	assert.equal(stylesheet(".c { color: var(--brand) }"), ".c { color: var(--brand) }");
+});
+
+test("given calc(), color-mix(), and custom property values, when validating a stylesheet, then defers them to render", async () => {
+	const css = stylesheet(
+		".a { --brand: notacolor; margin: calc(0.25rem * 2); background-color: color-mix(in oklab, #000 50%, transparent) }",
+	);
+	const [main] = await resolve(jsx("main", { className: "a", children: "x" }), [css]);
+	assert.deepEqual(boxStyle({ marginTop: main.style.marginTop }, 12)?.margin, [6, 0, 0, 0]);
+	assert.throws(() => boxStyle(main.style, 12), /unsupported color: color-mix\(in oklab/);
+});
+
+test("given oklch() and oklab() colours, when resolving them, then converts to clipped sRGB", () => {
+	assert.deepEqual(color("oklch(63.7% 0.237 25.331)"), [0xfb, 0x2c, 0x36]);
+	assert.deepEqual(color("oklab(0.62796 0.22486 0.12585)"), [255, 0, 0]);
+	assert.deepEqual(color("oklch(70% 0.4 150 / 1)"), [0, 0xd6, 0]);
+	assert.throws(() => color("oklch(50% 0.1 20 / 50%)"), /a colour with alpha is not supported/);
+});
+
+test("given inherit, initial, and currentcolor, when resolving styles, then they take the parent's value, the initial value, and the element's colour", async () => {
+	const [main] = await resolve(
+		jsx("main", {
+			style: { color: "red", backgroundColor: "blue", margin: "4pt" },
+			children: [
+				jsx("div", {
+					style: { backgroundColor: "inherit", margin: "inherit", color: "initial" },
+					children: "x",
+				}),
+				jsx("div", { style: { borderBottom: "1pt solid currentcolor" }, children: "x" }),
+			],
+		}),
+	);
+	const [inheriting, current] = main.children;
+	assert.equal(inheriting.style.color, "black");
+	assert.deepEqual(boxStyle(inheriting.style, 12).background, [0, 0, 255]);
+	assert.deepEqual(boxStyle(inheriting.style, 12).margin, [4, 4, 4, 4]);
+	assert.deepEqual(boxStyle(current.style, 12).borderColor[2], [255, 0, 0]);
+	const css = ".t { color: currentcolor; background-color: inherit; margin: initial }";
+	assert.equal(stylesheet(css), css);
+});
+
+test("given text-decoration-line and mixed-case names, when parsing a stylesheet, then maps them like text-decoration", async () => {
+	const [paragraph] = await resolve(jsx("p", { className: "u", children: "x" }), [
+		".u { TEXT-DECORATION-LINE: underline }",
+	]);
+	assert.equal(paragraph.style.textDecoration, "underline");
+});
+
+test("given a camelCase property name in a stylesheet, when parsing, then rejects with the kebab-case name", () => {
+	assert.throws(
+		() => stylesheet("p { fontSize: 20pt }"),
+		/unsupported CSS property: fontSize \(use kebab-case: font-size\) in selector "p" at 1:1/,
+	);
+});
+
+test("given Tailwind's border and border-dashed rules, when resolving a box, then draws a dashed one-pixel border", async () => {
+	const [box] = await resolve(jsx("div", { className: "border border-dashed", children: "x" }), [
+		".border{border-style:var(--tw-border-style);border-width:1px}.border-dashed{--tw-border-style:dashed;border-style:dashed}",
+	]);
+	const { border, borderStyle } = boxStyle(box.style, 12);
+	assert.deepEqual(border, [0.75, 0.75, 0.75, 0.75]);
+	assert.deepEqual(borderStyle, [1, 1, 1, 1]);
+});
+
+test("given Tailwind's rounded-full and opacity-50, when resolving a box, then accepts the exponent length and the percent", async () => {
+	const [box] = await resolve(
+		jsx("div", {
+			className: "rounded-full opacity-50",
+			style: { background: "#eee" },
+			children: "x",
+		}),
+		[".rounded-full{border-radius:3.40282e38px}.opacity-50{opacity:50%}"],
+	);
+	const { radius } = boxStyle(box.style, 12);
+	assert.ok(radius.values.every((value) => Number.isFinite(value) && value > 1e38));
+	assert.equal(opacity(box.style.opacity), 0.5);
+});
+
+test("given paragraphs and headings, when cascading browser defaults, then scales their margins and honors author overrides", async () => {
+	const tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "hr"];
+	const sizes = [1, 2, 1.5, 1.17, 1, 0.83, 0.67, 1];
+	const margins = [1, 0.67, 0.83, 1, 1.33, 1.67, 2.33, 0.5];
+	const [root] = await resolve(
+		jsx("main", {
+			style: { fontSize: 20 },
+			children: tags.map((tag) => jsx(tag, { children: tag === "hr" ? undefined : "text" })),
+		}),
+	);
+	for (const [index, child] of root.children.entries()) {
+		const size = sizes[index] * 20;
+		const edges = boxStyle(child.style, size).margin;
+		assert.ok(Math.abs(edges[0] - size * margins[index]) < 0.00001, child.tag);
+		assert.equal(edges[1], 0);
+		assert.equal(edges[2], edges[0]);
+		assert.equal(edges[3], 0);
+	}
+	const [heading] = await resolve(jsx("h1", { style: { marginBottom: 3 }, children: "x" }), [
+		"h1 { margin: 0 }",
+	]);
+	assert.deepEqual(boxStyle(heading.style, 24).margin, [0, 0, 3, 0]);
+	const [table] = await resolve(
+		jsx("table", { children: jsx("tr", { children: jsx("th", { children: "Heading" }) }) }),
+	);
+	assert.equal(table.children[0].children[0].style.textAlign, "center");
 });

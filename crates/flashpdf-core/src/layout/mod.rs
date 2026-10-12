@@ -4,7 +4,7 @@ mod text;
 
 use std::collections::BTreeMap;
 
-pub(crate) use output::{Decoration, LayoutBuffer, PositionedImage, Segment};
+pub(crate) use output::{Decoration, Gap, LayoutBuffer, PositionedImage, Segment, MARKER_SHAPE};
 pub(crate) use row::table_width;
 
 use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Stack, Table};
@@ -14,9 +14,6 @@ use crate::image::Image;
 use crate::layout::output::{PositionedBox, PositionedLine};
 use crate::{BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun};
 
-/// CSS reference pixels are 96 per inch; PDF points are 72.
-const PT_PER_PX: f32 = 0.75;
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum LayoutError {
     InvalidWidth,
@@ -25,6 +22,7 @@ pub(crate) enum LayoutError {
     UnsupportedCharacter(char),
     MissingGlyph(char),
     TextTooWide,
+    LineTooWide,
     InvalidBox,
     InvalidColumnWidth,
     ColumnsOverflow,
@@ -40,6 +38,7 @@ impl From<LayoutError> for RenderError {
             LayoutError::UnsupportedCharacter(character) => Self::UnsupportedCharacter(character),
             LayoutError::MissingGlyph(character) => Self::MissingGlyph(character),
             LayoutError::TextTooWide => Self::TextTooWide,
+            LayoutError::LineTooWide => Self::LineTooWide,
             LayoutError::ImageTooWide => Self::ImageTooWide,
             LayoutError::InvalidWidth
             | LayoutError::UnknownFont(_)
@@ -79,6 +78,10 @@ impl<'a> LayoutEngine<'a> {
             Element::Row(row) => self.layout_row(row, area, output),
             Element::Table(table) => self.layout_table(table, area, output),
             Element::Image(image) => self.layout_image(image, area, output),
+            Element::Anchor(slot) => {
+                output.anchors.push((*slot, output.lines.len()));
+                Ok(Pt::ZERO)
+            }
         }
     }
 
@@ -99,7 +102,10 @@ impl<'a> LayoutEngine<'a> {
             let RunDecoration {
                 underline,
                 line_through,
+                color,
                 link,
+                alpha,
+                background,
             } = run.decoration;
             if link.is_some_and(|link| usize::from(link) >= paragraph.links.len()) {
                 return Err(LayoutError::InvalidRuns);
@@ -108,7 +114,10 @@ impl<'a> LayoutEngine<'a> {
                 [run.color.r, run.color.g, run.color.b],
                 underline,
                 line_through,
+                color.map(|color| [color.r, color.g, color.b]),
                 link,
+                alpha,
+                background.map(|color| [color.r, color.g, color.b]),
             );
             let index = *indices.entry(key).or_insert_with(|| {
                 keys.push((run.color, run.decoration));
@@ -139,16 +148,20 @@ impl<'a> LayoutEngine<'a> {
                 | usize::from(segment.color.b) << 16;
             let (color, decoration) = keys[index];
             segment.color = color;
-            let (ascent, descent, _) = self
+            let font = self
                 .fonts
                 .get(segment.font)
-                .ok_or(LayoutError::UnknownFont(segment.font))?
-                .metrics();
+                .ok_or(LayoutError::UnknownFont(segment.font))?;
+            let (ascent, descent, _) = font.metrics();
+            let (underline, line_through) = font.strokes();
             let scale = segment.size.get() / 1000.0;
             output.decorations.push(Decoration {
-                underline: decoration.underline,
-                line_through: decoration.line_through,
+                underline: decoration.underline.then_some(underline),
+                line_through: decoration.line_through.then_some(line_through),
+                color: decoration.color.unwrap_or(color),
+                background: decoration.background,
                 link: decoration.link.map(|link| link_base + usize::from(link)),
+                alpha: decoration.alpha,
                 ascent: Pt(ascent * scale),
                 descent: Pt((-descent * scale).max(0.0)),
             });
@@ -168,7 +181,7 @@ impl<'a> LayoutEngine<'a> {
             .images
             .get(usize::from(node.slot))
             .ok_or(LayoutError::UnknownImage)?;
-        let (pixel_width, pixel_height) = (image.width as f32, image.height as f32);
+        let (natural_width, natural_height) = image.size();
         let available = area.width.get();
         let requested = match node.width {
             ImageSize::Auto => None,
@@ -177,11 +190,11 @@ impl<'a> LayoutEngine<'a> {
         };
         let (width, height) = match (requested, node.height) {
             (None, None) => {
-                let width = (pixel_width * PT_PER_PX).min(available);
-                (width, width * pixel_height / pixel_width)
+                let width = natural_width.min(available);
+                (width, width * natural_height / natural_width)
             }
-            (None, Some(height)) => (height.get() * pixel_width / pixel_height, height.get()),
-            (Some(width), None) => (width, width * pixel_height / pixel_width),
+            (None, Some(height)) => (height.get() * natural_width / natural_height, height.get()),
+            (Some(width), None) => (width, width * natural_height / natural_width),
             (Some(width), Some(height)) => (width, height.get()),
         };
         if width > available * (1.0 + f32::EPSILON * 4.0) {
@@ -211,6 +224,7 @@ impl<'a> LayoutEngine<'a> {
             slot: node.slot,
             link,
             alt: node.alt.to_owned(),
+            alpha: node.alpha,
             line,
         });
         Ok(Pt(height))
@@ -283,9 +297,12 @@ impl<'a> LayoutEngine<'a> {
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
         let mut height = Pt::ZERO;
-        for (index, child) in stack.children.iter().enumerate() {
-            if index != 0 {
-                height += stack.gap;
+        // An anchor takes no space, so the gap sits between the children that do.
+        let mut gap = Pt::ZERO;
+        for child in &stack.children {
+            if !matches!(child, Element::Anchor(_)) {
+                height += gap;
+                gap = stack.gap;
             }
             height += self.layout(child, area.translated(Pt::ZERO, height), output)?;
         }
@@ -304,6 +321,10 @@ impl<'a> LayoutEngine<'a> {
         let mut height = Pt::ZERO;
         let mut placed = Vec::with_capacity(row.cells.len());
         for (cell, width) in row.cells.iter().zip(widths) {
+            let line = output.lines.len();
+            output
+                .anchors
+                .extend(cell.anchors.iter().map(|slot| (*slot, line)));
             let index = output.boxes.len();
             let cell_height = self.layout(
                 &cell.content,

@@ -101,6 +101,20 @@ test("given multi-child nesting, when normalizing, then 64 element levels fit an
 	await assert.rejects(() => reactTree(nest(64)), /nesting exceeds 64/);
 });
 
+test("given 200,000 nested arrays, when resolving, then rejects at the nesting limit instead of overflowing the stack", async () => {
+	let children = "x";
+	for (let index = 0; index < 200_000; index++) children = [children];
+	await assert.rejects(resolveTree(jsx("main", { children })), /nesting exceeds 64/);
+});
+
+test("given children inside an hr or br, when resolving, then rejects them", async () => {
+	for (const tag of ["hr", "br"])
+		await assert.rejects(
+			resolveTree(jsx(tag, { children: "lost" })),
+			new RegExp(`<${tag}> has no children on <${tag}>`),
+		);
+});
+
 test("given a component that throws, when normalizing, then names the component and keeps the cause", async () => {
 	const Hooked = () => {
 		const [label] = useState("x");
@@ -131,13 +145,27 @@ test("given a context provider, when normalizing, then renders its children", as
 test("given an img with a string src, when resolving, then rejects with the bytes hint", async () => {
 	await assert.rejects(
 		resolveTree(jsx("main", { children: jsx("img", { src: "/logo.png", alt: "Logo" }) })),
-		/src must be the image's PNG or JPEG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes on <img> in <main>/,
+		/src must be the image's PNG, JPEG, or SVG bytes as a Uint8Array, not a URL, path, or data: URL; read or fetch the file and pass its bytes on <img> in <main>/,
 	);
 	const [main] = await resolveTree(
 		jsx("main", { children: jsx("img", { src: new Uint8Array([1]), alt: "Logo" }) }),
 	);
 	assert.deepEqual(main.children[0].src, new Uint8Array([1]));
 	assert.equal(main.children[0].alt, "Logo");
+});
+
+test("given an http href without a host, when resolving, then rejects it", async () => {
+	await assert.rejects(
+		resolveTree(jsx("a", { href: "http:foo", children: "x" })),
+		/href must name a host, such as https:\/\/example\.com\/, not "http:foo" on <a>/,
+	);
+});
+
+test("given a Date child, when resolving, then names its type and parents", async () => {
+	await assert.rejects(
+		resolveTree(jsx("main", { children: jsx("p", { children: new Date(0) }) })),
+		/^Error: unsupported child: a Date object in <p> > <main>; pass a string, number, or element$/,
+	);
 });
 
 test("given an a with a javascript: href, when resolving, then rejects naming the scheme", async () => {
@@ -149,12 +177,36 @@ test("given an a with a javascript: href, when resolving, then rejects naming th
 		resolveTree(jsx("a", { href: "/invoices/42", children: "x" })),
 		/href must be an absolute http, https, or mailto URL, not "\/invoices\/42" on <a>/,
 	);
-	await assert.rejects(
-		resolveTree(jsx("a", { href: "#total", children: "x" })),
-		/internal anchor links \(#total\) are not supported yet on <a>/,
-	);
 	const [link] = await resolveTree(jsx("a", { href: "https://Example.com/ø", children: "x" }));
 	assert.equal(link.href, "https://example.com/%C3%B8");
+});
+
+test("given a link to an id, when resolving, then keeps the id verbatim and rejects one that is empty or not printable ASCII", async () => {
+	const [link] = await resolveTree(jsx("a", { href: "#total-due", children: "x" }));
+	assert.equal(link.href, "#total-due");
+	for (const href of ["#", "#a b", "#tæ"])
+		await assert.rejects(
+			resolveTree(jsx("a", { href, children: "x" })),
+			/a link to an id is # and 1 to 255 printable ASCII characters, not .* on <a>/,
+		);
+});
+
+test("given data-bookmark on a heading, when resolving, then keeps a title or false and rejects anything else", async () => {
+	const [title, hidden, plain] = await resolveTree([
+		jsx("h2", { "data-bookmark": "Terms", children: "x" }),
+		jsx("h2", { "data-bookmark": false, children: "x" }),
+		jsx("h2", { children: "x" }),
+	]);
+	assert.deepEqual([title.bookmark, hidden.bookmark, "bookmark" in plain], ["Terms", false, false]);
+	for (const value of [true, "", "a".repeat(256), 5, "a\nb"])
+		await assert.rejects(
+			resolveTree(jsx("h1", { "data-bookmark": value, children: "x" })),
+			/data-bookmark must be 1 to 255 characters without control characters, or false on <h1>/,
+		);
+	await assert.rejects(
+		resolveTree(jsx("p", { "data-bookmark": "x", children: "x" })),
+		/unsupported property: data-bookmark/,
+	);
 });
 
 test("given ref and key props on a host element, when resolving, then ignores them", async () => {
@@ -170,7 +222,7 @@ test("given ref and key props on a host element, when resolving, then ignores th
 		},
 	]);
 	await assert.rejects(
-		resolveTree(jsx("main", { children: { type: "ul", props: {} } })),
-		/unsupported element <ul> in <main>: lists are not supported yet; use one <p> per item/,
+		resolveTree(jsx("main", { children: { type: "caption", props: {} } })),
+		/unsupported element <caption> in <main>: captions are not supported; use a <p> before the table/,
 	);
 });

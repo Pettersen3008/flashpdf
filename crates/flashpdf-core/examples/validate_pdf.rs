@@ -23,10 +23,10 @@ fn main() {
                 let content = pdf.get_page_content(*id);
                 String::from_utf8_lossy(&content).trim().to_owned()
             } else {
-                pdf.extract_text(&[*page])
-                    .expect("extractable text")
-                    .trim()
-                    .to_owned()
+                // lopdf adds a space after each kerned `TJ` array.
+                let text = pdf.extract_text(&[*page]).expect("extractable text");
+                let lines: Vec<&str> = text.trim().lines().map(str::trim_end).collect();
+                lines.join("\n")
             }
         })
         .collect();

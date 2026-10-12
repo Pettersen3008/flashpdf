@@ -12,12 +12,16 @@ task explicitly changes it.
 - `packages/flashpdf/test` contains package and backend tests.
 - `tests` contains clean-install, WASM, and golden-output checks.
 - `CSS.md` documents the supported CSS subset and intentional limits.
+- `docs/guide.md` holds bundler setup, troubleshooting, recipes, and the react-pdf migration map.
 
 ## Development
 
-Requirements: Node 22.12+, pnpm, Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x and qpdf are optional.
+Requirements: Node 22.12+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools are optional locally, and CI requires them.
+
+pnpm 10 cannot switch itself to pnpm 12, and Corepack 0.34 cannot launch it, so install the pinned version directly.
 
 ```bash
+npm install -g pnpm@12.4.2
 pnpm install --frozen-lockfile
 sh verify.sh
 ```

@@ -15,22 +15,45 @@ pub use error::ProtocolError;
 use cursor::{nonnegative_f32, positive_f32, pt, Cursor};
 use opcode::Opcode;
 
+use pdf_writer::types::AssociationKind;
+
 use crate::command::MAX_LAYOUT_DEPTH;
-use crate::image::MAX_IMAGE_BYTES;
-use crate::{Edges, FontId, OwnedCommand, RunDecoration, TextRun, TextStyle};
+use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
+use crate::pdf::Attachment;
+use crate::{
+    Edges, FontId, LineStyle, Marker, OwnedCommand, Radii, RunDecoration, TextRun, TextStyle,
+    BUILT_IN, OPAQUE,
+};
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
 /// An open Stack, Box, Row or Table buffers its commands until it closes; this bounds that buffer.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
+/// Total bytes of registered fonts per render.
+const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
+/// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
+const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 18;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 7;
+const VERSION: u16 = 20;
+const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
+/// Longest bookmark title, in bytes: 255 characters at four bytes each.
+const MAX_TITLE_BYTES: usize = 1020;
+/// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
+const FACTURX: [(&str, &str, AssociationKind); 6] = [
+    ("MINIMUM", "factur-x.xml", AssociationKind::Data),
+    ("BASIC WL", "factur-x.xml", AssociationKind::Data),
+    ("BASIC", "factur-x.xml", AssociationKind::Alternative),
+    ("EN 16931", "factur-x.xml", AssociationKind::Alternative),
+    ("EXTENDED", "factur-x.xml", AssociationKind::Alternative),
+    ("XRECHNUNG", "xrechnung.xml", AssociationKind::Alternative),
+];
 
 #[derive(Default)]
 pub struct Decoder {
     pending: Vec<u8>,
+    records: usize,
     page: Option<crate::Page>,
     renderer: Option<crate::Renderer>,
     block: Vec<OwnedCommand>,
@@ -38,10 +61,15 @@ pub struct Decoder {
     frames: Vec<Frame>,
     ended: bool,
     fonts: Vec<crate::EmbeddedFont>,
+    font_bytes: usize,
     /// Images registered before the renderer exists; later ones go straight to it.
     images: Vec<crate::Image>,
     image_bytes: usize,
-    metadata: Option<crate::pdf::Metadata>,
+    /// Attachment bytes until an Attachment or PdfA record claims them.
+    attachments: Vec<Option<Vec<u8>>>,
+    attachment_bytes: usize,
+    metadata: crate::pdf::Metadata,
+    pdfa: bool,
     body_started: bool,
 }
 
@@ -60,12 +88,18 @@ impl Decoder {
         if self.page.is_some() {
             return Err(ProtocolError::FontsAfterDocument);
         }
-        if self.fonts.len() >= 254 {
+        if self.fonts.len() + BUILT_IN >= 256 {
             return Err(ProtocolError::TooManyFonts);
         }
+        let total = self
+            .font_bytes
+            .checked_add(bytes.len())
+            .filter(|total| *total <= MAX_FONT_BYTES)
+            .ok_or(ProtocolError::FontsTooLarge)?;
         self.fonts
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
-        Ok((self.fonts.len() + 1) as u8)
+        self.font_bytes = total;
+        Ok((self.fonts.len() + BUILT_IN - 1) as u8)
     }
 
     /// Images register at any point before the record that paints them, and are
@@ -74,7 +108,7 @@ impl Decoder {
         if self.ended {
             return Err(ProtocolError::DataAfterEnd);
         }
-        self.image_bytes = self
+        let total = self
             .image_bytes
             .checked_add(bytes.len())
             .filter(|total| *total <= MAX_IMAGE_BYTES)
@@ -83,6 +117,10 @@ impl Decoder {
             return Err(ProtocolError::TooManyImages);
         }
         let image = crate::Image::parse(bytes).map_err(ProtocolError::InvalidImage)?;
+        if self.pdfa && matches!(image.color_space, ColorSpace::Cmyk) {
+            return Err(ProtocolError::PdfACmyk);
+        }
+        self.image_bytes = total;
         Ok(match &mut self.renderer {
             Some(renderer) => renderer.add_image(image),
             None => {
@@ -90,6 +128,24 @@ impl Decoder {
                 (self.images.len() - 1) as u16
             }
         })
+    }
+
+    /// Attachment bytes bypass the document window like images, and wait for
+    /// the record that names them.
+    pub fn add_attachment(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+        if self.ended {
+            return Err(ProtocolError::DataAfterEnd);
+        }
+        self.attachment_bytes = self
+            .attachment_bytes
+            .checked_add(bytes.len())
+            .filter(|total| *total <= MAX_ATTACHMENT_BYTES)
+            .ok_or(ProtocolError::AttachmentsTooLarge)?;
+        if self.attachments.len() >= usize::from(u16::MAX) {
+            return Err(ProtocolError::InvalidValue("attachment count"));
+        }
+        self.attachments.push(Some(bytes));
+        Ok((self.attachments.len() - 1) as u16)
     }
 
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
@@ -123,6 +179,7 @@ impl Decoder {
                 let start = consumed;
                 consumed += total;
                 self.read_record(pending[start], &pending[start + 5..consumed])?;
+                self.records += 1;
             }
         })();
         if consumed > 0 {
@@ -134,6 +191,12 @@ impl Decoder {
         result
     }
 
+    /// Records decoded so far. After a failed `push` it is the index of the failing
+    /// record, so an adapter that batches records can tell which call wrote it.
+    pub fn records(&self) -> usize {
+        self.records
+    }
+
     fn read_header(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
         if &bytes[..4] != MAGIC {
             return Err(ProtocolError::InvalidMagic);
@@ -143,6 +206,9 @@ impl Decoder {
         }
         let width = positive_f32(&bytes[6..10], "page width")?;
         let height = positive_f32(&bytes[10..14], "page height")?;
+        if width > MAX_PAGE_SIDE || height > MAX_PAGE_SIDE {
+            return Err(ProtocolError::InvalidValue("page size"));
+        }
         let margin = nonnegative_f32(&bytes[14..18], "margin")?;
         self.page = Some(crate::Page::new(pt(width)?, pt(height)?, pt(margin)?)?);
         Ok(())
@@ -204,14 +270,19 @@ impl Decoder {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 self.body_started = true;
-                self.ensure_renderer()?.page_break();
-                Ok(())
+                Ok(self.ensure_renderer()?.page_break()?)
             }
             Opcode::Footer | Opcode::Header => {
                 let size = pt(cursor.positive_f32("font size")?)?;
                 let align = cursor.align()?;
                 let color = cursor.rgb()?;
                 let font = self.font(cursor.take(1)?[0])?;
+                // Only the run flags for slant and spacing; a header has no breaks, decoration, or links.
+                let flags = cursor.u16()?;
+                if flags & !0x2e0 != 0 {
+                    return Err(ProtocolError::InvalidValue("header flags"));
+                }
+                let typography = cursor.typography(flags)?;
                 let text = cursor.text(true)?.to_owned();
                 cursor.done()?;
                 if self.body_started || !self.frames.is_empty() {
@@ -222,6 +293,7 @@ impl Decoder {
                     align,
                     color,
                     font,
+                    typography,
                 };
                 let renderer = self.ensure_renderer()?;
                 if matches!(opcode, Opcode::Header) {
@@ -241,9 +313,7 @@ impl Decoder {
                     .map(|_| cursor.alt().map(str::to_owned))
                     .collect::<Result<Vec<_>, _>>()?;
                 cursor.done()?;
-                if self.renderer.is_some() || !self.frames.is_empty() {
-                    return Err(ProtocolError::InvalidNesting);
-                }
+                self.before_body()?;
                 let metadata = crate::pdf::Metadata {
                     title: fields[0].clone(),
                     author: fields[1].clone(),
@@ -251,6 +321,7 @@ impl Decoder {
                     keywords: fields[3].clone(),
                     language: fields[4].clone(),
                     tagged,
+                    ..std::mem::take(&mut self.metadata)
                 };
                 if tagged && metadata.language.is_empty() {
                     return Err(ProtocolError::InvalidValue("metadata language"));
@@ -258,8 +329,94 @@ impl Decoder {
                 if !metadata.language.is_empty() && !valid_language(&metadata.language) {
                     return Err(ProtocolError::InvalidValue("metadata language"));
                 }
-                self.metadata = Some(metadata);
+                self.metadata = metadata;
                 Ok(())
+            }
+            Opcode::PdfA => {
+                let profile = cursor.take(1)?[0];
+                let facturx = match profile {
+                    0 => None,
+                    1..=6 => Some((FACTURX[usize::from(profile - 1)], cursor.u16()?)),
+                    _ => return Err(ProtocolError::InvalidValue("Factur-X profile")),
+                };
+                cursor.done()?;
+                self.before_body()?;
+                if self
+                    .images
+                    .iter()
+                    .any(|image| matches!(image.color_space, ColorSpace::Cmyk))
+                {
+                    return Err(ProtocolError::PdfACmyk);
+                }
+                self.pdfa = true;
+                self.metadata.pdfa = true;
+                if let Some(((level, name, relationship), slot)) = facturx {
+                    let data = self.claim_attachment(slot)?;
+                    // A cheap shape check; the XML's schema and content are the caller's.
+                    let xml = std::str::from_utf8(&data)
+                        .map(|xml| xml.trim_start_matches('\u{feff}').trim())
+                        .unwrap_or_default();
+                    if !xml.starts_with('<') || !xml.ends_with('>') {
+                        return Err(ProtocolError::InvalidValue("Factur-X XML"));
+                    }
+                    self.metadata.facturx = Some((level, name));
+                    self.attach(Attachment {
+                        name: name.to_owned(),
+                        mime: "text/xml".to_owned(),
+                        description: "Factur-X/ZUGFeRD invoice".to_owned(),
+                        relationship,
+                        data,
+                    })?;
+                }
+                Ok(())
+            }
+            Opcode::Attachment => {
+                let slot = cursor.u16()?;
+                let relationship = match cursor.take(1)?[0] {
+                    0 => AssociationKind::Source,
+                    1 => AssociationKind::Data,
+                    2 => AssociationKind::Alternative,
+                    3 => AssociationKind::Supplement,
+                    4 => AssociationKind::Unspecified,
+                    _ => return Err(ProtocolError::InvalidValue("attachment relationship")),
+                };
+                let name = cursor.alt()?.to_owned();
+                let mime = cursor.alt()?.to_owned();
+                let description = cursor.alt()?.to_owned();
+                cursor.done()?;
+                self.before_body()?;
+                if name.is_empty() || name.chars().count() > 255 || name.contains(['/', '\\']) {
+                    return Err(ProtocolError::InvalidValue("attachment name"));
+                }
+                if !valid_mime(&mime) {
+                    return Err(ProtocolError::InvalidValue("attachment MIME type"));
+                }
+                let data = self.claim_attachment(slot)?;
+                self.attach(Attachment {
+                    name,
+                    mime,
+                    description,
+                    relationship,
+                    data,
+                })
+            }
+            Opcode::Anchor => {
+                let name = cursor.alt()?;
+                let level = cursor.take(1)?[0];
+                let title = cursor.alt()?;
+                cursor.done()?;
+                if name.len() > 255 || !name.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+                    return Err(ProtocolError::InvalidValue("anchor name"));
+                }
+                // A bookmark has a level 1 to 6 and a title; nothing else has either.
+                if level > 6 || (level == 0) != title.is_empty() || title.len() > MAX_TITLE_BYTES {
+                    return Err(ProtocolError::InvalidValue("bookmark"));
+                }
+                let slot = self
+                    .ensure_renderer()?
+                    .add_anchor(name, level, title)
+                    .map_err(ProtocolError::InvalidValue)?;
+                self.layout_command(OwnedCommand::Anchor(slot))
             }
             Opcode::Paragraph => {
                 let align = cursor.align()?;
@@ -274,11 +431,9 @@ impl Decoder {
                     let size = pt(cursor.positive_f32("font size")?)?;
                     let color = cursor.rgb()?;
                     // Bit 0 hard break, 1 underline, 2 line-through, 3 a u16 link index follows,
-                    // 4 an f32 line height follows.
-                    let flags = cursor.take(1)?[0];
-                    if flags > 0x1f {
-                        return Err(ProtocolError::InvalidValue("run flags"));
-                    }
+                    // 4 an f32 line height follows, 5 to 7, 9, and 11 to 14 typography, 8 a decoration
+                    // colour follows, and 10 a background colour.
+                    let flags = cursor.u16()?;
                     let link = if flags & 8 != 0 {
                         Some(cursor.u16()?)
                             .filter(|index| usize::from(*index) < links.len())
@@ -292,6 +447,25 @@ impl Decoder {
                     } else {
                         None
                     };
+                    let typography = cursor.typography(flags)?;
+                    if typography.marker != Marker::None && !runs.is_empty() {
+                        return Err(ProtocolError::InvalidValue("marker run"));
+                    }
+                    let decoration_color = if flags & 256 != 0 {
+                        Some(cursor.rgb()?)
+                    } else {
+                        None
+                    };
+                    let background = if flags & 1024 != 0 {
+                        Some(cursor.rgb()?)
+                    } else {
+                        None
+                    };
+                    let alpha = if flags & 32768 != 0 {
+                        cursor.take(1)?[0]
+                    } else {
+                        OPAQUE
+                    };
                     let run = cursor.text(false)?;
                     text.push_str(run);
                     runs.push(TextRun {
@@ -304,8 +478,12 @@ impl Decoder {
                         decoration: RunDecoration {
                             underline: flags & 2 != 0,
                             line_through: flags & 4 != 0,
+                            color: decoration_color,
                             link,
+                            alpha,
+                            background,
                         },
+                        typography,
                     });
                 }
                 cursor.done()?;
@@ -328,8 +506,9 @@ impl Decoder {
                     _ => return Err(ProtocolError::InvalidValue("image link flag")),
                 };
                 let alt = cursor.alt()?.to_owned();
+                let alpha = cursor.take(1)?[0];
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt))
+                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt, alpha))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -361,17 +540,51 @@ impl Decoder {
                     bottom: cursor.rgb()?,
                     left: cursor.rgb()?,
                 };
+                let alpha = cursor.take(1)?[0];
+                // Two bits per side, top first: 0 solid, 1 dashed, 2 dotted.
+                let styles = cursor.take(1)?[0];
+                let side = |index: u8| match styles >> (index * 2) & 3 {
+                    0 => Ok(LineStyle::Solid),
+                    1 => Ok(LineStyle::Dashed),
+                    2 => Ok(LineStyle::Dotted),
+                    _ => Err(ProtocolError::InvalidValue("border style")),
+                };
+                let border_style = Edges {
+                    top: side(0)?,
+                    right: side(1)?,
+                    bottom: side(2)?,
+                    left: side(3)?,
+                };
+                let radius = match cursor.take(1)?[0] {
+                    0 => None,
+                    1 => {
+                        let percent = cursor.take(1)?[0];
+                        let mut values = [0.0; 8];
+                        for value in &mut values {
+                            *value = cursor.nonnegative_f32("border radius")?;
+                        }
+                        Some(Radii { values, percent })
+                    }
+                    _ => return Err(ProtocolError::InvalidValue("border radius flag")),
+                };
                 cursor.done()?;
-                self.open(
-                    Frame::Box,
-                    OwnedCommand::BoxStart(crate::BoxStyle {
-                        margin,
-                        padding,
-                        border,
-                        background,
-                        border_color,
-                    }),
-                )
+                let style = crate::BoxStyle {
+                    margin,
+                    padding,
+                    border,
+                    background,
+                    border_color,
+                    border_style,
+                    radius,
+                    alpha,
+                };
+                // One stroke follows the rounded outline; four different sides would need mitred joins.
+                if radius.is_some() && !style.uniform_border() {
+                    return Err(ProtocolError::InvalidValue(
+                        "border radius with unequal borders",
+                    ));
+                }
+                self.open(Frame::Box, OwnedCommand::BoxStart(style))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
@@ -391,17 +604,46 @@ impl Decoder {
         }
     }
 
-    /// Slots 0 and 1 are Helvetica; the rest are registered fonts.
+    /// The built-in fonts take the first slots; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
+        if self.pdfa && font.index() < BUILT_IN {
+            return Err(ProtocolError::PdfAFont);
+        }
         let count = self
             .renderer
             .as_ref()
-            .map_or(self.fonts.len() + 2, crate::Renderer::font_count);
+            .map_or(self.fonts.len() + BUILT_IN, crate::Renderer::font_count);
         if font.index() < count {
             Ok(font)
         } else {
             Err(ProtocolError::UnknownFont)
+        }
+    }
+
+    /// Document-level records must precede the header, footer and body.
+    fn before_body(&self) -> Result<(), ProtocolError> {
+        if self.renderer.is_some() || !self.frames.is_empty() {
+            return Err(ProtocolError::InvalidNesting);
+        }
+        Ok(())
+    }
+
+    fn claim_attachment(&mut self, slot: u16) -> Result<Vec<u8>, ProtocolError> {
+        self.attachments
+            .get_mut(usize::from(slot))
+            .and_then(Option::take)
+            .ok_or(ProtocolError::InvalidValue("attachment slot"))
+    }
+
+    fn attach(&mut self, attachment: Attachment) -> Result<(), ProtocolError> {
+        let attachments = &mut self.metadata.attachments;
+        match attachments.binary_search_by(|other| other.name.cmp(&attachment.name)) {
+            Ok(_) => Err(ProtocolError::DuplicateAttachment),
+            Err(index) => {
+                attachments.insert(index, attachment);
+                Ok(())
+            }
         }
     }
 
@@ -418,9 +660,7 @@ impl Decoder {
             for image in std::mem::take(&mut self.images) {
                 renderer.add_image(image);
             }
-            if let Some(metadata) = self.metadata.take() {
-                renderer.set_metadata(metadata);
-            }
+            renderer.set_metadata(std::mem::take(&mut self.metadata));
             self.renderer = Some(renderer);
         }
         Ok(self.renderer.as_mut().unwrap())
@@ -437,7 +677,7 @@ impl Decoder {
                         .sum::<usize>()
             }
             OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
-            OwnedCommand::Image(_, _, _, link, alt) => {
+            OwnedCommand::Image(_, _, _, link, alt, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
             _ => 0,
@@ -452,8 +692,12 @@ impl Decoder {
 
     fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         self.body_started = true;
+        // An anchor rides with the cell after it, so it is not a cell.
+        let anchor = matches!(command, OwnedCommand::Anchor(_));
         self.push_command(command)?;
-        self.complete_child()?;
+        if !anchor {
+            self.complete_child()?;
+        }
         if self.frames.is_empty() {
             self.flush_block()?;
         }
@@ -511,9 +755,10 @@ impl Decoder {
         if self.page.is_none() || !self.ended || !self.pending.is_empty() {
             return Err(ProtocolError::TruncatedProtocol);
         }
-        self.renderer
-            .map(crate::Renderer::finish)
-            .ok_or(ProtocolError::EmptyDocument)
+        Ok(self
+            .renderer
+            .ok_or(ProtocolError::EmptyDocument)?
+            .finish()?)
     }
 }
 
@@ -524,4 +769,18 @@ fn valid_language(value: &str) -> bool {
     }) && parts.all(|part| {
         (1..=8).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_alphanumeric())
     })
+}
+
+/// veraPDF's PDF/A-3 rule 6.8-1 pattern, which is stricter than RFC 6838.
+fn valid_mime(value: &str) -> bool {
+    let token = |part: &str| {
+        !part.is_empty()
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_.+-".contains(&byte))
+    };
+    value.len() <= 255
+        && value
+            .split_once('/')
+            .is_some_and(|(kind, subtype)| token(kind) && token(subtype))
 }

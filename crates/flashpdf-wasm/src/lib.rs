@@ -38,6 +38,12 @@ impl PdfRenderer {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    pub fn add_attachment(&mut self, bytes: Vec<u8>) -> Result<u16, JsValue> {
+        self.decoder
+            .add_attachment(bytes)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     pub fn push(&mut self, length: usize) -> Result<(), JsValue> {
         if length > self.input.len() {
             return Err(JsValue::from_str("input exceeds window"));
@@ -45,6 +51,11 @@ impl PdfRenderer {
         self.decoder
             .push(&self.input[..length])
             .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Records decoded so far; after a failed `push`, the index of the failing record.
+    pub fn records(&self) -> usize {
+        self.decoder.records()
     }
 
     pub fn finish(self) -> Result<Vec<u8>, JsValue> {

@@ -49,32 +49,45 @@ impl LayoutArea {
     }
 }
 
+/// The page body: the page minus its margins and the repeating header and footer lines.
 #[derive(Clone, Copy)]
-pub(crate) struct PageLayout(Page);
+pub(crate) struct PageLayout {
+    page: Page,
+    pub(crate) header: Pt,
+    pub(crate) footer: Pt,
+}
 
 impl PageLayout {
     pub(crate) fn new(page: Page) -> Self {
-        Self(page)
+        Self {
+            page,
+            header: Pt::ZERO,
+            footer: Pt::ZERO,
+        }
     }
 
     pub(crate) fn page(self) -> Page {
-        self.0
+        self.page
     }
 
     pub(crate) fn content_width(self) -> Pt {
-        self.0.width - self.0.margin - self.0.margin
+        self.page.width - self.page.margin - self.page.margin
     }
 
     pub(crate) fn content_height(self) -> Pt {
-        self.0.height - self.0.margin - self.0.margin
+        self.top() - self.bottom()
     }
 
     pub(crate) fn top(self) -> Pt {
-        self.0.height - self.0.margin
+        self.page.height - self.page.margin - self.header
+    }
+
+    pub(crate) fn bottom(self) -> Pt {
+        self.page.margin + self.footer
     }
 
     pub(crate) fn margin(self) -> Pt {
-        self.0.margin
+        self.page.margin
     }
 
     pub(crate) fn validate_block(self, height: Pt) -> Result<(), RenderError> {
@@ -96,11 +109,11 @@ impl PageCursor {
     }
 
     pub(crate) fn fits(&self, height: Pt, page: PageLayout) -> bool {
-        height <= self.y - page.margin()
+        height <= self.remaining(page)
     }
 
     pub(crate) fn remaining(&self, page: PageLayout) -> Pt {
-        self.y - page.margin()
+        self.y - page.bottom()
     }
 
     pub(crate) fn at_top(&self, page: PageLayout) -> bool {

@@ -2,6 +2,7 @@
 pub enum ProtocolError {
     FontsAfterDocument,
     TooManyFonts,
+    FontsTooLarge,
     InvalidFont(String),
     DataAfterEnd,
     RecordTooLarge,
@@ -33,6 +34,10 @@ pub enum ProtocolError {
     TooManyImages,
     UnknownImage,
     InvalidLink,
+    AttachmentsTooLarge,
+    DuplicateAttachment,
+    PdfAFont,
+    PdfACmyk,
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -40,6 +45,7 @@ impl std::fmt::Display for ProtocolError {
         let message = match self {
             Self::FontsAfterDocument => "fonts must be registered before document",
             Self::TooManyFonts => "too many fonts",
+            Self::FontsTooLarge => "fonts exceed 64 MiB per render",
             Self::InvalidFont(message) => return formatter.write_str(message),
             Self::DataAfterEnd => "data after end",
             Self::RecordTooLarge => "record too large",
@@ -65,12 +71,25 @@ impl std::fmt::Display for ProtocolError {
             Self::InvalidColumnKind => "invalid column kind",
             Self::InvalidRecordLength => "invalid record length",
             Self::InvalidValue(name) => return write!(formatter, "invalid {name}"),
+            Self::Render(crate::RenderError::TooManyPages) => {
+                return write!(
+                    formatter,
+                    "document exceeds {} pages; split it across several renders",
+                    crate::renderer::MAX_PAGES
+                )
+            }
             Self::Render(error) => return write!(formatter, "{error:?}"),
             Self::InvalidImage(message) => return formatter.write_str(message),
             Self::ImagesTooLarge => "images exceed 64 MiB per render",
             Self::TooManyImages => "too many images",
             Self::UnknownImage => "unknown image",
             Self::InvalidLink => "invalid link: URIs must be printable ASCII",
+            Self::AttachmentsTooLarge => "attachments exceed 64 MiB per render",
+            Self::DuplicateAttachment => "duplicate attachment name",
+            Self::PdfAFont => {
+                "PDF/A embeds every font and the built-in Helvetica, Times, and Courier have none; register one with `fonts` and set fontFamily"
+            }
+            Self::PdfACmyk => "PDF/A output uses an sRGB output intent, so CMYK JPEGs are not supported",
         };
         formatter.write_str(message)
     }

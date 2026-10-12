@@ -26,7 +26,7 @@ const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', ma
 
 ## Playground
 
-The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX template and a stylesheet to a PDF in the browser, with FlashPDF's validation errors shown in full. Run it locally with `pnpm playground`, share a template through the URL hash, and upload a `.ttf` to test embedded fonts. Export `{ document, options }` from the TSX editor to pass render options; the CSS editor and font uploader supply the default `stylesheets` and `fonts`. It deploys to GitHub Pages from `main` and lives in [`packages/playground`](./packages/playground).
+The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX template and a stylesheet to a PDF in the browser, with FlashPDF's validation errors shown in full. Run it locally with `pnpm playground`, share a template through the URL hash, and upload a `.ttf` to test embedded fonts. Export `{ document, options }` from the TSX editor to pass render options; the CSS editor and font uploader supply the default `stylesheets` and `fonts`. It deploys to GitHub Pages from `main` after CI passes there, and lives in [`packages/playground`](./packages/playground).
 
 ## Tables
 
@@ -51,11 +51,26 @@ A `<table>` splits between rows and repeats its `<thead>` on every page. Column 
 </table>
 ```
 
-`colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+`colSpan`, `rowSpan`, `vertical-align` on a cell, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+
+## Lists, preformatted text, and inline elements
+
+`ul`, `ol`, and `li` render with browser defaults: a 40px indent, `disc`, `circle`, and `square` markers by depth, and `list-style-type`, `list-style-position`, and `list-style` to change them. `ol` takes `start` and `reversed`, and `li` takes `value`. A marker stays with the first line of its item across pages. `pre` and `white-space: pre | pre-wrap | pre-line | nowrap` keep spaces, tabs, and newlines, and a `pre` line wider than the page rejects. `dl`, `dt`, `dd`, `blockquote`, `address`, `figure`, `figcaption`, `nav`, and `aside` are blocks, and `small`, `sub`, `sup`, `u`, `ins`, `s`, `del`, `mark`, `code`, `kbd`, and `samp` are inline.
+
+```tsx
+<ol start={3}>
+  <li>Payment is due in <b>14 days</b>.</li>
+  <li>Late fees accrue at 1.5%<sup>1</sup>.</li>
+</ol>
+<pre style={{ fontSize: 9, lineHeight: 1.3 }}>{`IBAN  NO93 8601 1117 947\nBIC   DNBANOKK`}</pre>
+```
+
+Vertical margins collapse as in a browser. Tagged mode writes list items as paragraphs without list structure; see [CSS.md](./CSS.md).
 
 ## Images and links
 
-`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
+`img` takes the PNG, JPEG, or SVG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
+`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element in the document with that `id`. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
 
 ```tsx
 const logo = new Uint8Array(await readFile('logo.png'));
@@ -63,9 +78,37 @@ const logo = new Uint8Array(await readFile('logo.png'));
   <img src={logo} alt="Acme Supply Co." style={{ width: 120 }} />
 </a>
 <p>Pay online at <a href="https://example.com/pay">the portal</a>.</p>
+<p>See the <a href="#terms">terms</a>.</p>
+<h2 id="terms">Terms</h2>
 ```
 
+A `#id` link jumps to the top of that element, even when it lands on a later page, and each target is also a named destination, so `invoice.pdf#nameddest=terms` opens there. A link to an id that is missing or on more than one element rejects naming the id. Set `outline: true` to give the PDF a bookmark tree built from `h1` to `h6`: each title is the heading's text, `data-bookmark="Title"` replaces it, and `data-bookmark={false}` skips the heading. [CSS.md](./CSS.md) lists which elements can be targets.
+
 PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](./CSS.md).
+
+## Vector graphics
+
+`svg` draws logos, icons, and simple charts as vector paths and sizes like `img`. Shapes, `path` with the full `d` grammar, transforms, strokes and dashes, opacity, and `currentColor` work; text, gradients, filters, masks, clip paths, and `use` reject with a reason. `<img src={svgBytes}>` takes an SVG file with the same subset.
+
+```tsx
+<svg viewBox="0 0 24 24" width={32} aria-label="Paid" style={{ color: '#0a7' }}>
+  <circle cx={12} cy={12} r={10} fill="none" stroke="currentColor" strokeWidth={2} />
+  <path d="M7 12l3 3 7-7" fill="none" stroke="currentColor" strokeLinecap="round" />
+</svg>
+```
+
+## QR codes and barcodes
+
+`QRCode` and `Barcode` draw vector symbols through `svg`, so they stay sharp at any size and need no image library.
+
+```tsx
+import { Barcode, QRCode } from '@pettersen3008/flashpdf';
+
+<QRCode value="https://example.com/pay/42" alt="Pay invoice 42" style={{ width: 90 }} />
+<Barcode value="INV-2026-0042" moduleWidth={1} height={36} />
+```
+
+`QRCode` takes `value`, `level` (`'L'`, `'M'`, `'Q'`, or `'H'`, default `'M'`), and `quietZone` in modules (default 4). It uses numeric or alphanumeric mode when the whole value fits, otherwise UTF-8 bytes, picks the smallest version from 1 to 40 at that level, and applies the mask with the lowest penalty from the QR standard. A `style` width sizes it; without one, each module is 1.5 pt. Children draw over the symbol in a 100 by 100 box, for a logo or the Swiss cross. `Barcode` draws Code 128 with automatic switching between code sets B and C and the checksum. `moduleWidth` and `height` are points (defaults 1 and 36), `quietZone` is 10 modules, and `text={false}` hides the value printed below. Both take `alt`, `style`, `className`, and `id`. Code set A, FNC1 (GS1-128), and other symbologies are not supported. FlashPDF does not validate payment payloads; the [guide](./docs/guide.md) has EPC (GiroCode) and Swiss QR-bill recipes.
 
 ## Install
 
@@ -107,7 +150,7 @@ CSS Modules, minification, and syntax transforms belong to the frontend build. L
 
 Runnable Tailwind, StyleX, and styled-components build-step examples live in [`packages/flashpdf/examples/css-integrations`](./packages/flashpdf/examples/css-integrations). They compile or extract static CSS, then pass that string through `render({ stylesheets })`.
 
-FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules, and unsupported selectors are skipped.
+FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules other than `@media` and `@property`, and selectors that match nothing in a PDF (`:hover`, `::before`) are skipped. A selector it cannot evaluate, such as `[href]` or `:has()`, rejects.
 
 ## API
 
@@ -117,8 +160,10 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
 | `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
 | `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
+| `QRCode` | `(props: QRCodeProps) => Element` | A vector QR code; see [QR codes and barcodes](#qr-codes-and-barcodes). |
+| `Barcode` | `(props: BarcodeProps) => Element` | A vector Code 128 barcode. |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean }`. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; outline?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array; italic?: Uint8Array; boldItalic?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
 
 ```tsx
 import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
@@ -131,11 +176,13 @@ const pdf = await render(<Invoice />, {
 });
 ```
 
-`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
+`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, lists, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
 
 ## Embedded fonts
 
-The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first registered family; `fontWeight: 'bold'` selects its optional bold file. Helvetica and Helvetica-Bold remain the fallback when `fontFamily` is absent.
+The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first entry that is a registered family or a built-in name; `fontWeight: 'bold'` selects its optional bold file and `fontStyle: 'italic'` its optional italic or bold italic file. A family without the italic file for a weight slants the upright face instead, as browsers do.
+
+Three built-in families need no files, each in regular, bold, italic or oblique, and bold italic: Helvetica for `Helvetica`, `Arial`, and `sans-serif`; Times for `Times`, `Times New Roman`, and `serif`; and Courier for `Courier`, `Courier New`, and `monospace`. Helvetica is the default. A name that is neither registered nor built in, such as `Georgia`, is skipped for the next entry, and a list where nothing matches rejects naming it. CSS.md lists every name.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());
@@ -147,7 +194,26 @@ const pdf = await render(<main style={{ fontFamily: 'Invoice' }}><h1>Invoice</h1
 
 Each embedded font is subset to the glyphs the document shows (plus the components of composite glyphs) and written as a Type0/CIDFontType2 font with `Identity-H` encoding and a `ToUnicode` map, so copy-paste and text extraction return the original characters. Any character the TTF has a glyph for renders: Latin extended, Greek, Cyrillic, CJK, symbols, currency, and supplementary-plane characters through cmap formats 4 and 12. A character without a glyph rejects naming the character, its code point, and the element.
 
-Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. There is no shaping, kerning, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. Helvetica and Helvetica-Bold have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Regular and bold faces only; italic and variable-face selection, absent families, and a bold request without a bold file reject clearly.
+Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Hangul, full-width forms), so unspaced CJK paragraphs wrap; U+00A0 never breaks. Text is kerned through the font's GPOS `kern` feature or `kern` table, but there is no shaping, ligature substitution, or bidi: each character maps to one glyph, combining marks render as spacing glyphs, and Arabic, Indic, or right-to-left text will not look right. The built-in faces have no embedded program and stay limited to WinAnsi, so non-Latin text needs an embedded font. Variable-face selection, absent families, and a bold request without a bold file reject clearly.
+
+## PDF/A and e-invoices
+
+`pdfa: '3b'` writes PDF/A-3b: an XMP packet that repeats `metadata`, an sRGB output intent, and a document ID hashed from the file's content, so the same input still gives the same bytes. FlashPDF writes no creation or modification date. PDF/A needs every font embedded, so register one with `fonts` and set `fontFamily` on the root element; text in a built-in font, Helvetica, Times, or Courier, rejects. CMYK JPEGs also reject, because the output intent is RGB.
+
+`attachments` embeds files as associated files, listed in the catalog's `/AF` array and in the viewer's attachments panel. Each entry is `{ name: string; data: Uint8Array; mimeType: string; description?: string; relationship: 'Source' | 'Data' | 'Alternative' | 'Supplement' | 'Unspecified' }`. Names must be unique and free of slashes and control characters, and all attachments together are capped at 64 MiB per render. Attachments also work without `pdfa`.
+
+`facturx: { xml, profile }` makes a Factur-X or ZUGFeRD 2.x hybrid invoice and implies `pdfa: '3b'`. FlashPDF embeds the CII XML as `factur-x.xml` (`xrechnung.xml` for the `XRECHNUNG` profile) with the relationship the profile requires (`Data` for `MINIMUM` and `BASIC WL`, `Alternative` for the rest), and writes the Factur-X XMP extension schema with `fx:Version` 1.0. `profile` is `'MINIMUM'`, `'BASIC WL'`, `'BASIC'`, `'EN 16931'`, `'EXTENDED'`, or `'XRECHNUNG'`.
+
+```tsx
+const xml = new Uint8Array(await readFile('invoice-42.xml'));
+const pdf = await render(<Invoice />, {
+  fonts: [{ family: 'Invoice', regular, bold }],
+  metadata: { title: 'Invoice 42', author: 'Acme', language: 'de-DE' },
+  facturx: { xml, profile: 'EN 16931' },
+});
+```
+
+FlashPDF only checks that `xml` is UTF-8 text that starts with `<` and ends with `>`. It does not validate the XML against the CII schema or the profile's rules, and it does not compare the XML with the rendered invoice. Validate the XML with your e-invoicing toolchain, for example the Mustang or KoSIT validator, before you send it.
 
 ## Compatibility
 
@@ -158,13 +224,15 @@ Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Ha
 | Bun 1.x | Yes, including host-provided `Uint8Array` TTFs |
 | AWS Lambda Node.js 20.19+ | Yes, include the package's `wasm/` directory in the deployment artifact |
 | Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
-| Vercel Edge | Yes, the `edge-light` condition selects the same static WASM import |
+| Vercel Edge | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
 
-Every target runs the same decoder, so a document that renders in one produces identical bytes in the others. Content streams and embedded fonts are Flate-compressed. `tests/e2e.mjs` proves this against a packed tarball with Node, AWS Lambda handler packaging, Bun, Vite, Chromium, and Wrangler's local Workers runtime. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+Every target runs the same decoder. `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
+
+Bundler setup (Vite, webpack, Next.js), the browser CSP, fixes for common rejections, recipes, and a react-pdf migration map live in the [guide](./docs/guide.md).
 
 ## Assets
 
-FlashPDF embeds host-provided regular and bold TTFs, and keeps Helvetica and Helvetica-Bold as the default. Images are PNG or JPEG bytes passed through `img`; FlashPDF never fetches a URL or reads a path.
+FlashPDF embeds host-provided regular, bold, italic, and bold italic TTFs, and keeps Helvetica, Times, and Courier built in, with Helvetica as the default. Images are PNG, JPEG, or SVG bytes passed through `img`, and `svg` draws inline vector graphics; FlashPDF never fetches a URL or reads a path.
 
 Supported CSS, the intentional v1 limits, and the reason behind each rejection live in [CSS.md](./CSS.md).
 
@@ -175,9 +243,12 @@ Supported CSS, the intentional v1 limits, and the reason behind each rejection l
 
 ## Working on FlashPDF
 
-Requirements: Node 22.12+, pnpm, Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x is optional for the Bun-specific check, and qpdf is optional for the PDF structure check in `tests/e2e.mjs`. The package itself runs on Node 20.19+.
+Requirements: Node 22.12+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools (`mutool`) are optional locally, each enabling a check in `tests/e2e.mjs`, and CI requires all three. The package itself runs on Node 20.19+.
+
+pnpm 10 cannot switch itself to pnpm 12, and Corepack 0.34 cannot launch it, so install the pinned version directly.
 
 ```bash
+npm install -g pnpm@12.4.2
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
 sh verify.sh
@@ -187,7 +258,7 @@ That formats, lints, and tests the Rust workspace, formats and lints the TypeScr
 
 Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. Every library renders the same fixture: A4 page, 36pt margins, 10pt body text, a 24pt heading, and a 70pt right-aligned amount column, so the comparison is fair even though each library uses its native authoring API. It reports median and p95 cold start and warm render, peak RSS, package size (`installBytes` adds every transitive runtime dependency, deduped by real path), and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts.
 
-To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version, reruns `verify.sh`, and publishes to GitHub Packages with `GITHUB_TOKEN`.
+To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main`. The release workflow checks the tag against the package version and against a `## <version>` heading in `packages/flashpdf/CHANGELOG.md`, reruns `verify.sh`, attests build provenance for the packed tarball, and publishes that tarball to GitHub Packages with `GITHUB_TOKEN`.
 
 `tests/golden/css-invoice.txt` pins the PDF content stream of the CSS invoice: every draw position, colour, font, and page break. Regenerate it with `UPDATE_GOLDEN=1` and review the diff.
 
