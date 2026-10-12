@@ -384,23 +384,62 @@ test("given opacity on a header or footer, when rendering, then rejects instead 
 		);
 });
 
+test("given paragraphs and headings in page furniture, when rendering, then default margins do not prevent their text", async () => {
+	const pdf = await render(jsx("p", { children: "Body" }), {
+		header: jsx("p", { children: "Header" }),
+		footer: jsx("h2", { children: "Footer" }),
+	});
+	for (const text of ["Body", "Header", "Footer"])
+		assert.match(shown(pdf), new RegExp(`\\(${text}\\)`));
+	await assert.rejects(
+		render(jsx("p", { children: "Body" }), {
+			header: jsx("p", { style: { marginTop: 10 }, children: "Header" }),
+		}),
+		/header must be a single text line/,
+	);
+});
+
+test("given collapsing margins around targeted headings, when adding bookmarks and links, then painted text keeps its position", async () => {
+	const document = jsxs("main", {
+		children: [
+			jsx("p", { children: "Before" }),
+			jsx("section", {
+				style: { marginTop: 20 },
+				children: jsx("h1", { id: "title", children: "Title" }),
+			}),
+			jsx("p", { children: "After" }),
+		],
+	});
+	const painted = (pdf) => string(pdf).match(/BT\n[\s\S]*?ET/g);
+	const plain = painted(await render(document));
+	assert.deepEqual(painted(await render(document, { outline: true })), plain);
+	const linked = jsxs("main", {
+		children: [document, jsx("p", { children: jsx("a", { href: "#title", children: "Jump" }) })],
+	});
+	assert.deepEqual(painted(await render(linked)).slice(0, plain.length), plain);
+});
+
 test("given Tailwind v4 border and md: utilities, when rendering with two margins, then draws the border and applies md: only to the wider content", async () => {
 	const css = readFileSync(new URL("./fixtures/tailwind-invoice.css", import.meta.url), "utf8");
 	const document = jsx("main", {
 		children: jsx("div", { className: "border border-gray-200 p-4 md:p-8", children: "Total" }),
 	});
 	// 48rem is 576 pt: the default margin leaves 523 pt, and no margin leaves 595 pt.
-	const narrow = string(await render(document, { stylesheets: [css] }));
+	const narrow = shown(await render(document, { stylesheets: [css] }));
 	assert.match(narrow, /0\.898\d* 0\.905\d* 0\.921\d* rg\n36 805\.25 523 0\.75 re\nf/);
-	assert.match(narrow, /\n48\.75 [\d.]+ Td\n\(Total\)/);
-	const wide = string(await render(document, { stylesheets: [css], margin: 0 }));
-	assert.match(wide, /\n24\.75 [\d.]+ Td\n\(Total\)/);
+	assert.match(narrow, /\n48\.75 [\d.]+ Td\n\[?\(Total\)/);
+	const wide = shown(await render(document, { stylesheets: [css], margin: 0 }));
+	assert.match(wide, /\n24\.75 [\d.]+ Td\n\[?\(Total\)/);
 });
 
 test("given a long native main with a page break rule, when rendering, then it paginates", async () => {
 	const document = jsx("main", {
 		children: Array.from({ length: 100 }, (_, index) =>
-			jsx("p", { className: index === 50 ? "new-page" : undefined, children: `Line ${index}` }),
+			jsx("p", {
+				style: { margin: 0 },
+				className: index === 50 ? "new-page" : undefined,
+				children: `Line ${index}`,
+			}),
 		),
 	});
 	const pdf = await render(document, { stylesheets: [".new-page { break-before: page }"] });
@@ -427,7 +466,9 @@ test("given a long native main with a page break rule, when rendering, then it p
 
 test("given a page footer, when rendering multiple pages, then repeats resolved page numbers", async () => {
 	const document = jsx("main", {
-		children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+		children: Array.from({ length: 100 }, (_, index) =>
+			jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+		),
 	});
 	const footer = jsxs("footer", {
 		style: { fontSize: "9pt", textAlign: "center" },
@@ -459,7 +500,9 @@ test("given layouts the engine rejects, when rendering, then explains the code a
 		/^Error: InvalidLayout: the content does not fit its container.* on <div> in <main>$/,
 	);
 	await assert.rejects(
-		render(jsx("main", { children: jsx("p", { style: { fontSize: 3e38 }, children: "x" }) })),
+		render(
+			jsx("main", { children: jsx("p", { style: { fontSize: 3e38, margin: 0 }, children: "x" }) }),
+		),
 		/^Error: TextTooWide: .* on <p> in <main>$/,
 	);
 	await assert.rejects(
@@ -469,8 +512,10 @@ test("given layouts the engine rejects, when rendering, then explains the code a
 });
 
 test("given an engine error queued in a batch before a compile error, when rendering, then names the element that wrote the failing record", async () => {
-	const lines = Array.from({ length: 50 }, (_, index) => jsx("p", { children: `Line ${index}` }));
-	const huge = jsx("p", { className: "huge", style: { fontSize: 3e38 }, children: "x" });
+	const lines = Array.from({ length: 50 }, (_, index) =>
+		jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+	);
+	const huge = jsx("p", { className: "huge", style: { fontSize: 3e38, margin: 0 }, children: "x" });
 	await assert.rejects(
 		render(jsx("main", { children: [...lines, huge, ...lines, jsx("td", { children: "x" })] })),
 		/^Error: TextTooWide: .* on <p\.huge> in <main>$/,
@@ -482,7 +527,9 @@ test("given a repeating header and tagged metadata, when rendering two pages, th
 	const document = jsxs("main", {
 		children: [
 			jsx("img", { src: logo, alt: "Company logo", style: { width: 12 } }),
-			...Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+			...Array.from({ length: 100 }, (_, index) =>
+				jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+			),
 		],
 	});
 	const header = jsxs("header", {
@@ -565,7 +612,9 @@ test("given a long margin-only wrapper, when rendering, then it paginates", asyn
 	const pdf = await render(
 		jsx("main", {
 			style: { marginTop: "12pt" },
-			children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+			children: Array.from({ length: 100 }, (_, index) =>
+				jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+			),
 		}),
 	);
 	assert.match(string(pdf), /\/Count 2/);
@@ -919,7 +968,7 @@ test("given links to ids and headings with the outline option, when rendering, t
 			jsx("h2", {
 				id: "terms",
 				"data-bookmark": "Terms \u03a9",
-				style: { breakBefore: "page" },
+				style: { breakBefore: "page", margin: 0 },
 				children: "Terms",
 			}),
 			jsx("h3", { children: "Late fees" }),

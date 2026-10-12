@@ -130,7 +130,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 				attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 				for (const [position, nodes] of repeating) {
 					writer.repeatStart(position);
-					compile(styles(nodes), writer, fonts, undefined, 0, true);
+					compile(styles(nodes, true), writer, fonts, undefined, 0, true);
 					writer.repeatEnd();
 				}
 				compileBody(styles(tree), writer, fonts, p.outline === true);

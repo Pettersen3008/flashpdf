@@ -773,7 +773,9 @@ test("given a link target and headings with an outline, when compiling the body,
 		],
 	);
 	assert.deepEqual(
-		(await compiledBody(jsx("h1", { children: "Title" }))).filter(([method]) => method !== "margin").map(([method]) => method),
+		(await compiledBody(jsx("h1", { children: "Title" })))
+			.filter(([method]) => method !== "margin")
+			.map(([method]) => method),
 		["paragraph"],
 		"without the outline option or a link target, no anchor is written",
 	);

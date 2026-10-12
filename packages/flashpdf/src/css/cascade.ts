@@ -192,6 +192,7 @@ function visit(
 	properties: ReadonlyMap<string, Registration>,
 	parent: Computed,
 	chain: string,
+	singleLine: boolean,
 ): StyledElement {
 	const self = label(value);
 	const where = chain ? `${self} in ${chain}` : self;
@@ -200,7 +201,7 @@ function visit(
 	let cache = byStyle.get(value.style);
 	if (!cache) byStyle.set(value.style, (cache = new Map()));
 	const list = listStyles(value.tag, elem.parent);
-	const key = `${value.tag}\n${list?.margin ?? ""},${list?.listStyleType ?? ""}\n${matched.map((rule) => rule.order).join(",")}`;
+	const key = `${singleLine}\n${value.tag}\n${list?.margin ?? ""},${list?.listStyleType ?? ""}\n${matched.map((rule) => rule.order).join(",")}`;
 	let computed = cache.get(key);
 	if (!computed) {
 		// No prototype, so an own `__proto__` key stays a key that style() rejects.
@@ -216,6 +217,8 @@ function visit(
 					(result as Record<string, unknown>)[name] = initial;
 			cascade(result, uaStyles[value.tag]);
 			cascade(result, list);
+			// Single-line furniture has no default block spacing; author margins still reject.
+			if (singleLine) delete result.margin;
 			const own = inline(value.style);
 			for (const rule of matched) cascade(result, rule.declarations().normal);
 			cascade(result, own.normal);
@@ -259,6 +262,7 @@ function visit(
 					properties,
 					computed,
 					chain ? `${self} > ${chain}` : self,
+					singleLine,
 				),
 	);
 	return { ...value, style: computed.style, where, children };
@@ -267,11 +271,11 @@ function visit(
 export function styleResolver(
 	sheets: readonly string[] = [],
 	width = 523,
-): (value: readonly Node[]) => readonly StyledNode[] {
+): (value: readonly Node[], singleLine?: boolean) => readonly StyledNode[] {
 	const properties = new Map<string, Registration>();
 	let rules: Rule[] | undefined;
 	const root: Computed = { cascaded: {}, style: {} };
-	return (value) => {
+	return (value, singleLine = false) => {
 		if (!rules) {
 			rules = sheets.flatMap((sheet) => parse(sheet, { width, properties }));
 			for (let order = 0; order < rules.length; order++) rules[order]!.order = order;
@@ -280,7 +284,9 @@ export function styleResolver(
 		const roots = elements(value);
 		let next = 0;
 		return value.map((node) =>
-			node.kind === "text" ? node : visit(node, roots[next++]!, rules!, properties, root, ""),
+			node.kind === "text"
+				? node
+				: visit(node, roots[next++]!, rules!, properties, root, "", singleLine),
 		);
 	};
 }

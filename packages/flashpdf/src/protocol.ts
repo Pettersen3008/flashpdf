@@ -126,7 +126,7 @@ export class ProtocolWriter {
 
 	/** A destination at the top of the next line laid out. `level` 1 to 6 also makes it a bookmark. */
 	anchor(name: string, level: number, title: string) {
-		this.body();
+		this.body(false);
 		this.binary.record(opcode.anchor, () => {
 			this.binary.text(name);
 			this.binary.u8(level);
