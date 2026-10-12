@@ -811,7 +811,6 @@ export function isMarkup(bytes: Uint8Array): boolean {
 
 const TOKEN =
 	/<(\/?)([A-Za-z][\w:.-]*)((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>|([^<]+)/y;
-const ATTRIBUTE = /\s+([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/y;
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 
 function entities(value: string): string {
@@ -881,13 +880,18 @@ export function markup(bytes: Uint8Array): Markup {
 		} else {
 			const element: Markup = { type: name!, props: { children: [] } };
 			for (let offset = 0; offset < attributes!.length;) {
-				ATTRIBUTE.lastIndex = offset;
-				const attribute = ATTRIBUTE.exec(attributes!);
-				if (!attribute) throw new Error("invalid SVG attribute");
-				const [, key, double, single] = attribute;
-				offset = ATTRIBUTE.lastIndex;
-				if (key! in element.props) throw new Error(`SVG markup repeats attribute ${key}`);
-				element.props[key!] = entities(double ?? single!);
+				const equal = attributes!.indexOf("=", offset);
+				if (equal < 0) throw new Error("invalid SVG attribute");
+				const key = attributes!.slice(offset, equal).trim();
+				let quote = equal + 1;
+				while (attributes![quote]?.trim() === "") quote++;
+				const delimiter = attributes![quote];
+				if (delimiter !== '"' && delimiter !== "'") throw new Error("invalid SVG attribute");
+				const end = attributes!.indexOf(delimiter, quote + 1);
+				if (end < 0) throw new Error("invalid SVG attribute");
+				if (key in element.props) throw new Error(`SVG markup repeats attribute ${key}`);
+				element.props[key] = entities(attributes!.slice(quote + 1, end));
+				offset = end + 1;
 			}
 			parent.props.children.push(element);
 			if (!selfClosing) {
