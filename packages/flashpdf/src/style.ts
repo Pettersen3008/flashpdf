@@ -13,6 +13,7 @@ export { dimension, flexBasis, lineHeight, point, type LineHeight } from "./styl
 
 const ALIGN = ["normal", "stretch", "flex-start", "start", "flex-end", "end", "center"];
 const KEYWORDS: Record<string, readonly string[]> = {
+	position: ["static", "relative", "absolute", "fixed"],
 	justifyContent: [
 		"normal",
 		"flex-start",
@@ -148,6 +149,11 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 		if (result[key] === initial) delete result[key];
 		else if (result[key] !== undefined) dimension(result[key], key, true);
 	}
+	for (const key of ["top", "right", "bottom", "left"]) {
+		const value = result[key];
+		if (value === "auto") delete result[key];
+		else if (value !== undefined) offset(value, 12);
+	}
 	if (result.gap !== undefined) point(result.gap);
 	if (result.fontSize !== undefined) point(result.fontSize, 12, true);
 	if (result.fontWeight !== undefined) bold(result.fontWeight);
@@ -157,4 +163,22 @@ export function style(value: unknown, parent: NormalizedStyle = {}): NormalizedS
 		throw new Error("fontFamily must name at least one family");
 	if (result.textDecoration !== undefined) decoration(result.textDecoration);
 	return result as NormalizedStyle;
+}
+
+export function offset(value: unknown, size: number): { kind: 1 | 2; value: number } {
+	if (typeof value === "number") {
+		if (!Number.isFinite(Math.fround(value)))
+			throw new Error(`invalid position offset: ${String(value)}`);
+		return { kind: 1, value: Math.fround(value) };
+	}
+	if (typeof value !== "string") throw new Error(`invalid position offset: ${String(value)}`);
+	const match = /^([+-])?(\d+(?:\.\d*)?|\.\d+)(%)?$/.exec(value.trim());
+	const negative = value.trim().startsWith("-");
+	const magnitude = /^[+-]/.test(value.trim()) ? value.trim().slice(1) : value.trim();
+	const amount = match?.[3]
+		? Number(value.trim().slice(0, -1))
+		: (negative ? -1 : 1) * point(magnitude, size);
+	if (!Number.isFinite(Math.fround(amount)))
+		throw new Error(`invalid position offset: ${String(value)}`);
+	return { kind: match?.[3] ? 2 : 1, value: Math.fround(amount) };
 }

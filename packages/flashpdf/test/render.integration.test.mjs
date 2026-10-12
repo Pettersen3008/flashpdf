@@ -1055,3 +1055,29 @@ test("given two stylesheets of equal specificity, when rendering, then the later
 	assert.match(string(pdf), /0 0 1 rg/);
 	assert.doesNotMatch(string(pdf), /1 0 0 rg/);
 });
+
+test("given positioned content and a forced page break, when rendering, then absolute content leaves flow unchanged and fixed content repeats", async () => {
+	const input = jsxs("main", {
+		children: [
+			jsxs("div", {
+				style: { position: "relative", height: 40, width: 80 },
+				children: [
+					"normal",
+					jsx("div", { style: { position: "absolute", top: 2, right: 2 }, children: "tag" }),
+				],
+			}),
+			jsx("div", { style: { position: "fixed", top: 2, left: 3 }, children: "fixed" }),
+			jsx("p", { style: { breakBefore: "page" }, children: "next" }),
+		],
+	});
+	const pdf = await render(input, { pageFormat: { width: 140, height: 100 }, margin: 10 });
+	const content = string(pdf);
+	assert.match(content, /\/Count 2\b/);
+	assert.equal((content.match(/\(fixed\) Tj/g) ?? []).length, 2);
+	for (const word of ["normal", "tag", "next"])
+		assert.equal((content.match(new RegExp(`\\(${word}\\) Tj`, "g")) ?? []).length, 1);
+	assert.deepEqual(
+		pdf,
+		await render(input, { pageFormat: { width: 140, height: 100 }, margin: 10 }),
+	);
+});

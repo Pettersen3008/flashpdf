@@ -985,3 +985,13 @@ fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
         "Second\nPage 2 of 2"
     );
 }
+
+#[test]
+fn given_nonfinite_position_offsets_when_decoding_then_rejects_at_the_protocol_boundary() {
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    let mut payload = vec![1, 1];
+    payload.extend(f32::NAN.to_le_bytes());
+    payload.extend([0, 0, 0]);
+    bytes.extend(record(28, &payload));
+    assert!(decode(&bytes).unwrap_err().contains("position offset"));
+}

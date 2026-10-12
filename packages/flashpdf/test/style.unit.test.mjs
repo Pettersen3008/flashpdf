@@ -128,3 +128,14 @@ test("given a rem width, as minified Tailwind emits, when parsing it, then conve
 test("given a width with more digits than a float holds, when normalizing, then rejects it", () => {
 	assert.throws(() => style({ width: `${"9".repeat(45)}pt` }), /invalid width: 9+pt/);
 });
+
+test("given signed and percentage position offsets, when normalizing, then preserves finite values and rejects invalid input", () => {
+	assert.deepEqual(style({ position: "absolute", top: "-2mm", left: "50%" }), {
+		position: "absolute",
+		top: "-2mm",
+		left: "50%",
+	});
+	for (const value of [Infinity, "NaNpt", "1vh", "calc(1pt)"])
+		assert.throws(() => style({ top: value }), /invalid/);
+	assert.throws(() => style({ position: "sticky" }), /invalid position/);
+});

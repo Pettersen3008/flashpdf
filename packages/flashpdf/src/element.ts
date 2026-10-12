@@ -23,6 +23,11 @@ export type Alignment =
 	| "center";
 
 export type Style = {
+	position?: "static" | "relative" | "absolute" | "fixed";
+	top?: Length | `${number}%` | "auto";
+	right?: Length | `${number}%` | "auto";
+	bottom?: Length | `${number}%` | "auto";
+	left?: Length | `${number}%` | "auto";
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
 	flexWrap?: "nowrap";

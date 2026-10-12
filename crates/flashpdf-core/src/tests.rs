@@ -1710,3 +1710,112 @@ fn sized(size: super::BoxSize, background: Option<Rgb>) -> Command<'static> {
 }
 
 const RED: Option<Rgb> = Some(Rgb { r: 255, g: 0, b: 0 });
+
+#[test]
+fn given_absolute_content_in_a_relative_box_when_rendered_then_offsets_use_the_padding_box_without_moving_flow(
+) {
+    use super::{BoxSize, BoxStyle, Offset, Position, PositionKind};
+    let mut relative = Position {
+        kind: PositionKind::Relative,
+        inset: Edges::all(None),
+    };
+    relative.inset.left = Some(Offset {
+        value: 5.0,
+        percent: false,
+    });
+    let mut absolute = Position {
+        kind: PositionKind::Absolute,
+        inset: Edges::all(None),
+    };
+    absolute.inset.top = Some(Offset {
+        value: 5.0,
+        percent: false,
+    });
+    absolute.inset.left = Some(Offset {
+        value: 50.0,
+        percent: true,
+    });
+    let pdf = parsed(&[
+        Command::PositionStart(relative),
+        Command::BoxStart {
+            style: BoxStyle {
+                padding: Edges::all(Pt(2.0)),
+                border: Edges::all(Pt(1.0)),
+                ..bordered()
+            },
+            size: BoxSize {
+                width: super::ImageSize::Fixed(Pt(50.0)),
+                height: Some(Pt(20.0)),
+                ..BoxSize::AUTO
+            },
+        },
+        text("normal"),
+        Command::PositionStart(absolute),
+        text("tag"),
+        Command::PositionEnd,
+        Command::BoxEnd,
+        Command::PositionEnd,
+        text("after"),
+    ]);
+    let content = content(&pdf);
+    assert!(content.contains("43 36.82 Td"), "{content}");
+    assert!(content.contains("10 16.82 Td"), "{content}");
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "normal\ntag\nafter");
+}
+
+#[test]
+fn given_fixed_content_and_two_pages_when_rendered_then_it_repeats_at_the_same_page_coordinates_without_taking_flow_height(
+) {
+    use super::{Offset, Position, PositionKind};
+    let mut fixed = Position {
+        kind: PositionKind::Fixed,
+        inset: Edges::all(None),
+    };
+    fixed.inset.top = Some(Offset {
+        value: 2.0,
+        percent: false,
+    });
+    fixed.inset.right = Some(Offset {
+        value: 3.0,
+        percent: false,
+    });
+    let pdf = parsed(&[
+        Command::PositionStart(fixed),
+        text("mark"),
+        Command::PositionEnd,
+        text("first"),
+        Command::PageBreak,
+        text("second"),
+    ]);
+    assert_eq!(pdf.get_pages().len(), 2);
+    for page in [1, 2] {
+        let content = String::from_utf8(pdf.get_page_content(pdf.get_pages()[&page])).unwrap();
+        assert!(content.contains("50.82 Td"), "{content}");
+    }
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "first\nmark");
+    assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "second\nmark");
+}
+
+#[test]
+fn given_many_fixed_blocks_when_pushed_then_rejects_before_retained_layout_exceeds_the_document_cap(
+) {
+    let fixed = super::Position {
+        kind: super::PositionKind::Fixed,
+        inset: Edges::all(None),
+    };
+    let words = "word ".repeat(800);
+    let commands = [
+        Command::PositionStart(fixed),
+        text(&words),
+        Command::PositionEnd,
+    ];
+    let mut renderer = super::Renderer::new(super::Page::A4);
+    for _ in 0..4096 {
+        match renderer.push(&commands) {
+            Err(RenderError::DocumentTooLarge) => return,
+            Ok(()) => {}
+            Err(error) => panic!("unexpected fixed layout error: {error:?}"),
+        }
+    }
+    panic!("fixed layouts bypassed the retained-memory cap");
+}

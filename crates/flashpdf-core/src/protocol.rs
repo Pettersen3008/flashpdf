@@ -38,7 +38,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 30;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 18;
+const VERSION: u16 = 19;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Factur-X conformance level, embedded file name and relationship for profile bytes 1 to 6.
 const FACTURX: [(&str, &str, AssociationKind); 6] = [
@@ -79,6 +79,7 @@ pub struct Decoder {
 /// A `Box` is `true` once the renderer has it open and its children stream.
 #[derive(Clone, Copy)]
 enum Frame {
+    Position,
     Stack,
     Box(bool),
     Row { cells: usize, done: usize },
@@ -516,6 +517,29 @@ impl Decoder {
                 cursor.done()?;
                 self.feed(OwnedCommand::Image(slot, width, height, link, alt))
             }
+            Opcode::PositionStart => {
+                let kind = match cursor.take(1)?[0] {
+                    0 => crate::PositionKind::Relative,
+                    1 => crate::PositionKind::Absolute,
+                    2 => crate::PositionKind::Fixed,
+                    _ => return Err(ProtocolError::InvalidValue("position kind")),
+                };
+                if self.furniture.is_some() && kind == crate::PositionKind::Fixed {
+                    return Err(ProtocolError::InvalidNesting);
+                }
+                let inset = Edges {
+                    top: cursor.offset()?,
+                    right: cursor.offset()?,
+                    bottom: cursor.offset()?,
+                    left: cursor.offset()?,
+                };
+                cursor.done()?;
+                self.feed(OwnedCommand::PositionStart(crate::Position { kind, inset }))
+            }
+            Opcode::PositionEnd => {
+                cursor.done()?;
+                self.feed(OwnedCommand::PositionEnd)
+            }
             Opcode::BoxStart => {
                 let margin = Edges {
                     top: pt(cursor.nonnegative_f32("margin top")?)?,
@@ -684,6 +708,7 @@ impl Decoder {
     /// Routes a decoded layout command.
     fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = match &command {
+            OwnedCommand::PositionStart(_) => Frame::Position,
             OwnedCommand::StackStart(_) => Frame::Stack,
             OwnedCommand::BoxStart(_, size) => {
                 Frame::Box(self.placing() && self.furniture.is_none() && *size == BoxSize::AUTO)
@@ -704,7 +729,8 @@ impl Decoder {
                     .placing()
                     .then(|| 1 + usize::from(*header_rows) + usize::from(*footer_rows)),
             },
-            OwnedCommand::StackEnd
+            OwnedCommand::PositionEnd
+            | OwnedCommand::StackEnd
             | OwnedCommand::BoxEnd
             | OwnedCommand::RowEnd
             | OwnedCommand::FlexEnd
@@ -765,6 +791,7 @@ impl Decoder {
     fn close(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = self.frames.pop().ok_or(ProtocolError::InvalidNesting)?;
         match (&command, frame) {
+            (OwnedCommand::PositionEnd, Frame::Position) => {}
             (OwnedCommand::TableEnd, Frame::Table { head: Some(0) }) => {
                 return Ok(self.ensure_renderer()?.end_table()?);
             }

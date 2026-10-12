@@ -31,6 +31,7 @@ pub(crate) struct PdfPainter<'a> {
     links: &'a mut Vec<PageLink>,
     tags: Option<&'a mut Vec<PageTag>>,
     state: &'a mut PaintState,
+    page_height: Pt,
 }
 
 impl<'a> PdfPainter<'a> {
@@ -45,7 +46,13 @@ impl<'a> PdfPainter<'a> {
             links,
             tags,
             state,
+            page_height: Pt::ZERO,
         }
+    }
+
+    pub(crate) fn with_page_height(mut self, height: Pt) -> Self {
+        self.page_height = height;
+        self
     }
 
     pub(crate) fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
@@ -76,7 +83,28 @@ impl<'a> PdfPainter<'a> {
         }
         self.paint_boxes(&layout.boxes, origin);
         self.paint_images(layout, lines.clone(), origin, &ids);
-        self.paint_text(layout, lines, origin, &ids);
+        self.paint_text(layout, lines.clone(), origin, &ids);
+        for overlay in &layout.overlays {
+            if overlay.fixed || (!lines.is_empty() && !lines.contains(&overlay.line)) {
+                continue;
+            }
+            let base = if overlay.viewport {
+                Point {
+                    x: Pt::ZERO,
+                    y: self.page_height,
+                }
+            } else {
+                origin
+            };
+            self.paint(
+                &overlay.layout,
+                0..overlay.layout.lines.len(),
+                Point {
+                    x: base.x + overlay.origin.x,
+                    y: base.y - overlay.origin.y,
+                },
+            );
+        }
     }
 
     /// Backgrounds and borders, as one artifact when tagged.

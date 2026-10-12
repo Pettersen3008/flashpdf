@@ -26,6 +26,23 @@ impl<'a> Cursor<'a> {
         Ok(value)
     }
 
+    pub(super) fn offset(&mut self) -> Result<Option<crate::Offset>, ProtocolError> {
+        let kind = self.take(1)?[0];
+        if kind == 0 {
+            return Ok(None);
+        }
+        if kind > 2 {
+            return Err(ProtocolError::InvalidValue("offset kind"));
+        }
+        let value = f32::from_le_bytes(self.take(4)?.try_into().unwrap());
+        if !value.is_finite() {
+            return Err(ProtocolError::InvalidValue("position offset"));
+        }
+        Ok(Some(crate::Offset {
+            value,
+            percent: kind == 2,
+        }))
+    }
     pub(super) fn u16(&mut self) -> Result<u16, ProtocolError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }

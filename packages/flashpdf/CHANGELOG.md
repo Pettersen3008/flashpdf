@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add relative, absolute, and fixed positioning with signed and percentage offsets, containing blocks, and fixed content on every page.
+
 ### Added
 
 - Page setup: `pageFormat` takes `A3`, `A4`, `A5`, `Letter`, `Legal`, or `{ width, height }`, `orientation: 'landscape'` puts the longer side across, and `margin` takes one to four lengths in CSS shorthand order or `{ top, right, bottom, left }`. The body, header, and footer follow all four margins.

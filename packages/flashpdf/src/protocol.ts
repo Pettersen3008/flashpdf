@@ -39,6 +39,8 @@ export type Run = {
 };
 
 const opcode = {
+	positionStart: 28,
+	positionEnd: 29,
 	spacer: 2,
 	stackStart: 3,
 	stackEnd: 4,
@@ -301,6 +303,19 @@ export class ProtocolWriter {
 
 	private height(value: number | undefined) {
 		this.size(value === undefined ? undefined : { kind: 1, value });
+	}
+
+	positionStart(kind: string, offsets: readonly (Dimension | undefined)[]) {
+		if (this.repeating && kind === "fixed")
+			throw new Error("fixed positioning cannot repeat inside page furniture");
+		this.binary.record(opcode.positionStart, () => {
+			this.binary.u8(kind === "relative" ? 0 : kind === "absolute" ? 1 : 2);
+			for (const value of offsets) this.size(value);
+		});
+	}
+
+	positionEnd() {
+		this.binary.record(opcode.positionEnd);
 	}
 
 	boxEnd() {

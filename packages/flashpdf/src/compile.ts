@@ -21,6 +21,7 @@ import {
 	type LineHeight,
 	type NormalizedStyle,
 } from "./style.js";
+import { offset } from "./style.js";
 import { locate, rowOnly } from "./tree.js";
 
 type TextState = {
@@ -205,7 +206,11 @@ function push(runs: Run[], next: Run) {
 /** Runs of an inline node; undefined for a layout node (box, page break, or its own alignment). */
 function inlineRuns(node: StyledNode, context: Context, fonts: Fonts): Run[] | undefined {
 	if (node.kind === "text") return [run(context, node.value)];
-	if (!INLINE_TAGS.has(node.tag)) return undefined;
+	if (
+		!INLINE_TAGS.has(node.tag) ||
+		(node.style.position !== undefined && node.style.position !== "static")
+	)
+		return undefined;
 	if (node.tag === "br") return [lineBreak(node, context)];
 	try {
 		const style = node.style;
@@ -349,7 +354,11 @@ function flow(
 			continue;
 		}
 		flush();
-		separate();
+		if (
+			child.kind === "text" ||
+			(child.style.position !== "absolute" && child.style.position !== "fixed")
+		)
+			separate();
 		compile([child], writer, fonts, context, depth, pageTokens);
 	}
 	flush();
@@ -562,6 +571,19 @@ function element(
 						flow(node.children, writer, fonts, inner, depth + 1, pageTokens, 0);
 						writer.stackEnd();
 					} else flow(node.children, writer, fonts, inner, depth, pageTokens, gap);
+					if (flex)
+						compile(
+							node.children.filter(
+								(child) =>
+									child.kind !== "text" &&
+									(child.style.position === "absolute" || child.style.position === "fixed"),
+							),
+							writer,
+							fonts,
+							inner,
+							depth + 1,
+							pageTokens,
+						);
 				},
 				style.breakInside === "avoid",
 			);
@@ -812,6 +834,8 @@ function table(
 		if (group)
 			try {
 				rowOnly(group.style, false);
+				if (group.style.position && group.style.position !== "static")
+					throw new Error(`position does not apply to <${group.tag}>`);
 				if (group.style.breakBefore === "page" || group.style.breakAfter === "page")
 					throw new Error("page breaks inside tables are not supported; split the table");
 				if (boxStyle(group.style, inner.size))
@@ -825,6 +849,8 @@ function table(
 		const placed = trs.map((tr, index) => {
 			try {
 				rowOnly(tr.style, false);
+				if (tr.style.position && tr.style.position !== "static")
+					throw new Error("position does not apply to <tr>");
 				if (tr.style.breakBefore === "page" || tr.style.breakAfter === "page")
 					throw new Error("page breaks inside tables are not supported; split the table");
 				const own = { ...inherit(tr.style, state, fonts), inRow: false };
@@ -1038,7 +1064,43 @@ export function compile(
 			continue;
 		}
 		try {
-			element(node, writer, fonts, context, depth, pageTokens);
+			if (node.style.position && node.style.position !== "static") {
+				if (
+					node.tag === "br" ||
+					node.tag === "tr" ||
+					node.tag === "thead" ||
+					node.tag === "tbody" ||
+					node.tag === "tfoot"
+				)
+					throw new Error(`position does not apply to <${node.tag}>`);
+				const size = inherit(node.style, context, fonts).size;
+				writer.positionStart(
+					node.style.position,
+					["top", "right", "bottom", "left"].map((key) => {
+						const value = node.style[key as "top"];
+						return value === undefined || value === "auto" ? undefined : offset(value, size);
+					}),
+				);
+				element(
+					{
+						...node,
+						style: {
+							...node.style,
+							position: "static",
+							top: undefined,
+							right: undefined,
+							bottom: undefined,
+							left: undefined,
+						},
+					},
+					writer,
+					fonts,
+					node.style.position === "relative" ? context : { ...context, inRow: false, item: false },
+					depth + 1,
+					pageTokens,
+				);
+				writer.positionEnd();
+			} else element(node, writer, fonts, context, depth, pageTokens);
 		} catch (error) {
 			throw locate(engineError(glyphError(error)), node.where);
 		}

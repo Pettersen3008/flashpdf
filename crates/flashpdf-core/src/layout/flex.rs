@@ -23,6 +23,9 @@ impl Frame {
     // Out of line: a copy at each call costs WASM bytes and saves no measurable time.
     #[inline(never)]
     fn of(element: &Element<'_>) -> Self {
+        if let Element::Position(node) = element {
+            return Self::of(&node.content);
+        }
         let Element::Box(node) = element else {
             return Self {
                 margin: [0.0; 4],
@@ -361,6 +364,14 @@ impl LayoutEngine<'_> {
             .with_width(Pt(border + frame.margins(false)));
         Ok(match child {
             Element::Box(node) => self.layout_box(node, place, Some(Pt(border)), output)?,
+            Element::Position(node) if node.style.kind == crate::PositionKind::Relative => {
+                let mut positioned = node.clone();
+                if let Element::Box(boxed) = &mut *positioned.content {
+                    boxed.size.width = ImageSize::Fixed(Pt(border));
+                    boxed.size.border_box = true;
+                }
+                self.layout_position(&positioned, place, output)?
+            }
             _ => self.layout(child, place, output)?,
         }
         .get())
@@ -368,6 +379,9 @@ impl LayoutEngine<'_> {
 
     /// Min-content and max-content widths of an item's margin box, ignoring its own `width`.
     fn content(&self, element: &Element<'_>, frame: &Frame) -> Result<(f32, f32), LayoutError> {
+        if let Element::Position(node) = element {
+            return self.content(&node.content, frame);
+        }
         let Element::Box(node) = element else {
             return self.intrinsic(element);
         };
@@ -377,8 +391,12 @@ impl LayoutEngine<'_> {
     }
 
     /// Min-content and max-content widths of the element's margin box.
-    fn intrinsic(&self, element: &Element<'_>) -> Result<(f32, f32), LayoutError> {
+    pub(super) fn intrinsic(&self, element: &Element<'_>) -> Result<(f32, f32), LayoutError> {
         Ok(match element {
+            Element::Position(node) if node.style.kind != crate::PositionKind::Relative => {
+                (0.0, 0.0)
+            }
+            Element::Position(node) => self.intrinsic(&node.content)?,
             Element::Paragraph(paragraph) => {
                 let mut scratch = LayoutBuffer::default();
                 let unbounded = LayoutArea::root(Pt(f32::MAX));

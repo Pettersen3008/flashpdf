@@ -23,6 +23,8 @@ pub(super) enum Opcode {
     Avoid = 22,
     FlexStart = 23,
     FlexEnd = 24,
+    PositionStart = 28,
+    PositionEnd = 29,
     End = 255,
 }
 
@@ -51,6 +53,8 @@ impl TryFrom<u8> for Opcode {
             22 => Self::Avoid,
             23 => Self::FlexStart,
             24 => Self::FlexEnd,
+            28 => Self::PositionStart,
+            29 => Self::PositionEnd,
             255 => Self::End,
             _ => return Err(ProtocolError::UnknownOpcode),
         })

@@ -1,6 +1,6 @@
 # FlashPDF CSS compatibility
 
-FlashPDF renders a static CSS subset. It does not embed a browser engine, fetch assets, execute JavaScript in CSS, or support media/container queries, Grid, positioned layout, transforms, filters, animations, or SVG layout.
+FlashPDF renders a static CSS subset. It does not embed a browser engine, fetch assets, execute JavaScript in CSS, or support media/container queries, Grid, transforms, filters, animations, or SVG layout.
 
 The public authoring API is native JSX plus `render`. `PageNumber` and `TotalPages` work anywhere inside the `header`, `footer`, `firstPageHeader`, and `firstPageFooter` options, and the characters they stand for, U+001E and U+001F, reject in your own text. There are no `Document`, `Text`, `Stack`, `Row`, preview, or download helpers; tables use the HTML `table` tags.
 
@@ -117,3 +117,18 @@ Block children stream independently, including those of boxes, so long `<main>` 
 - No border radius, gradients, `height` outside `img`, `min-width`, or `max-width`. `border-top`, `border-right`, `border-bottom`, and `border-left` accept the same solid syntax as `border`; `<hr>` renders a one-point black bottom rule, which its own border declarations override; it takes `break-before` and `break-after`, and `width` only as a flex row child.
 - Tables have no `colgroup`/`col` or `caption`. `vertical-align: baseline` rejects, since cells with different font sizes or padding would misalign, and `vertical-align` rejects outside table cells and rows. `border-spacing` other than 0 rejects: separate borders tile the row, so adjacent full borders double up; use `border-collapse: collapse` for single rules. With collapsed borders, `hidden` acts as `none` instead of hiding the neighbour's border, and at a page break between two body rows each page shows only its own row's half of that line. A `rowSpan` cell never splits across pages; its rows move whole. `table` takes no padding, border, background, or horizontal margins; style its cells or a wrapping `div`. A table inside a flex row, or a `break-inside: avoid` group is atomic like any other content there.
 - `box-decoration-break` rejects: a split box always draws its top border and padding on the first page and its bottom ones on the last, as `slice` does. At-rules other than `@page` and unmatched rules are skipped silently; `@layer` block contents are skipped too, so import `tailwindcss/utilities` rather than the full preflight.
+
+
+## Positioned elements
+
+`position: relative | absolute | fixed` and `top`, `right`, `bottom`, and `left` accept signed absolute lengths, `em`, `rem`, percentages, and `auto`. Relative elements keep their space in normal flow and establish a containing block for absolute descendants. Absolute elements use the nearest positioned ancestor's padding box, or the full page when no positioned ancestor exists. Fixed elements use the full page and repeat on every page without reserving body space. Percent offsets use the containing block's width horizontally and height vertically. When both horizontal offsets apply, an automatic width fills the available space; with neither, the element keeps its static position. `left` beats `right` and `top` beats `bottom` when a specified size overconstrains the box.
+
+A positioned element lays out as one block and never splits across pages. Its contents retain font and image validation, links, and deterministic painting. Fixed elements cannot live inside repeating headers or footers. Their retained layouts share a 16 MiB memory cap, and painting them on each page counts toward the document content cap. Sticky positioning, `z-index`, and clipping are unsupported. Positioning does not apply to `br`, table rows, or table row groups.
+
+```tsx
+<div style={{ position: "relative", padding: 12, height: 80 }}>
+  Invoice details
+  <div style={{ position: "absolute", top: 8, right: 8 }}>PAID</div>
+</div>
+<div style={{ position: "fixed", bottom: "10mm", right: "10mm" }}>Company name</div>
+```

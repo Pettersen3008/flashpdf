@@ -8,6 +8,11 @@ export type RejectedProperty =
 type StyleProperty = Exclude<keyof Style, `--${string}`>;
 type PropertyDefinition = { css?: string; inherited?: boolean; unsupported?: string };
 const properties = {
+	position: {},
+	top: {},
+	right: {},
+	bottom: {},
+	left: {},
 	display: {},
 	flexDirection: { css: "flex-direction" },
 	flexWrap: { css: "flex-wrap" },

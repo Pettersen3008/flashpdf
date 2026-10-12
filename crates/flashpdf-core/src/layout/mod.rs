@@ -1,5 +1,6 @@
 mod flex;
-mod output;
+pub(crate) mod output;
+mod position;
 mod row;
 mod text;
 
@@ -11,7 +12,7 @@ pub(crate) use row::table_width;
 
 use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Table};
 use crate::font::FontBook;
-use crate::geometry::LayoutArea;
+use crate::geometry::{LayoutArea, Point};
 use crate::image::Image;
 use crate::layout::output::PositionedLine;
 use crate::{
@@ -63,14 +64,36 @@ impl From<LayoutError> for RenderError {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct LayoutEngine<'a> {
     fonts: &'a FontBook,
     images: &'a [Image],
+    page: Option<(Pt, Pt)>,
+    container: Option<position::Containing>,
+    measuring: bool,
+    static_origin: Point,
 }
 
 impl<'a> LayoutEngine<'a> {
     pub(crate) fn new(fonts: &'a FontBook, images: &'a [Image]) -> Self {
-        Self { fonts, images }
+        Self {
+            fonts,
+            images,
+            page: None,
+            container: None,
+            measuring: false,
+            static_origin: Point::ZERO,
+        }
+    }
+
+    pub(crate) fn with_page(mut self, width: Pt, height: Pt) -> Self {
+        self.page = Some((width, height));
+        self
+    }
+
+    pub(crate) fn with_origin(mut self, origin: Point) -> Self {
+        self.static_origin = origin;
+        self
     }
 
     pub(crate) fn layout(
@@ -83,6 +106,7 @@ impl<'a> LayoutEngine<'a> {
             return Err(LayoutError::InvalidWidth);
         }
         match element {
+            Element::Position(node) => self.layout_position(node, area, output),
             Element::Paragraph(paragraph) => self.layout_paragraph(paragraph, area, output),
             Element::Box(node) => self.layout_box(node, area, None, output),
             Element::Spacer(spacer) => Ok(spacer.height),

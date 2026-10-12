@@ -14,6 +14,8 @@ pub(crate) const MAX_COLUMNS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Command<'a> {
+    PositionStart(crate::Position),
+    PositionEnd,
     /// One run in one style; the parser lowers it to a one-run `Paragraph`.
     Text {
         text: &'a str,
@@ -94,6 +96,8 @@ pub enum Slot {
 /// The protocol's decoded form owns data across input chunks.
 #[derive(Clone)]
 pub(crate) enum OwnedCommand {
+    PositionStart(crate::Position),
+    PositionEnd,
     Paragraph(TextAlign, [u16; 2], String, Vec<TextRun>, Vec<String>),
     BoxStart(BoxStyle, BoxSize),
     BoxEnd,
@@ -112,6 +116,8 @@ pub(crate) enum OwnedCommand {
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
+            Self::PositionStart(style) => Command::PositionStart(*style),
+            Self::PositionEnd => Command::PositionEnd,
             Self::Paragraph(align, [orphans, widows], text, runs, links) => Command::Paragraph {
                 align: *align,
                 orphans: *orphans,
@@ -270,6 +276,30 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 alt,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
+            Command::PositionStart(style) => {
+                self.check_depth(depth)?;
+                if style
+                    .inset
+                    .iter()
+                    .flatten()
+                    .any(|offset| !offset.value.is_finite())
+                {
+                    return Err(CommandParseError::InvalidRow);
+                }
+                let mut children = self.parse_children(Command::PositionEnd, depth + 1)?;
+                let content = Box::new(if children.len() == 1 {
+                    children.pop().unwrap()
+                } else {
+                    Element::Stack(Stack {
+                        gap: Pt::ZERO,
+                        children,
+                    })
+                });
+                Ok(Element::Position(crate::document::PositionNode {
+                    style,
+                    content,
+                }))
+            }
             Command::BoxStart { style, size } => {
                 self.check_depth(depth)?;
                 let children = self.parse_children(Command::BoxEnd, depth + 1)?;
@@ -363,6 +393,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             | Command::FlexEnd
             | Command::TableEnd
             | Command::PageBreak
+            | Command::PositionEnd
             | Command::Avoid => Err(CommandParseError::UnexpectedCommand),
         }
     }
@@ -419,7 +450,8 @@ pub(crate) fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -
         Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {
             children.iter().all(|child| uniform_rows(child, columns))
         }
-        Element::Paragraph(_)
+        Element::Position(_)
+        | Element::Paragraph(_)
         | Element::Spacer(_)
         | Element::Table(_)
         | Element::Image(_)

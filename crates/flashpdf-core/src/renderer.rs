@@ -47,6 +47,8 @@ pub struct Renderer {
     header: [Option<Furniture>; 2],
     footer: [Option<Furniture>; 2],
     metadata: Metadata,
+    fixed: Vec<crate::layout::output::Overlay>,
+    fixed_bytes: usize,
     table: Option<OpenTable>,
     /// The open page's fill colour and font.
     state: PaintState,
@@ -149,6 +151,8 @@ impl Renderer {
             header: Default::default(),
             footer: Default::default(),
             metadata: Metadata::default(),
+            fixed: Vec::new(),
+            fixed_bytes: 0,
             table: None,
             state: PaintState::default(),
             boxes: Vec::new(),
@@ -183,6 +187,15 @@ impl Renderer {
         self.fonts.mark_layout(layout);
         for image in &layout.images {
             self.used_images[usize::from(image.slot)] = true;
+        }
+        for overlay in &layout.overlays {
+            self.mark_used(&overlay.layout);
+            if overlay.fixed {
+                self.fixed_bytes = self.fixed_bytes.saturating_add(overlay.layout.capacity());
+                if self.fixed_bytes <= MAX_CONTENT_BYTES {
+                    self.fixed.push(overlay.clone());
+                }
+            }
         }
     }
 
@@ -274,11 +287,18 @@ impl Renderer {
             return Err(RenderError::InvalidLayout);
         };
         output.clear();
-        Ok(LayoutEngine::new(&self.fonts, &self.images).layout(
-            &element,
-            LayoutArea::root(self.page.content_width()),
-            output,
-        )?)
+        Ok(LayoutEngine::new(&self.fonts, &self.images)
+            .with_page(self.page.page().width, self.page.page().height)
+            .with_origin(Point {
+                x: self.page.page().margin.left,
+                y: self.page.page().height - self.cursor.origin(self.page).y
+                    + self.ahead(false, None),
+            })
+            .layout(
+                &element,
+                LayoutArea::root(self.page.content_width()),
+                output,
+            )?)
     }
 
     /// A block too tall for the first page's body can still fit a later, taller one.
@@ -309,7 +329,9 @@ impl Renderer {
     }
 
     fn check_size(&self) -> Result<(), RenderError> {
-        if self.content_bytes + self.contents.last().unwrap().len() > MAX_CONTENT_BYTES {
+        if self.fixed_bytes > MAX_CONTENT_BYTES
+            || self.content_bytes + self.contents.last().unwrap().len() > MAX_CONTENT_BYTES
+        {
             return Err(RenderError::DocumentTooLarge);
         }
         Ok(())
@@ -348,11 +370,14 @@ impl Renderer {
         }
         self.begin(false)?;
         self.layout.clear();
-        let height = LayoutEngine::new(&self.fonts, &self.images).layout(
-            element,
-            self.column,
-            &mut self.layout,
-        )?;
+        let height = LayoutEngine::new(&self.fonts, &self.images)
+            .with_page(self.page.page().width, self.page.page().height)
+            .with_origin(Point {
+                x: self.page.page().margin.left,
+                y: self.page.page().height - self.cursor.origin(self.page).y
+                    + self.ahead(false, None),
+            })
+            .layout(element, self.column, &mut self.layout)?;
         let layout = std::mem::take(&mut self.layout);
         self.mark_used(&layout);
         self.place(element, layout, height)?;
@@ -706,8 +731,14 @@ impl Renderer {
         table.index += 1;
         self.begin(false)?;
         self.layout.clear();
-        let height =
-            LayoutEngine::new(&self.fonts, &self.images).layout(row, area, &mut self.layout)?;
+        let height = LayoutEngine::new(&self.fonts, &self.images)
+            .with_page(self.page.page().width, self.page.page().height)
+            .with_origin(Point {
+                x: self.page.page().margin.left,
+                y: self.page.page().height - self.cursor.origin(self.page).y
+                    + self.ahead(false, None),
+            })
+            .layout(row, area, &mut self.layout)?;
         let layout = std::mem::take(&mut self.layout);
         self.mark_used(&layout);
         let reserved = edges.header_height + edges.footer_height;
@@ -750,11 +781,14 @@ impl Renderer {
         let mut buffer = LayoutBuffer::default();
         let mut height = Pt::ZERO;
         for row in rows {
-            height += LayoutEngine::new(&self.fonts, &self.images).layout(
-                row,
-                area.translated(Pt::ZERO, height),
-                &mut buffer,
-            )?;
+            height += LayoutEngine::new(&self.fonts, &self.images)
+                .with_page(self.page.page().width, self.page.page().height)
+                .with_origin(Point {
+                    x: self.page.page().margin.left,
+                    y: self.page.page().height - self.cursor.origin(self.page).y
+                        + self.ahead(false, None),
+                })
+                .layout(row, area.translated(Pt::ZERO, height), &mut buffer)?;
         }
         self.mark_used(&buffer);
         Ok((buffer, height))
@@ -781,6 +815,7 @@ impl Renderer {
             self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
             &mut self.state,
         )
+        .with_page_height(self.page.page().height)
     }
 
     /// Ends the page below the painted content, under a table's footer if its rows end it.
@@ -817,6 +852,26 @@ impl Renderer {
             let mut number = itoa::Buffer::new();
             let number = number.format(index + 1);
             let before = self.contents[index].len();
+            for fixed in &self.fixed {
+                let mut state = PaintState::default();
+                let content = &mut self.contents[index];
+                if self.metadata.tagged {
+                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                }
+                PdfPainter::new(content, &mut self.links[index], None, &mut state)
+                    .with_page_height(page.height)
+                    .paint(
+                        &fixed.layout,
+                        0..fixed.layout.lines.len(),
+                        Point {
+                            x: fixed.origin.x,
+                            y: page.height - fixed.origin.y,
+                        },
+                    );
+                if self.metadata.tagged {
+                    content.end_marked_content();
+                }
+            }
             for (slots, footer) in &furniture {
                 let Some(item) = pick(slots, index == 0) else {
                     continue;
@@ -849,6 +904,7 @@ impl Renderer {
                     None,
                     &mut PaintState::default(),
                 )
+                .with_page_height(page.height)
                 .paint(
                     &layout,
                     0..layout.lines.len(),

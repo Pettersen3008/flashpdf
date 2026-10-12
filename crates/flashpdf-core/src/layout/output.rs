@@ -3,6 +3,7 @@ use std::ops::Range;
 use crate::geometry::Point;
 use crate::{BoxStyle, FontId, Pt, Rgb, TextAlign};
 
+#[derive(Clone)]
 pub(crate) struct PositionedLine {
     pub(crate) segments: Range<usize>,
     /// Baseline; `top..bottom` is the line box the page splitter measures.
@@ -15,6 +16,7 @@ pub(crate) struct PositionedLine {
 }
 
 /// One style's stretch of a line; `x` is its offset from the line start.
+#[derive(Clone)]
 pub(crate) struct Segment {
     pub(crate) text: Range<usize>,
     pub(crate) x: Pt,
@@ -33,6 +35,7 @@ pub(crate) struct PositionedBox {
 
 /// Paint attributes of the segment at the same index. The text layouter owns
 /// `Segment`, so these ride beside it instead of inside it.
+#[derive(Clone)]
 pub(crate) struct Decoration {
     pub(crate) underline: bool,
     pub(crate) line_through: bool,
@@ -43,6 +46,7 @@ pub(crate) struct Decoration {
     pub(crate) descent: Pt,
 }
 
+#[derive(Clone)]
 pub(crate) struct PositionedImage {
     pub(crate) origin: Point,
     pub(crate) width: Pt,
@@ -54,7 +58,7 @@ pub(crate) struct PositionedImage {
     pub(crate) line: usize,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct LayoutBuffer {
     pub(crate) lines: Vec<PositionedLine>,
     pub(crate) segments: Vec<Segment>,
@@ -63,6 +67,7 @@ pub(crate) struct LayoutBuffer {
     pub(crate) boxes: Vec<PositionedBox>,
     pub(crate) images: Vec<PositionedImage>,
     pub(crate) links: Vec<String>,
+    pub(crate) overlays: Vec<Overlay>,
 }
 
 /// Buffer lengths before or after a cell, so its content can move once the row height is known.
@@ -71,6 +76,7 @@ pub(crate) struct Marks {
     pub(crate) lines: usize,
     pub(crate) boxes: usize,
     pub(crate) images: usize,
+    pub(crate) overlays: usize,
 }
 
 impl LayoutBuffer {
@@ -79,6 +85,7 @@ impl LayoutBuffer {
             lines: self.lines.len(),
             boxes: self.boxes.len(),
             images: self.images.len(),
+            overlays: self.overlays.len(),
         }
     }
 
@@ -91,6 +98,11 @@ impl LayoutBuffer {
         }
         for paint in &mut self.boxes[from.boxes..to.boxes] {
             paint.origin.y += dy;
+        }
+        for overlay in &mut self.overlays[from.overlays..to.overlays] {
+            if !overlay.viewport {
+                overlay.origin.y += dy;
+            }
         }
         for image in &mut self.images[from.images..to.images] {
             image.origin.y += dy;
@@ -105,6 +117,7 @@ impl LayoutBuffer {
         self.boxes.clear();
         self.images.clear();
         self.links.clear();
+        self.overlays.clear();
     }
 
     /// Heap bytes held, leaving out link and alt text.
@@ -117,5 +130,19 @@ impl LayoutBuffer {
             + self.boxes.capacity() * size_of::<PositionedBox>()
             + self.images.capacity() * size_of::<PositionedImage>()
             + self.links.capacity() * size_of::<String>()
+            + self
+                .overlays
+                .iter()
+                .map(|overlay| size_of::<Overlay>() + overlay.layout.capacity())
+                .sum::<usize>()
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct Overlay {
+    pub(crate) layout: Box<LayoutBuffer>,
+    pub(crate) origin: Point,
+    pub(crate) viewport: bool,
+    pub(crate) fixed: bool,
+    pub(crate) line: usize,
 }

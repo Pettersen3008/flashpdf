@@ -353,3 +353,22 @@ pub enum RenderError {
     /// Content is taller than a box's fixed or maximum height, or than its flex container.
     ContentOverflow,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PositionKind {
+    Relative,
+    Absolute,
+    Fixed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Offset {
+    pub value: f32,
+    pub percent: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Position {
+    pub kind: PositionKind,
+    pub inset: Edges<Option<Offset>>,
+}
