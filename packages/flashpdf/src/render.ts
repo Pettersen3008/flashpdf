@@ -1,12 +1,13 @@
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
-import { number, props } from "./assert.js";
+import { props } from "./assert.js";
 import { asError, Binary } from "./binary.js";
-import { compile, compileBody } from "./compile.js";
+import { compile, compileBody, engineError } from "./compile.js";
 import { styleResolver } from "./css.js";
-import type { Element } from "./element.js";
-import { registerFonts } from "./fonts.js";
+import type { Edges, Element, Length } from "./element.js";
+import { glyphError, registerFonts } from "./fonts.js";
+import { pageSetup } from "./page.js";
 import { ProtocolWriter } from "./protocol.js";
-import { pageOverflow, resolveTree, type Node } from "./tree.js";
+import { locate, pageOverflow, resolveTree, type Node } from "./tree.js";
 
 /** A family without an italic face for a weight slants its upright face instead. */
 export type EmbeddedFont = {
@@ -24,12 +25,29 @@ export type PdfMetadata = {
 	language?: string | undefined;
 };
 export type RenderOptions = {
-	pageFormat?: "A4" | "Letter" | undefined;
-	margin?: number | undefined;
+	/** A named size, or a custom size where a number is points. */
+	pageFormat?:
+		| "A3"
+		| "A4"
+		| "A5"
+		| "Letter"
+		| "Legal"
+		| { width: Length; height: Length }
+		| undefined;
+	/** Puts the longer side of the page size across (landscape) or down (portrait). */
+	orientation?: "portrait" | "landscape" | undefined;
+	/** One to four lengths in CSS shorthand order, or each side. */
+	margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length } | undefined;
 	stylesheets?: readonly string[] | undefined;
 	fonts?: readonly EmbeddedFont[] | undefined;
-	footer?: Element | undefined;
-	header?: Element | undefined;
+	/** Paints on every page above the body; its height counts each page number as five digits. */
+	header?: Element | Iterable<Element> | undefined;
+	/** Paints on every page below the body; its height counts each page number as five digits. */
+	footer?: Element | Iterable<Element> | undefined;
+	/** Replaces `header` on the first page; `null` leaves the first page without one. */
+	firstPageHeader?: Element | Iterable<Element> | null | undefined;
+	/** Replaces `footer` on the first page; `null` leaves the first page without one. */
+	firstPageFooter?: Element | Iterable<Element> | null | undefined;
 	metadata?: PdfMetadata | undefined;
 	tagged?: boolean | undefined;
 	/** Bookmarks every `h1` to `h6` in document order, nested by level, and opens the outline panel. */
@@ -49,6 +67,13 @@ export type FacturX = { xml: Uint8Array; profile: (typeof PROFILES)[number] };
 
 const RELATIONSHIPS = ["Source", "Data", "Alternative", "Supplement", "Unspecified"] as const;
 const PROFILES = ["MINIMUM", "BASIC WL", "BASIC", "EN 16931", "EXTENDED", "XRECHNUNG"] as const;
+/** Option, the block it fills, and whether that block replaces the other on the first page. */
+const FURNITURE = [
+	["header", "header", false],
+	["footer", "footer", false],
+	["firstPageHeader", "header", true],
+	["firstPageFooter", "footer", true],
+] as const;
 
 type LoadWasm = () => Promise<{ memory: { buffer: ArrayBufferLike } }>;
 
@@ -59,11 +84,11 @@ export function createRenderer(loadWasm: LoadWasm) {
 	): Promise<Uint8Array> {
 		const p = props(options ?? {}, [
 			"pageFormat",
+			"orientation",
 			"margin",
 			"stylesheets",
 			"fonts",
-			"footer",
-			"header",
+			...FURNITURE.map(([option]) => option),
 			"metadata",
 			"tagged",
 			"outline",
@@ -71,12 +96,17 @@ export function createRenderer(loadWasm: LoadWasm) {
 			"attachments",
 			"facturx",
 		]);
-		const format = p.pageFormat === undefined ? "A4" : p.pageFormat;
-		if (format !== "A4" && format !== "Letter") throw new Error("invalid page format");
-		const margin = number(p.margin === undefined ? 36 : p.margin);
-		const width = format === "A4" ? 595 : 612;
-		const height = format === "A4" ? 842 : 792;
-		if (margin * 2 >= Math.min(width, height)) throw new Error("invalid margin");
+		if (
+			p.stylesheets !== undefined &&
+			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
+		)
+			throw new Error("invalid stylesheets");
+		const page = pageSetup(
+			p.pageFormat,
+			p.orientation,
+			p.margin,
+			p.stylesheets as readonly string[] | undefined,
+		);
 		const metadata =
 			p.metadata === undefined
 				? {}
@@ -96,26 +126,21 @@ export function createRenderer(loadWasm: LoadWasm) {
 		if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
 		if (p.outline !== undefined && typeof p.outline !== "boolean")
 			throw new Error("invalid outline option");
-		if (
-			p.stylesheets !== undefined &&
-			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
-		)
-			throw new Error("invalid stylesheets");
 		// Options are checked before user components run; fonts need the engine to parse.
 		const tree = await resolveTree(document);
 		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
-		const repeating: ["header" | "footer", readonly Node[]][] = [];
-		for (const position of ["header", "footer"] as const) {
-			if (p[position] === undefined) continue;
-			const nodes = await resolveTree(p[position]);
-			if (nodes.length !== 1 || nodes[0]?.kind !== "element")
-				throw new Error(`${position} must resolve to one element`);
-			repeating.push([position, nodes]);
+		const repeating: ["header" | "footer", boolean, string, readonly Node[]][] = [];
+		for (const [option, position, first] of FURNITURE) {
+			if (p[option] === undefined) continue;
+			const nodes = await resolveTree(p[option]);
+			if (nodes.some((node) => node.kind !== "element"))
+				throw new Error(`${option} expects elements; wrap its text in one`);
+			repeating.push([position, first, option, nodes]);
 		}
 		const wasm = await loadWasm();
 		const styles = styleResolver(
 			p.stylesheets as readonly string[] | undefined,
-			width - margin * 2,
+			page.width - page.margin[1]! - page.margin[3]!,
 		);
 		// The second pass pushes the record the engine rejected alone, so the element that wrote it reports.
 		const emit = (replayAt?: number): Uint8Array => {
@@ -125,11 +150,11 @@ export function createRenderer(loadWasm: LoadWasm) {
 			try {
 				const fonts = registerFonts(renderer, p.fonts);
 				const writer = new ProtocolWriter(binary, renderer);
-				writer.header(width, height, margin);
+				writer.header(page.width, page.height, page.margin);
 				writer.metadata(metadata, p.tagged === true);
 				attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
-				for (const [position, nodes] of repeating) {
-					writer.repeatStart(position);
+				for (const [position, first, option, nodes] of repeating) {
+					writer.repeatStart(position, first, option);
 					compile(styles(nodes), writer, fonts, undefined, 0, true);
 					writer.repeatEnd();
 				}

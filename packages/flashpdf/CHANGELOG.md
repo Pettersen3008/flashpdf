@@ -29,12 +29,62 @@
 - A styled 10,000-row invoice renders about 68% faster (630 ms to 200 ms). Elements with the same parent style, tag, id, classes, and inline style share one computed style; box styles and colours are parsed once; stylesheets are parsed once per render instead of once each for the body, header, and footer. Protocol records go to WASM up to 64 KiB per batch instead of one call per record, and `PdfRenderer.records()` reports which record the engine rejected, so errors still name the element that caused them. The protocol framing and output bytes are unchanged.
 - `render` resolves `header` and `footer` components before it registers fonts and attachments, so an error in one of them now comes before a font or attachment error.
 - A rule with an escaped selector, such as Tailwind's `.bg-black\/50`, now matches and validates instead of being skipped, so `stylesheet()` rejects one whose declarations the subset lacks.
+- Page setup: `pageFormat` takes `A3`, `A4`, `A5`, `Letter`, `Legal`, or `{ width, height }`, `orientation: 'landscape'` puts the longer side across, and `margin` takes one to four lengths in CSS shorthand order or `{ top, right, bottom, left }`. The body, header, and footer follow all four margins.
+- `@page { size; margin }` in stylesheets, with the four margin longhands. `size` takes `auto`, a named size with an optional orientation, or one or two lengths. Render options win over `@page`.
+- `mm`, `cm`, `in`, `pc`, and `Q` lengths wherever a length or width is accepted, converted at 72pt per inch.
+- `header` and `footer` take any element tree the body takes: several lines, bold and coloured runs, links, flex rows and columns, images, tables, borders, and backgrounds. `PageNumber` and `TotalPages` work anywhere inside them. Each page lays its header and footer out again with its own numbers; the reserved height counts every number as ten digits.
+- `firstPageHeader` and `firstPageFooter` replace the header and footer on the first page, and `null` leaves the first page without one. Each page reserves the height of the header and footer it paints.
+- A box with padding, a border, a background, or side margins splits across pages once it is taller than a page, like CSS `box-decoration-break: slice`. The first page draws its top border and padding, the last page its bottom ones, and every page its side borders, side padding, and background; the content continues below the page header. Nested boxes split too, and a table inside one streams its rows and repeats its header on every page. Before, such a box failed with `PageOverflow`, so an invoice wrapped in `<main style={{ padding: 24 }}>` could not pass one page. A box that fits on one page still moves whole, so documents that rendered before keep their bytes.
+- The engine measures a box it buffers each time its commands double past 64 KiB and streams the box once it is taller than a page, so memory stays near one page. A 10,000-row table in a padded, bordered card renders 176 pages in 4.6 MB of WASM memory, against 4.1 MB for the same table outside a box; before, it grew to 31.7 MB and failed. The WASM grows by 6 KB raw (4 KB gzip).
+- Flex alignment in rows and columns: `justify-content` (`flex-start`, `flex-end`, `center`, `space-between`, `space-around`, `space-evenly`), and `align-items` and `align-self` (`stretch`, `flex-start`, `flex-end`, `center`), plus `start`, `end`, and `normal`. Tailwind's `justify-between` and `items-center` work. A column needs a `height` or `min-height` for `justify-content`.
+- Flex item sizing in rows: `flex-grow`, `flex-shrink`, `flex-basis` in `pt`, `px`, `rem`, or `%`, and every `flex` shorthand form, resolved as CSS does. An item shrinks no further than its longest word or image unless `min-width` allows. `auto` margins on items take the free space, so `ml-auto` pushes an item right.
+- Box sizing: `width`, `min-width`, `max-width`, `height`, `min-height`, and `max-height` on blocks, paragraphs, headings, and `hr`; `box-sizing: border-box`; and `margin-left` and `margin-right: auto`, which centre a block with a `width` or `max-width`. A percent height resolves against the parent's fixed height. A box with a `height` or `max-height` moves whole to the next page when it does not fit, and content taller than it rejects with `ContentOverflow`.
+
+### Changed
+
+- A flex row keeps the earlier column model, where an item without `flex` or `width` takes an equal share, until the row or an item uses a property above, so existing documents render unchanged. `flex: auto` beside a `width`, a `flex` length basis, and `flex: none` without a width no longer reject; they switch the row to the CSS algorithm.
+- `flex-wrap: wrap` and `align-items: baseline` reject with a reason, as do `justify-content` and `align-items` outside a flex container, and `flex-grow` or `flex-basis` on a column item.
+- The binary protocol is version 10: `BoxStart` carries sizes, `box-sizing`, and auto margins, and new `FlexStart` and `FlexEnd` records carry a flex container. The JavaScript and WASM halves ship together, so this affects no public API.
+
+### Changed
+
+- A page's header and footer may take at most half the page between its margins; more rejects with `PageOverflow` naming the option. Headers and footers lay out like body text, so whitespace collapses, and a right-aligned line can move by under 0.0001pt.
+- The binary protocol is version 12: a `Header` or `Footer` record carries a first-page flag, and the next top-level block is its content. The JavaScript and WASM halves ship together, so this affects no public API.
+
+- `@page` rules apply instead of being skipped. Page selectors such as `:first`, margin boxes such as `@top-center`, and properties other than `size` and the margins reject with a reason.
+- The binary protocol is version 8: the header carries four page margins. The JavaScript and WASM halves ship together, so this affects no public API.
+- A box with padding, a border, a background, or side margins splits across pages, like CSS `box-decoration-break: slice`. The first page draws its top border and padding, the last page its bottom ones, and every page its side borders, side padding, and background; the content continues below the page header. Nested boxes split too, and a table inside one streams its rows and repeats its header on every page. Before, such a box failed with `PageOverflow`, so an invoice wrapped in `<main style={{ padding: 24 }}>` could not pass one page.
+- The engine streams a box's children as they arrive, so memory stays near one page. A 10,000-row table in a padded, bordered card renders 176 pages in 4.6 MB of WASM memory, against 4.1 MB for the same table outside a box; before, it grew to 31.7 MB and failed. The WASM grows by 6 KB raw (4 KB gzip).
+- `orphans` and `widows`, inherited and 2 by default: the fewest lines of a paragraph that a page break leaves at the bottom of a page and carries to the top of the next.
+- `break-before` and `break-after` take `avoid` and `avoid-page`, which keep an element with the content on the other side of the break: a heading with the first lines of its paragraph, a table row with the next row, or a paragraph's last lines with the block after it. `break-inside` takes `avoid-page`, and `break-inside: avoid` on a paragraph keeps it on one page. When no allowed break point is left, the engine drops `orphans` and `widows` first, then the avoid rules, and it holds back at most one page of content to decide.
+- `break-before: page` and `break-after: page` work inside a box with padding, a border, or a background, which continues on the next page. They failed with `invalid nesting` before.
+
+### Changed
+
+- Pages break as CSS Fragmentation describes, so documents that rendered before can paginate differently:
+  - A box with padding, a border, a background, or side margins that does not fit the space left breaks at the page end, as browsers do, instead of moving whole to the next page. It moves only when its first lines do not fit below its top border and padding, so no page ends with a box's top edge alone, and its bottom border and padding stay with its last lines.
+  - A paragraph keeps two lines on each side of a break (`orphans: 2; widows: 2`), so a page no longer ends or starts with one line of a paragraph, and a paragraph of three lines or fewer moves whole. `orphans: 1; widows: 1` restores the old line breaks.
+  - `h1` to `h6` default to `break-after: avoid`, as print style sheets do (CSS 2.1 Appendix D, Prince, WeasyPrint), so a heading moves to the next page with its first lines instead of ending a page alone. Browsers and the HTML Standard set no break properties on headings; `break-after: auto` restores their behaviour.
+  - A margin at an unforced page break truncates to zero. Before, a spacing margin that did not fit moved to the top of the next page, and a box that moved kept its top margin there.
+  - A forced break with nothing above it on its page does nothing, so `break-before: page` on the first element no longer adds a blank first page, and `break-after: page` followed by `break-before: page` makes one break. A forced break before a box's first child moves the box along, and one after its last child comes after the box.
+  - Borders and backgrounds of boxes outside flex rows, tables, and `break-inside: avoid` groups paint beneath the page's content, as split boxes did, so such documents get new content-stream bytes even where pages break as before. The CSS invoice example keeps its bytes.
+- The binary protocol is version 18: a `Paragraph` record carries `orphans` and `widows` as two u16 after its alignment, and an `Avoid` record (opcode 22) marks an avoided break. The JavaScript and WASM halves ship together, so this affects no public API. The WASM grows by 3.9 KB raw (1.9 KB gzip).
+- `break-before` and `break-after` reject `left`, `right`, `recto`, and `verso`, naming the reason: pages have no sides.
+
+- The engine compiles for speed instead of size (`opt-level = 3`, `wasm-opt -O3`). Layout and PDF writing in WASM run about 32% faster; the WASM grows from 241 KB to 295 KB raw (114 KB to 125 KB gzip). Output bytes are unchanged.
+- Content streams set `rg` and `Tf` only when the page's fill colour or font changes, not again for every line and table cell, and print colours with three decimals instead of float noise such as `0.13333334`. The 10,000-row invoice's uncompressed content shrinks from 3.25 MB to 1.96 MB and the PDF from 288 KB to 265 KB.
+- The binary protocol is version 9: a `TableStart`'s footer rows follow its header rows, before the body rows. The JavaScript and WASM halves ship together, so this affects no public API.
+- The binary protocol is version 11: each `RowStart` column carries a slot byte that starts a cell with its vertical alignment and optional row span, joins the cell to its left, or marks a column a row span covers. The JavaScript and WASM halves ship together, so this affects no public API.
+- A `PageOverflow` inside a box names the content that does not fit instead of suggesting document margins, and a `break-inside: avoid` box taller than a page says to drop `break-inside: avoid`. `box-decoration-break` rejects with a reason, because a split box always paints as `slice` does.
+
 ### Fixed
 
+- A table's body rows stream: the engine lays out and places each row as it arrives and keeps only the header, footer, and current row. Before, the whole table buffered, so 20,000 padded rows (30,000 plain) failed with `block exceeds 16 MiB`, and 10,000 rows grew WASM memory to 29 MB. 50,000 rows now render in 16 MB. A table inside a flex row or a `break-inside: avoid` group still buffers whole.
 - With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.
 - Blocks that move whole, such as decorated boxes, rows, and table rows, reject when they do not fit between the header and footer, instead of painting over the footer and into the bottom margin.
 - Headers, footers, and repeated table headers count toward the 16 MiB painted-content cap as they paint, so a long footer on thousands of pages rejects with `DocumentTooLarge` instead of growing to gigabytes.
 - A line that mixes font sizes or line heights is as tall as its highest ascent plus its lowest depth below the baseline, so it no longer overlaps the next line.
+
 ### Fixed
 
 - A PNG with transparency stops inflating at the size its dimensions allow, so a small compressed image can no longer exhaust memory.
@@ -44,6 +94,7 @@
 - A document stops at 10,000 pages with `document exceeds 10000 pages`. JavaScript counts explicit page breaks and the engine counts every page. Pages no longer reserve 1 KB of content buffer each, so 9,999 page breaks take 2.8 MB of WASM memory instead of 14.4 MB.
 - Images are capped at 64 MiB per render in JavaScript before the bytes are copied into WASM memory, as fonts are.
 - A font or image that fails to register no longer counts toward its 64 MiB per-render cap.
+
 ### Added
 
 - `oklch()` and `oklab()` colours, converted to sRGB and clipped per channel. Tailwind v4 emits them for every colour utility.
@@ -59,6 +110,9 @@
 - Structural selectors: `:first-child`, `:last-child`, `:only-child`, `:nth-child()`, `:nth-last-child()`, the five `-of-type` forms, `:empty`, `:root`, and `*`. Siblings are the element children of a parent on the resolved tree, so text, fragments, and arrays do not count.
 - `:is()`, `:where()`, and `:not()` with selector lists, complex selectors included, and the next-sibling `+` and subsequent-sibling `~` combinators. `:is()` and `:not()` take their most specific argument and `:where()` adds nothing.
 - Tailwind v4's `first:`, `last:`, `only:`, `odd:`, `even:`, `empty:`, `nth-*:`, `*:`, `space-y-*`, and `divide-y` utilities render. They compile to these selectors, and FlashPDF skipped them before.
+- `colSpan` and `rowSpan` on `td` and `th`. A spanning cell takes the summed widths of its columns, and each column takes its width from its first cell without `colSpan`, so an invoice's "Subtotal" can span the description columns. Rows that a `rowSpan` joins stay in one row group and move between pages together; the last row grows when the spanning cell needs more height.
+- `vertical-align: top | middle | bottom` on `td` and `th`, and on `tr` and row groups for their cells. `baseline` rejects.
+- `border-collapse: collapse` draws one line between neighbouring cells: the wider border wins, and on a tie a cell's beats its row's. `border-collapse: separate` and `border-spacing: 0` describe what tables already draw; other spacing rejects.
 
 ### Fixed
 
@@ -92,6 +146,7 @@
 - A `flex` grow above 0 with a length basis, or with `auto` beside a `width`, rejects. Columns keep only the grow factor, so the basis was dropped.
 - U+001E and U+001F reject in user text. They are the page number and total pages tokens, so they threw in body text and became page numbers in a footer. `PageNumber` and `TotalPages` still emit them.
 - A `width` or image `height` too large for a 32-bit float rejects as an invalid width instead of reaching the engine.
+
 ### Added
 
 - `RenderOptions.pdfa: '3b'` writes PDF/A-3b: XMP metadata that repeats `metadata`, an sRGB output intent, and a document ID hashed from the content. In this mode, text that would use the unembedded Helvetica and CMYK JPEGs reject.

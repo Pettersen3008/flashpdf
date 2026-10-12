@@ -1,7 +1,7 @@
 import { inherited } from "../css/properties.js";
 import { parseBorder } from "./border.js";
 import { decoration } from "./decoration.js";
-import { CORNERS, edgeValues, SIDES } from "./length.js";
+import { CORNERS, edgeValues, flexShorthand, SIDES } from "./length.js";
 import { parseListStyle } from "./list.js";
 import type { NormalizedStyle } from "./types.js";
 
@@ -14,8 +14,13 @@ const INITIAL: Record<string, unknown> = {
 	textAlign: "left",
 	textDecoration: "none",
 	lineHeight: "normal",
+	orphans: 2,
+	widows: 2,
 	backgroundColor: "transparent",
 	opacity: 1,
+	flexGrow: 0,
+	flexShrink: 1,
+	flexBasis: "auto",
 	...Object.fromEntries(
 		SIDES.flatMap((side) => [
 			[`margin${side}`, 0],
@@ -51,6 +56,7 @@ function longhands(key: string): string[] {
 	if (key === "borderWidth" || key === "borderColor" || key === "borderStyle")
 		return SIDES.map((side) => `border${side}${key.slice(6)}`);
 	if (key === "borderRadius") return CORNERS.map((corner) => `border${corner}Radius`);
+	if (key === "flex") return ["flexGrow", "flexShrink", "flexBasis"];
 	return [key === "background" ? "backgroundColor" : key];
 }
 
@@ -132,7 +138,8 @@ export function normalize(
 			const parsed = parseListStyle(item);
 			result.listStyleType = parsed.type;
 			result.listStylePosition = parsed.position;
-		} else if (key === "background") result.backgroundColor = item;
+		} else if (key === "flex") Object.assign(result, flexShorthand(item));
+		else if (key === "background") result.backgroundColor = item;
 		else result[key] = item;
 	}
 	return result as NormalizedStyle;

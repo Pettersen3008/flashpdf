@@ -7,9 +7,9 @@ use pdf_writer::{Content, Name, Str};
 
 use crate::font::font_name;
 use crate::geometry::Point;
-use crate::layout::{Gap, LayoutBuffer, Segment, MARKER_SHAPE};
+use crate::layout::{Gap, LayoutBuffer, PositionedBox, Segment, MARKER_SHAPE};
 use crate::vector::{alpha_name, dash, op};
-use crate::{BoxStyle, LineStyle, Pt, Radii, Rgb, TextAlign, OPAQUE};
+use crate::{BoxStyle, FontId, LineStyle, Pt, Radii, Rgb, TextAlign, OPAQUE};
 
 type Corners = [[f32; 2]; 4];
 
@@ -24,6 +24,14 @@ pub(crate) enum PageTag {
     Figure(String),
 }
 
+/// The fill colour and font a page's content stream last set, so painting skips
+/// operators that would not change them. Both persist across `BT`/`ET`.
+#[derive(Default)]
+pub(crate) struct PaintState {
+    fill: Option<Rgb>,
+    font: Option<(FontId, Pt)>,
+}
+
 pub(crate) struct PdfPainter<'a> {
     content: &'a mut Content,
     links: &'a mut Vec<PageLink>,
@@ -32,6 +40,7 @@ pub(crate) struct PdfPainter<'a> {
     alphas: &'a mut Vec<[u8; 2]>,
     /// The fill and stroke alpha in force; every `paint` ends opaque.
     alpha: u8,
+    state: &'a mut PaintState,
 }
 
 impl<'a> PdfPainter<'a> {
@@ -40,12 +49,14 @@ impl<'a> PdfPainter<'a> {
         links: &'a mut Vec<PageLink>,
         tags: Option<&'a mut Vec<PageTag>>,
         alphas: &'a mut Vec<[u8; 2]>,
+        state: &'a mut PaintState,
     ) -> Self {
         Self {
             content,
             links,
             tags,
             alphas,
+            state,
             alpha: OPAQUE,
         }
     }
@@ -88,20 +99,18 @@ impl<'a> PdfPainter<'a> {
                 }
             }
         }
-        if self.tags.is_some() {
-            self.content.begin_marked_content(Name(b"Artifact"));
-        }
-        self.paint_boxes(layout, origin);
-        if self.tags.is_some() {
-            self.content.end_marked_content();
-        }
+        self.paint_boxes(&layout.boxes, origin);
         self.paint_images(layout, lines.clone(), origin, &ids);
         self.paint_text(layout, lines, origin, &ids);
         self.set_alpha(OPAQUE);
     }
 
-    fn paint_boxes(&mut self, layout: &LayoutBuffer, origin: Point) {
-        for paint in &layout.boxes {
+    /// Backgrounds and borders, as one artifact when tagged.
+    pub(crate) fn paint_boxes(&mut self, boxes: &[PositionedBox], origin: Point) {
+        if self.tags.is_some() {
+            self.content.begin_marked_content(Name(b"Artifact"));
+        }
+        for paint in boxes {
             let style = &paint.style;
             let x = origin.x.get() + paint.origin.x.get();
             let y = origin.y.get() - paint.origin.y.get() - paint.height.get();
@@ -158,6 +167,10 @@ impl<'a> PdfPainter<'a> {
                 }
             }
         }
+        if self.tags.is_some() {
+            self.content.end_marked_content();
+        }
+        self.set_alpha(OPAQUE);
     }
 
     /// A box with rounded corners, or a uniform border under an alpha: the background fills the
@@ -286,7 +299,7 @@ impl<'a> PdfPainter<'a> {
         }
     }
 
-    /// One text object per line; `Tf` and `rg` change only where the style does.
+    /// One text object per line; `Tf` and `rg` appear only where the page's state changes.
     /// Underlines, strike-throughs, and link rectangles follow per segment.
     fn paint_text(
         &mut self,
@@ -345,18 +358,8 @@ impl<'a> PdfPainter<'a> {
             let mut previous: Option<&Segment> = None;
             for (index, segment) in segments.iter().enumerate() {
                 self.set_alpha(layout.decorations[line.segments.start + index].alpha);
-                if previous.is_none_or(|last| last.color != segment.color) {
-                    self.set_fill(segment.color);
-                }
-                if previous
-                    .is_none_or(|last| last.font != segment.font || last.size != segment.size)
-                {
-                    let mut buffer = [0_u8; 4];
-                    self.content.set_font(
-                        Name(font_name(segment.font, &mut buffer)),
-                        segment.size.get(),
-                    );
-                }
+                self.set_fill(segment.color);
+                self.set_font(segment.font, segment.size);
                 let spacing = previous.map_or(0.0, |last| last.letter_spacing);
                 if segment.letter_spacing != spacing {
                     self.content.set_char_spacing(segment.letter_spacing);
@@ -486,41 +489,21 @@ impl<'a> PdfPainter<'a> {
         self.content.close_path();
     }
 
-    pub(crate) fn paint_line(
-        &mut self,
-        text: &[u8],
-        gaps: &[Gap],
-        style: crate::TextStyle,
-        origin: Point,
-        available_width: Pt,
-        text_width: Pt,
-    ) {
-        self.content.begin_text();
-        self.set_fill(style.color);
-        let mut buffer = [0_u8; 4];
-        self.content
-            .set_font(Name(font_name(style.font, &mut buffer)), style.size.get());
-        let spacing = style.typography.letter_spacing;
-        if spacing != 0.0 {
-            self.content.set_char_spacing(spacing);
+    fn set_fill(&mut self, color: Rgb) {
+        if self.state.fill != Some(color) {
+            self.state.fill = Some(color);
+            let [r, g, b] = color.normalized();
+            self.content.set_fill_rgb(r, g, b);
         }
-        let x = aligned(origin.x, style.align, available_width, text_width);
-        if style.typography.oblique {
-            self.content
-                .set_text_matrix(slant(true, x.get(), origin.y.get()));
-        } else {
-            self.content.next_line(x.get(), origin.y.get());
-        }
-        show(self.content, text, 0, gaps);
-        if spacing != 0.0 {
-            self.content.set_char_spacing(0.0);
-        }
-        self.content.end_text();
     }
 
-    fn set_fill(&mut self, color: Rgb) {
-        let [r, g, b] = color.normalized();
-        self.content.set_fill_rgb(r, g, b);
+    fn set_font(&mut self, font: FontId, size: Pt) {
+        if self.state.font != Some((font, size)) {
+            self.state.font = Some((font, size));
+            let mut buffer = [0_u8; 4];
+            self.content
+                .set_font(Name(font_name(font, &mut buffer)), size.get());
+        }
     }
 }
 

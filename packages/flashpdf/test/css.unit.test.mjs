@@ -150,7 +150,7 @@ test("given fragments, inherited lengths, and stylesheet numbers, when resolving
 	const [flex] = await resolve(jsx("main", { className: "cell", children: "x" }), [
 		".cell { flex: 1 }",
 	]);
-	assert.equal(flex.style.flex, 1);
+	assert.equal(flex.style.flexGrow, 1);
 });
 
 test("given cascading shorthands, selector whitespace, and transparent paint, when normalizing styles, then keeps CSS semantics", async () => {

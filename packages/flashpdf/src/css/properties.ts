@@ -1,8 +1,6 @@
 import type { Style } from "../element.js";
 
 export type RejectedProperty =
-	| "minWidth"
-	| "maxWidth"
 	| "boxShadow"
 	| "outline"
 	| "outlineColor"
@@ -13,8 +11,7 @@ export type RejectedProperty =
 	| "backgroundImage"
 	| "listStyleImage"
 	| "objectFit"
-	| "borderCollapse"
-	| "borderSpacing";
+	| "boxDecorationBreak";
 type Side = "Top" | "Right" | "Bottom" | "Left";
 /** CSS names with no `Style` key: `border-style`, the logical shorthands, which normalize() expands
  *  for horizontal left-to-right text, and the per-side border longhands, which it writes. */
@@ -28,9 +25,21 @@ const NO_OUTLINE = "outlines are not drawn; use a border";
 const properties = {
 	display: {},
 	flexDirection: { css: "flex-direction" },
+	flexWrap: { css: "flex-wrap" },
+	justifyContent: { css: "justify-content" },
+	alignItems: { css: "align-items" },
+	alignSelf: { css: "align-self" },
 	flex: {},
+	flexGrow: { css: "flex-grow" },
+	flexShrink: { css: "flex-shrink" },
+	flexBasis: { css: "flex-basis" },
 	width: {},
+	minWidth: { css: "min-width" },
+	maxWidth: { css: "max-width" },
 	height: {},
+	minHeight: { css: "min-height" },
+	maxHeight: { css: "max-height" },
+	boxSizing: { css: "box-sizing" },
 	margin: {},
 	marginTop: { css: "margin-top" },
 	marginRight: { css: "margin-right" },
@@ -101,14 +110,6 @@ const properties = {
 	breakBefore: { css: "break-before" },
 	breakAfter: { css: "break-after" },
 	breakInside: { css: "break-inside" },
-	minWidth: {
-		css: "min-width",
-		unsupported: "only width on a flex row child is implemented",
-	},
-	maxWidth: {
-		css: "max-width",
-		unsupported: "only width on a flex row child is implemented",
-	},
 	boxShadow: {
 		css: "box-shadow",
 		unsupported: "shadows are not drawn; use a border or a background",
@@ -126,6 +127,10 @@ const properties = {
 		css: "background-image",
 		unsupported: "gradients and background images are not drawn; use background-color",
 	},
+	borderCollapse: { css: "border-collapse", inherited: true },
+	borderSpacing: { css: "border-spacing", inherited: true },
+	orphans: { inherited: true },
+	widows: { inherited: true },
 	objectFit: {
 		css: "object-fit",
 		unsupported: "size an image with width and height; it always scales to fill them",
@@ -134,14 +139,10 @@ const properties = {
 		css: "list-style-image",
 		unsupported: "markers are text or drawn shapes; choose list-style-type",
 	},
-	borderCollapse: {
-		css: "border-collapse",
+	boxDecorationBreak: {
+		css: "box-decoration-break",
 		unsupported:
-			"cell borders are separate and adjacent ones double up; draw one edge per cell, such as border-bottom",
-	},
-	borderSpacing: {
-		css: "border-spacing",
-		unsupported: "cells tile their row; use cell padding",
+			"a split box draws its top edge on the first page and its bottom edge on the last, as slice does; clone is not implemented",
 	},
 } as const satisfies Record<StyleProperty | RejectedProperty | CssProperty, PropertyDefinition>;
 

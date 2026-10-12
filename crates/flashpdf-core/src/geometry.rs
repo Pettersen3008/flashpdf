@@ -49,7 +49,7 @@ impl LayoutArea {
     }
 }
 
-/// The page body: the page minus its margins and the repeating header and footer lines.
+/// The page body: the page minus its margins and the header and footer it paints.
 #[derive(Clone, Copy)]
 pub(crate) struct PageLayout {
     page: Page,
@@ -71,7 +71,7 @@ impl PageLayout {
     }
 
     pub(crate) fn content_width(self) -> Pt {
-        self.page.width - self.page.margin - self.page.margin
+        self.page.width - self.page.margin.left - self.page.margin.right
     }
 
     pub(crate) fn content_height(self) -> Pt {
@@ -79,15 +79,25 @@ impl PageLayout {
     }
 
     pub(crate) fn top(self) -> Pt {
-        self.page.height - self.page.margin - self.header
+        self.page.height - self.page.margin.top - self.header
     }
 
     pub(crate) fn bottom(self) -> Pt {
-        self.page.margin + self.footer
+        self.page.margin.bottom + self.footer
     }
 
-    pub(crate) fn margin(self) -> Pt {
-        self.page.margin
+    pub(crate) fn left(self) -> Pt {
+        self.page.margin.left
+    }
+
+    /// The header and footer may take at most half the height between the margins.
+    pub(crate) fn validate_furniture(self) -> Result<(), RenderError> {
+        let between = self.page.height - self.page.margin.top - self.page.margin.bottom;
+        if (self.header + self.footer).get() <= between.get() / 2.0 {
+            Ok(())
+        } else {
+            Err(RenderError::PageOverflow)
+        }
     }
 
     pub(crate) fn validate_block(self, height: Pt) -> Result<(), RenderError> {
@@ -108,10 +118,6 @@ impl PageCursor {
         Self { y: page.top() }
     }
 
-    pub(crate) fn fits(&self, height: Pt, page: PageLayout) -> bool {
-        height <= self.remaining(page)
-    }
-
     pub(crate) fn remaining(&self, page: PageLayout) -> Pt {
         self.y - page.bottom()
     }
@@ -122,7 +128,7 @@ impl PageCursor {
 
     pub(crate) fn origin(&self, page: PageLayout) -> Point {
         Point {
-            x: page.margin(),
+            x: page.left(),
             y: self.y,
         }
     }

@@ -46,6 +46,7 @@ pub(crate) struct Gap {
     pub(crate) stretch: bool,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct PositionedBox {
     pub(crate) origin: Point,
     pub(crate) width: Pt,
@@ -95,7 +96,38 @@ pub(crate) struct LayoutBuffer {
     pub(crate) anchors: Vec<(u16, usize)>,
 }
 
+/// Buffer lengths before or after a cell, so its content can move once the row height is known.
+#[derive(Clone, Copy)]
+pub(crate) struct Marks {
+    pub(crate) lines: usize,
+    pub(crate) boxes: usize,
+    pub(crate) images: usize,
+}
+
 impl LayoutBuffer {
+    pub(crate) fn marks(&self) -> Marks {
+        Marks {
+            lines: self.lines.len(),
+            boxes: self.boxes.len(),
+            images: self.images.len(),
+        }
+    }
+
+    /// Moves what was laid out between `from` and `to` down by `dy`.
+    pub(crate) fn shift(&mut self, from: Marks, to: Marks, dy: Pt) {
+        for line in &mut self.lines[from.lines..to.lines] {
+            line.origin.y += dy;
+            line.top += dy;
+            line.bottom += dy;
+        }
+        for paint in &mut self.boxes[from.boxes..to.boxes] {
+            paint.origin.y += dy;
+        }
+        for image in &mut self.images[from.images..to.images] {
+            image.origin.y += dy;
+        }
+    }
+
     pub(crate) fn clear(&mut self) {
         self.lines.clear();
         self.segments.clear();
@@ -108,10 +140,15 @@ impl LayoutBuffer {
         self.anchors.clear();
     }
 
-    #[cfg(test)]
+    /// Heap bytes held, leaving out link and alt text.
     pub(crate) fn capacity(&self) -> usize {
-        self.lines.capacity() * std::mem::size_of::<PositionedLine>()
-            + self.segments.capacity() * std::mem::size_of::<Segment>()
+        use std::mem::size_of;
+        self.lines.capacity() * size_of::<PositionedLine>()
+            + self.segments.capacity() * size_of::<Segment>()
+            + self.decorations.capacity() * size_of::<Decoration>()
             + self.text.capacity()
+            + self.boxes.capacity() * size_of::<PositionedBox>()
+            + self.images.capacity() * size_of::<PositionedImage>()
+            + self.links.capacity() * size_of::<String>()
     }
 }

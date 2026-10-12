@@ -12,7 +12,7 @@ mod tests;
 
 pub use error::ProtocolError;
 
-use cursor::{nonnegative_f32, positive_f32, pt, Cursor};
+use cursor::{pt, Cursor};
 use opcode::Opcode;
 
 use pdf_writer::types::AssociationKind;
@@ -21,20 +21,23 @@ use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
 use crate::{
-    Edges, FontId, LineStyle, Marker, OwnedCommand, Radii, RunDecoration, TextRun, TextStyle,
+    Edges, FontId, LineStyle, Marker, OwnedCommand, Radii, RunDecoration, TextRun,
     BUILT_IN, OPAQUE,
+    Align, BoxSize, Flex, FlexItem, Justify, Pt,
 };
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
 pub const INPUT_CAPACITY: usize = 4096;
 const MAX_RECORD: usize = 64 * 1024;
-/// An open Stack, Box, Row or Table buffers its commands until it closes; this bounds that buffer.
+/// An open Stack, Row or nested Table, and a Box inside one, buffers its commands
+/// until it closes; a Table outside them buffers its header and footer rows, then
+/// one body row at a time.
 pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 /// Total bytes of registered fonts per render.
 const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 /// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
 const MAX_PAGE_SIDE: f32 = 14_400.0;
-const HEADER_LEN: usize = 18;
+const HEADER_LEN: usize = 30;
 const MAGIC: &[u8; 4] = b"FPDF";
 const VERSION: u16 = 20;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
@@ -71,14 +74,20 @@ pub struct Decoder {
     metadata: crate::pdf::Metadata,
     pdfa: bool,
     body_started: bool,
+    /// `(footer, first page)` of a Header or Footer record waiting for its block.
+    furniture: Option<(bool, bool)>,
 }
 
+/// A streaming `Table`'s `head` counts its `TableStart` and the header and footer
+/// rows it still buffers; at zero its body rows stream. A held one has `None`.
+/// A `Box` is `true` once the renderer has it open and its children stream.
 #[derive(Clone, Copy)]
 enum Frame {
     Stack,
-    Box,
-    Row { columns: usize, cells: usize },
-    Table,
+    Box(bool),
+    Row { cells: usize, done: usize },
+    Flex { cells: usize, done: usize },
+    Table { head: Option<usize> },
 }
 
 impl Decoder {
@@ -204,13 +213,19 @@ impl Decoder {
         if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != VERSION {
             return Err(ProtocolError::UnknownVersion);
         }
-        let width = positive_f32(&bytes[6..10], "page width")?;
-        let height = positive_f32(&bytes[10..14], "page height")?;
+        let mut cursor = Cursor::new(&bytes[6..]);
+        let width = cursor.positive_f32("page width")?;
+        let height = cursor.positive_f32("page height")?;
         if width > MAX_PAGE_SIDE || height > MAX_PAGE_SIDE {
             return Err(ProtocolError::InvalidValue("page size"));
         }
-        let margin = nonnegative_f32(&bytes[14..18], "margin")?;
-        self.page = Some(crate::Page::new(pt(width)?, pt(height)?, pt(margin)?)?);
+        let margin = Edges {
+            top: pt(cursor.nonnegative_f32("page margin top")?)?,
+            right: pt(cursor.nonnegative_f32("page margin right")?)?,
+            bottom: pt(cursor.nonnegative_f32("page margin bottom")?)?,
+            left: pt(cursor.nonnegative_f32("page margin left")?)?,
+        };
+        self.page = Some(crate::Page::new(pt(width)?, pt(height)?, margin)?);
         Ok(())
     }
 
@@ -224,84 +239,123 @@ impl Decoder {
             Opcode::Spacer => {
                 let space = pt(cursor.nonnegative_f32("spacer")?)?;
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Spacer(space))
+                self.feed(OwnedCommand::Spacer(space))
             }
             Opcode::StackStart => {
                 let gap = pt(cursor.nonnegative_f32("stack gap")?)?;
                 cursor.done()?;
-                self.open(Frame::Stack, OwnedCommand::StackStart(gap))
+                self.feed(OwnedCommand::StackStart(gap))
             }
             Opcode::StackEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::StackEnd)
+                self.feed(OwnedCommand::StackEnd)
             }
             Opcode::RowStart => {
-                let columns = cursor.columns()?;
+                let (columns, slots): (Vec<_>, Vec<_>) = cursor.columns()?.into_iter().unzip();
+                cursor.done()?;
+                let cells = slots
+                    .iter()
+                    .filter(|slot| matches!(slot, crate::Slot::Cell { .. }))
+                    .count();
+                let _ = cells;
+                self.feed(OwnedCommand::RowStart(columns, slots))
+            }
+            Opcode::FlexStart => {
+                let flags = cursor.take(1)?[0];
+                let justify = match cursor.take(1)?[0] {
+                    0 => Justify::Start,
+                    1 => Justify::End,
+                    2 => Justify::Center,
+                    3 => Justify::SpaceBetween,
+                    4 => Justify::SpaceAround,
+                    5 => Justify::SpaceEvenly,
+                    _ => return Err(ProtocolError::InvalidValue("justify-content")),
+                };
+                let style = Flex {
+                    column: match flags {
+                        0 | 1 => flags == 1,
+                        _ => return Err(ProtocolError::InvalidValue("flex flags")),
+                    },
+                    justify,
+                    align: cursor.alignment()?.unwrap_or(Align::Stretch),
+                    gap: pt(cursor.nonnegative_f32("flex gap")?)?,
+                    min_height: pt(cursor.nonnegative_f32("flex min height")?)?,
+                    max_height: cursor.height()?,
+                };
+                let count = usize::from(cursor.u16()?);
+                if count == 0 || count > crate::command::MAX_COLUMNS {
+                    return Err(ProtocolError::InvalidColumnCount);
+                }
+                let mut items = Vec::with_capacity(count);
+                for _ in 0..count {
+                    items.push(FlexItem {
+                        grow: cursor.nonnegative_f32("flex grow")?,
+                        shrink: cursor.nonnegative_f32("flex shrink")?,
+                        basis: cursor.size("flex basis")?,
+                        align: cursor.alignment()?,
+                    });
+                }
                 cursor.done()?;
                 self.open(
-                    Frame::Row {
-                        columns: columns.len(),
-                        cells: 0,
+                    Frame::Flex {
+                        cells: count,
+                        done: 0,
                     },
-                    OwnedCommand::RowStart(columns),
+                    OwnedCommand::FlexStart(style, items),
                 )
+            }
+            Opcode::FlexEnd => {
+                cursor.done()?;
+                self.close(OwnedCommand::FlexEnd)
             }
             Opcode::RowEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::RowEnd)
+                self.feed(OwnedCommand::RowEnd)
             }
             Opcode::TableStart => {
                 let header_rows = cursor.u16()?;
                 let footer_rows = cursor.u16()?;
                 let width = cursor.column()?;
                 cursor.done()?;
-                self.open(
-                    Frame::Table,
-                    OwnedCommand::TableStart(header_rows, footer_rows, width),
-                )
+                self.feed(OwnedCommand::TableStart(header_rows, footer_rows, width))
             }
             Opcode::TableEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::TableEnd)
+                self.feed(OwnedCommand::TableEnd)
             }
             Opcode::PageBreak => {
                 cursor.done()?;
-                if !self.frames.is_empty() {
+                if !self.placing() || self.furniture.is_some() {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 self.body_started = true;
                 Ok(self.ensure_renderer()?.page_break()?)
             }
-            Opcode::Footer | Opcode::Header => {
-                let size = pt(cursor.positive_f32("font size")?)?;
-                let align = cursor.align()?;
-                let color = cursor.rgb()?;
-                let font = self.font(cursor.take(1)?[0])?;
-                // Only the run flags for slant and spacing; a header has no breaks, decoration, or links.
-                let flags = cursor.u16()?;
-                if flags & !0x2e0 != 0 {
-                    return Err(ProtocolError::InvalidValue("header flags"));
-                }
-                let typography = cursor.typography(flags)?;
-                let text = cursor.text(true)?.to_owned();
+            Opcode::Avoid => {
                 cursor.done()?;
-                if self.body_started || !self.frames.is_empty() {
+                // Inside a held block every break is already avoided.
+                if self.placing()
+                    || matches!(self.frames.last(), Some(Frame::Table { head: Some(0) }))
+                {
+                    if let Some(renderer) = &mut self.renderer {
+                        renderer.avoid();
+                    }
+                }
+                Ok(())
+            }
+            Opcode::Footer | Opcode::Header => {
+                let first = match cursor.take(1)?[0] {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(ProtocolError::InvalidValue("furniture page")),
+                };
+                cursor.done()?;
+                if self.body_started || !self.frames.is_empty() || self.furniture.is_some() {
                     return Err(ProtocolError::InvalidNesting);
                 }
-                let style = TextStyle {
-                    size,
-                    align,
-                    color,
-                    font,
-                    typography,
-                };
-                let renderer = self.ensure_renderer()?;
-                if matches!(opcode, Opcode::Header) {
-                    renderer.set_header(text, style)
-                } else {
-                    renderer.set_footer(text, style)
-                }
-                .map_err(ProtocolError::from)
+                self.ensure_renderer()?;
+                self.furniture = Some((matches!(opcode, Opcode::Footer), first));
+                Ok(())
             }
             Opcode::Metadata => {
                 let tagged = match cursor.take(1)?[0] {
@@ -416,10 +470,14 @@ impl Decoder {
                     .ensure_renderer()?
                     .add_anchor(name, level, title)
                     .map_err(ProtocolError::InvalidValue)?;
-                self.layout_command(OwnedCommand::Anchor(slot))
+                self.feed(OwnedCommand::Anchor(slot))
             }
             Opcode::Paragraph => {
                 let align = cursor.align()?;
+                let keep = [cursor.u16()?, cursor.u16()?];
+                if keep.contains(&0) {
+                    return Err(ProtocolError::InvalidValue("orphans or widows"));
+                }
                 let links: Vec<String> = (0..cursor.u16()?)
                     .map(|_| cursor.uri().map(str::to_owned))
                     .collect::<Result<_, _>>()?;
@@ -466,7 +524,7 @@ impl Decoder {
                     } else {
                         OPAQUE
                     };
-                    let run = cursor.text(false)?;
+                    let run = cursor.text(self.furniture.is_some())?;
                     text.push_str(run);
                     runs.push(TextRun {
                         len: run.len(),
@@ -487,7 +545,7 @@ impl Decoder {
                     });
                 }
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Paragraph(align, text, runs, links))
+                self.feed(OwnedCommand::Paragraph(align, keep, text, runs, links))
             }
             Opcode::Image => {
                 let slot = cursor.u16()?;
@@ -508,7 +566,7 @@ impl Decoder {
                 let alt = cursor.alt()?.to_owned();
                 let alpha = cursor.take(1)?[0];
                 cursor.done()?;
-                self.layout_command(OwnedCommand::Image(slot, width, height, link, alt, alpha))
+                self.feed(OwnedCommand::Image(slot, width, height, link, alt, alpha))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -567,32 +625,33 @@ impl Decoder {
                     }
                     _ => return Err(ProtocolError::InvalidValue("border radius flag")),
                 };
-                cursor.done()?;
-                let style = crate::BoxStyle {
-                    margin,
-                    padding,
-                    border,
-                    background,
-                    border_color,
-                    border_style,
-                    radius,
-                    alpha,
-                };
-                // One stroke follows the rounded outline; four different sides would need mitred joins.
-                if radius.is_some() && !style.uniform_border() {
-                    return Err(ProtocolError::InvalidValue(
-                        "border radius with unequal borders",
-                    ));
+                // Bit 0 is border-box sizing; bits 1 to 4 are auto margins in `Edges` order.
+                let flags = cursor.take(1)?[0];
+                if flags > 0x1f {
+                    return Err(ProtocolError::InvalidValue("box flags"));
                 }
-                self.open(Frame::Box, OwnedCommand::BoxStart(style))
+                let size = BoxSize {
+                    width: cursor.size("width")?,
+                    min_width: cursor.size("min width")?,
+                    max_width: cursor.size("max width")?,
+                    height: cursor.height()?,
+                    min_height: cursor.height()?.unwrap_or(Pt::ZERO),
+                    max_height: cursor.height()?,
+                    border_box: flags & 1 != 0,
+                    auto_margin: flags >> 1,
+                };
+                cursor.done()?;
+                let style = crate::BoxStyle {margin,padding,border,background,border_color,border_style,radius,alpha};
+                if radius.is_some() && !style.uniform_border() { return Err(ProtocolError::InvalidValue("border radius with unequal borders")); }
+                self.feed(OwnedCommand::BoxStart(style,size))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
-                self.close(OwnedCommand::BoxEnd)
+                self.feed(OwnedCommand::BoxEnd)
             }
             Opcode::End => {
                 cursor.done()?;
-                if !self.frames.is_empty() {
+                if !self.frames.is_empty() || self.furniture.is_some() {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 if self.renderer.is_none() {
@@ -668,7 +727,7 @@ impl Decoder {
 
     fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let payload = match &command {
-            OwnedCommand::Paragraph(_, text, runs, links) => {
+            OwnedCommand::Paragraph(_, _, text, runs, links) => {
                 text.len()
                     + runs.len() * size_of::<TextRun>()
                     + links
@@ -676,7 +735,11 @@ impl Decoder {
                         .map(|link| link.len() + size_of::<String>())
                         .sum::<usize>()
             }
-            OwnedCommand::RowStart(columns) => columns.len() * size_of::<crate::ColumnWidth>(),
+            OwnedCommand::RowStart(columns, slots) => {
+                columns.len() * size_of::<crate::ColumnWidth>()
+                    + slots.len() * size_of::<crate::Slot>()
+            }
+            OwnedCommand::FlexStart(_, items) => items.len() * size_of::<FlexItem>(),
             OwnedCommand::Image(_, _, _, link, alt, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
@@ -690,26 +753,85 @@ impl Decoder {
         Ok(())
     }
 
+    /// Routes a decoded layout command.
+    fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
+        let frame = match &command {
+            OwnedCommand::StackStart(_) => Frame::Stack,
+            OwnedCommand::BoxStart(_, size) => {
+                Frame::Box(self.placing() && self.furniture.is_none() && *size == BoxSize::AUTO)
+            }
+            OwnedCommand::RowStart(_, slots) => Frame::Row {
+                cells: slots
+                    .iter()
+                    .filter(|slot| matches!(slot, crate::Slot::Cell { .. }))
+                    .count(),
+                done: 0,
+            },
+            OwnedCommand::FlexStart(_, items) => Frame::Flex {
+                cells: items.len(),
+                done: 0,
+            },
+            OwnedCommand::TableStart(header_rows, footer_rows, _) => Frame::Table {
+                head: self
+                    .placing()
+                    .then(|| 1 + usize::from(*header_rows) + usize::from(*footer_rows)),
+            },
+            OwnedCommand::StackEnd
+            | OwnedCommand::BoxEnd
+            | OwnedCommand::RowEnd
+            | OwnedCommand::FlexEnd
+            | OwnedCommand::TableEnd => return self.close(command),
+            OwnedCommand::Paragraph(..) | OwnedCommand::Spacer(_) | OwnedCommand::Image(..) | OwnedCommand::Anchor(_) => {
+                return self.layout_command(command)
+            }
+        };
+        self.open(frame, command)?;
+        self.stream_table()
+    }
+
+    /// Whether a completed block places now: outside every frame, or directly in streaming boxes.
+    fn placing(&self) -> bool {
+        matches!(self.frames.last(), None | Some(Frame::Box(true)))
+    }
+
     fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
-        self.body_started = true;
-        // An anchor rides with the cell after it, so it is not a cell.
+        self.body_started = self.furniture.is_none();
         let anchor = matches!(command, OwnedCommand::Anchor(_));
         self.push_command(command)?;
-        if !anchor {
-            self.complete_child()?;
+        if !anchor { self.complete_child()?; }
+        if self.placing() {
+            return self.flush_block(crate::Renderer::push_owned);
         }
-        if self.frames.is_empty() {
-            self.flush_block()?;
+        self.stream_table()
+    }
+
+    /// Runs after a streaming table's `TableStart` and after each of its children:
+    /// hands the renderer the header and footer rows once, then each body row.
+    fn stream_table(&mut self) -> Result<(), ProtocolError> {
+        let Some(Frame::Table { head: Some(head) }) = self.frames.last_mut() else {
+            return Ok(());
+        };
+        if *head == 0 {
+            return self.flush_block(crate::Renderer::push_table_row);
+        }
+        *head -= 1;
+        if *head == 0 {
+            self.block.push(OwnedCommand::TableEnd);
+            return self.flush_block(crate::Renderer::push_table_head);
         }
         Ok(())
     }
 
     fn open(&mut self, frame: Frame, command: OwnedCommand) -> Result<(), ProtocolError> {
-        self.body_started = true;
         if self.frames.len() >= MAX_LAYOUT_DEPTH {
             return Err(ProtocolError::NestingTooDeep);
         }
-        self.push_command(command)?;
+        match (frame, command) {
+            (Frame::Box(true), OwnedCommand::BoxStart(style, _)) => {
+                self.ensure_renderer()?.open_box(style)?
+            }
+            (_, command) => self.push_command(command)?,
+        }
         self.frames.push(frame);
         Ok(())
     }
@@ -717,34 +839,51 @@ impl Decoder {
     fn close(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = self.frames.pop().ok_or(ProtocolError::InvalidNesting)?;
         match (&command, frame) {
+            (OwnedCommand::TableEnd, Frame::Table { head: Some(0) }) => {
+                return Ok(self.ensure_renderer()?.end_table()?);
+            }
+            (OwnedCommand::BoxEnd, Frame::Box(true)) => {
+                return Ok(self.ensure_renderer()?.close_box()?);
+            }
             (OwnedCommand::StackEnd, Frame::Stack)
-            | (OwnedCommand::BoxEnd, Frame::Box)
-            | (OwnedCommand::TableEnd, Frame::Table) => {}
-            (OwnedCommand::RowEnd, Frame::Row { columns, cells }) if columns == cells => {}
+            | (OwnedCommand::BoxEnd, Frame::Box(false))
+            | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
+            (OwnedCommand::RowEnd, Frame::Row { cells, done })
+            | (OwnedCommand::FlexEnd, Frame::Flex { cells, done })
+                if cells == done => {}
             (OwnedCommand::RowEnd, Frame::Row { .. }) => {
                 return Err(ProtocolError::RowCellCountMismatch)
             }
             _ => return Err(ProtocolError::InvalidNesting),
         }
-        self.layout_command(command)
+        self.feed(command)
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {
-        if let Some(Frame::Row { columns, cells }) = self.frames.last_mut() {
-            *cells += 1;
-            if *cells > *columns {
+        if let Some(Frame::Row { cells, done } | Frame::Flex { cells, done }) =
+            self.frames.last_mut()
+        {
+            *done += 1;
+            if *done > *cells {
                 return Err(ProtocolError::RowCellCountMismatch);
             }
         }
         Ok(())
     }
 
-    fn flush_block(&mut self) -> Result<(), ProtocolError> {
+    fn flush_block(
+        &mut self,
+        push: fn(&mut crate::Renderer, &[OwnedCommand]) -> Result<(), crate::RenderError>,
+    ) -> Result<(), ProtocolError> {
+        let furniture = self.furniture.take();
+        self.body_started |= furniture.is_none();
         let block = std::mem::take(&mut self.block);
-        let result = self
-            .ensure_renderer()?
-            .push_owned(&block)
-            .map_err(ProtocolError::from);
+        self.block_bytes = 0;
+        let renderer = self.ensure_renderer()?;
+        if let Some((footer, first)) = furniture {
+            return Ok(renderer.set_furniture(footer, first, block)?);
+        }
+        let result = push(renderer, &block).map_err(ProtocolError::from);
         self.block = block;
         self.block.clear();
         self.block_bytes = 0;

@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: 24.21.0
           registry-url: https://npm.pkg.github.com
-          scope: '@pettersen3008'
+          scope: "@pettersen3008"
           package-manager-cache: false
       - name: Check release tag
         env:

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import {
+	boxSize,
 	color,
 	counter,
 	courier,
@@ -21,6 +22,13 @@ test("given pt, px, em, and rem lengths, when resolving a point value, then conv
 	assert.equal(point("2em", 10), 20);
 	assert.equal(point("2rem", 10), 24);
 	assert.equal(point("0"), 0);
+});
+
+test("given mm, cm, in, pc, and Q lengths, when resolving a length or width, then converts at 72pt per inch", () => {
+	for (const length of ["25.4mm", "2.54cm", "1in", "6pc", "101.6Q"]) {
+		assert.equal(point(length), 72, length);
+		assert.equal(dimension(length, "width").value, 72, length);
+	}
 });
 
 test("given an unrecognised length, when resolving a point value, then rejects it", () => {
@@ -74,20 +82,36 @@ test("given a border shorthand with rgb() spaces, when normalizing, then keeps t
 	assert.deepEqual(color(s.borderTopColor), [0, 0, 255]);
 });
 
-test("given the flex shorthand, when normalizing, then keeps only the grow factor", () => {
-	assert.equal(style({ flex: 1 }).flex, 1);
-	assert.equal(style({ flex: "1 1 0%" }).flex, 1);
-	assert.equal(style({ flex: "2 0 auto" }).flex, 2);
-	assert.equal(style({ flex: "none" }).flex, 0);
-	assert.throws(() => style({ flex: "10px" }), /invalid flex: 10px/);
+test("given each flex shorthand form, when normalizing, then expands it to grow, shrink, and basis as CSS does", () => {
+	const longhands = (flex) => {
+		const { flexGrow, flexShrink, flexBasis } = style({ flex });
+		return [flexGrow, flexShrink, flexBasis];
+	};
+	assert.deepEqual(longhands(1), [1, 1, 0]);
+	assert.deepEqual(longhands("2 0"), [2, 0, 0]);
+	assert.deepEqual(longhands("1 1 0"), [1, 1, "0"]);
+	assert.deepEqual(longhands("auto"), [1, 1, "auto"]);
+	assert.deepEqual(longhands("none"), [0, 0, "auto"]);
+	assert.deepEqual(longhands("initial"), [0, 1, "auto"]);
+	assert.deepEqual(longhands("100px"), [1, 1, "100px"]);
+	assert.deepEqual(longhands("50% 2"), [2, 1, "50%"]);
+	assert.throws(() => style({ flex: "1 2 3" }), /invalid flex-basis: 3/);
+	assert.throws(() => style({ flex: "1 auto 2" }), /invalid flex: 1 auto 2/);
 });
 
-test("given a flex basis that a column would drop, when normalizing, then rejects it", () => {
-	assert.throws(() => style({ flex: "1 1 100px" }), /flex basis is not supported: 1 1 100px/);
-	assert.throws(() => style({ flex: "auto", width: "80pt" }), /flex basis is not supported: auto/);
-	// A zero basis ignores width in CSS too, and `none` keeps the width as the fixed column.
-	assert.equal(style({ flex: 1, width: "80pt" }).flex, 1);
-	assert.equal(style({ flex: "none", width: "80pt" }).flex, 0);
+test("given a percent height, when sizing a box, then resolves it against the parent's fixed height or rejects without one", () => {
+	const s = style({ height: "50%", width: "auto", maxWidth: "none", margin: "0 auto" });
+	assert.deepEqual(boxSize(s, 200), {
+		borderBox: false,
+		autoMargin: 2 | 8,
+		width: undefined,
+		minWidth: undefined,
+		maxWidth: undefined,
+		height: 100,
+		minHeight: undefined,
+		maxHeight: undefined,
+	});
+	assert.throws(() => boxSize(s, undefined), /a percent height needs a parent with a fixed height/);
 });
 
 test("given a font-family list, when selecting a font, then takes the first registered family or built-in match in order", () => {
@@ -193,7 +217,7 @@ test("given white-space and vertical-align values, when normalizing, then only t
 	for (const whiteSpace of ["normal", "nowrap", "pre", "pre-wrap", "pre-line"])
 		style({ whiteSpace });
 	assert.throws(() => style({ whiteSpace: "break-spaces" }), /invalid whiteSpace: break-spaces/);
-	for (const verticalAlign of ["baseline", "sub", "super"]) style({ verticalAlign });
-	assert.throws(() => style({ verticalAlign: "top" }), /invalid verticalAlign: top/);
+	for (const verticalAlign of ["baseline", "sub", "super", "top", "middle", "bottom"])
+		style({ verticalAlign });
 	assert.throws(() => style({ verticalAlign: "toString" }), /invalid verticalAlign/);
 });

@@ -1,4 +1,5 @@
-import { parse } from "./css/parser.js";
+import { parse, type PageDeclaration } from "./css/parser.js";
+import { cssPage } from "./page.js";
 import { boxStyle, color, style } from "./style.js";
 
 export { resolveStyles, styleResolver } from "./css/cascade.js";
@@ -7,8 +8,8 @@ export type { StyledNode } from "./css/cascade.js";
 /** Validates every declaration of every supported rule up front; `render` only validates rules that match. */
 export function stylesheet(source: string | TemplateStringsArray, ...values: unknown[]): string {
 	const css = typeof source === "string" ? source : String.raw(source, ...values);
-	for (const rule of parse(css))
-		// A rule in an unsupported @media query rejects in `render`, where it matches an element.
+	const pages: PageDeclaration[] = [];
+	for (const rule of parse(css, { pages }))
 		for (const declarations of rule.blocked ? [] : Object.values(rule.declarations())) {
 			// Custom properties and var() resolve only in an element's cascade, and Tailwind puts
 			// calc() and color-mix() in most utilities, so render checks those where a rule applies.
@@ -25,5 +26,6 @@ export function stylesheet(source: string | TemplateStringsArray, ...values: unk
 				throw error;
 			}
 		}
+	cssPage(pages);
 	return css;
 }

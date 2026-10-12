@@ -1,5 +1,5 @@
 use crate::win_ansi::valid;
-use crate::{Fraction, ImageSize, Marker, Percent, Rgb, TextAlign, Typography};
+use crate::{Align, Fraction, ImageSize, Marker, Percent, Pt, Rgb, TextAlign, Typography, VerticalAlign};
 
 /// Letter and word spacing in points, either sign; the largest page side.
 pub(super) const MAX_SPACING: f32 = 14_400.0;
@@ -91,9 +91,9 @@ impl<'a> Cursor<'a> {
         Ok(Rgb::from(<[u8; 3]>::try_from(self.take(3)?).unwrap()))
     }
 
-    pub(super) fn text(&mut self, footer: bool) -> Result<&'a str, ProtocolError> {
+    pub(super) fn text(&mut self, furniture: bool) -> Result<&'a str, ProtocolError> {
         let text = self.utf8_text()?;
-        if !valid(text, footer) {
+        if !valid(text, furniture) {
             return Err(ProtocolError::ControlCharacter);
         }
         Ok(text)
@@ -105,12 +105,43 @@ impl<'a> Cursor<'a> {
         std::str::from_utf8(self.take(length)?).map_err(|_| ProtocolError::InvalidUtf8)
     }
 
-    pub(super) fn columns(&mut self) -> Result<Vec<crate::ColumnWidth>, ProtocolError> {
+    pub(super) fn columns(
+        &mut self,
+    ) -> Result<Vec<(crate::ColumnWidth, crate::Slot)>, ProtocolError> {
         let count = usize::from(self.u16()?);
         if count == 0 || count > crate::command::MAX_COLUMNS {
             return Err(ProtocolError::InvalidColumnCount);
         }
-        (0..count).map(|_| self.column()).collect()
+        (0..count)
+            .map(|_| Ok((self.column()?, self.slot()?)))
+            .collect()
+    }
+
+    /// Bits 0-1 align a cell top, middle, or bottom, and bit 2 means a u16 row
+    /// span of 2 or more follows; 8 joins the cell to the left, and 16 marks a
+    /// column a cell from an earlier row covers.
+    fn slot(&mut self) -> Result<crate::Slot, ProtocolError> {
+        let flags = self.take(1)?[0];
+        let align = [
+            VerticalAlign::Top,
+            VerticalAlign::Middle,
+            VerticalAlign::Bottom,
+        ];
+        Ok(match flags {
+            0..=2 => crate::Slot::Cell {
+                rows: 1,
+                align: align[usize::from(flags)],
+            },
+            4..=6 => crate::Slot::Cell {
+                rows: Some(self.u16()?)
+                    .filter(|rows| *rows > 1)
+                    .ok_or(ProtocolError::InvalidValue("row span"))?,
+                align: align[usize::from(flags & 3)],
+            },
+            8 => crate::Slot::Join,
+            16 => crate::Slot::Covered,
+            _ => return Err(ProtocolError::InvalidValue("cell slot")),
+        })
     }
 
     pub(super) fn column(&mut self) -> Result<crate::ColumnWidth, ProtocolError> {
@@ -150,6 +181,37 @@ impl<'a> Cursor<'a> {
             2 => ImageSize::Percent(Percent::new(self.positive_f32("image width")?)?),
             _ => return Err(ProtocolError::InvalidValue("image width kind")),
         })
+    }
+
+    /// Kind 0 is `auto`, 1 points (zero allowed), 2 a positive percent.
+    pub(super) fn size(&mut self, name: &'static str) -> Result<ImageSize, ProtocolError> {
+        Ok(match self.take(1)?[0] {
+            0 => ImageSize::Auto,
+            1 => ImageSize::Fixed(pt(self.nonnegative_f32(name)?)?),
+            2 => ImageSize::Percent(Percent::new(self.positive_f32(name)?)?),
+            _ => return Err(ProtocolError::InvalidValue(name)),
+        })
+    }
+
+    /// A height in points, read as a `size` that may not be a percent.
+    pub(super) fn height(&mut self) -> Result<Option<Pt>, ProtocolError> {
+        match self.size("height")? {
+            ImageSize::Auto => Ok(None),
+            ImageSize::Fixed(height) => Ok(Some(height)),
+            ImageSize::Percent(_) => Err(ProtocolError::InvalidValue("height")),
+        }
+    }
+
+    /// 0 is `auto`, then stretch, start, end, and center.
+    pub(super) fn alignment(&mut self) -> Result<Option<Align>, ProtocolError> {
+        Ok(Some(match self.take(1)?[0] {
+            0 => return Ok(None),
+            1 => Align::Stretch,
+            2 => Align::Start,
+            3 => Align::End,
+            4 => Align::Center,
+            _ => return Err(ProtocolError::InvalidValue("flex alignment")),
+        }))
     }
 
     pub(super) fn done(&self) -> Result<(), ProtocolError> {

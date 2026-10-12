@@ -1,18 +1,57 @@
 import { color } from "./color.js";
-import { corner, CORNERS, point, SIDES } from "./length.js";
-import type { Box, NormalizedStyle, Radius } from "./types.js";
+import { corner, CORNERS, dimension, point, SIDES } from "./length.js";
+import type { Box, NormalizedStyle, Radius, Size } from "./types.js";
 
 export function edges(
 	s: NormalizedStyle,
 	name: "margin" | "padding",
 	parent: number,
 ): [number, number, number, number] {
-	return SIDES.map((side) => point(s[`${name}${side}`] ?? 0, parent)) as [
-		number,
-		number,
-		number,
-		number,
-	];
+	// An `auto` margin is zero here; `boxSize` flags it.
+	return SIDES.map((side) => {
+		const value = s[`${name}${side}`] ?? 0;
+		return name === "margin" && value === "auto" ? 0 : point(value, parent);
+	}) as [number, number, number, number];
+}
+
+/** The box's sizes and auto margins, or undefined when it has none. `height` is the parent's
+ *  definite content height, which percent heights need; `width` is false where a table or
+ *  column-model flex row owns the width. */
+export function boxSize(
+	s: NormalizedStyle,
+	height: number | undefined,
+	width = true,
+): Size | undefined {
+	const autoMargin = SIDES.reduce(
+		(bits, side, index) => (s[`margin${side}`] === "auto" ? bits | (1 << index) : bits),
+		0,
+	);
+	const horizontal = (key: "width" | "minWidth" | "maxWidth") =>
+		s[key] === undefined ? undefined : dimension(s[key], key, true);
+	const vertical = (key: "height" | "minHeight" | "maxHeight") => {
+		if (s[key] === undefined) return undefined;
+		const { kind, value } = dimension(s[key], key, true);
+		if (kind === 1) return value;
+		if (height === undefined)
+			throw new Error(`a percent ${key} needs a parent with a fixed height; use pt or px`);
+		return Math.fround((height * value) / 100);
+	};
+	const size: Size = {
+		borderBox: s.boxSizing === "border-box",
+		autoMargin,
+		width: width ? horizontal("width") : undefined,
+		minWidth: horizontal("minWidth"),
+		maxWidth: horizontal("maxWidth"),
+		height: vertical("height"),
+		minHeight: vertical("minHeight"),
+		maxHeight: vertical("maxHeight"),
+	};
+	return autoMargin ||
+		[size.width, size.minWidth, size.maxWidth, size.height, size.minHeight, size.maxHeight].some(
+			(value) => value !== undefined,
+		)
+		? size
+		: undefined;
 }
 
 /** The corner radii, or undefined when every corner is square. */

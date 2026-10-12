@@ -70,12 +70,13 @@ export class Binary {
 		this.view.setUint32(start - 4, written, true);
 		this.offset += written;
 	}
-	header(width: number, height: number, margin: number) {
+	/** `margin` is top, right, bottom, left. */
+	header(width: number, height: number, margin: readonly number[]) {
 		for (const byte of [70, 80, 68, 70]) this.u8(byte);
 		this.u16(20);
 		this.f32(width);
 		this.f32(height);
-		this.f32(margin);
+		for (const side of margin) this.f32(side);
 		this.flush();
 	}
 	record(opcode: number, payload: () => void = () => {}) {

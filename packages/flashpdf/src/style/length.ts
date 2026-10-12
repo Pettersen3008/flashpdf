@@ -16,8 +16,19 @@ export function edgeValues(value: unknown, name: string): unknown[] {
 }
 
 const NUMBER = String.raw`(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?`;
-const LENGTH = new RegExp(`^(${NUMBER})(pt|px|em|rem)$`);
+const LENGTH = new RegExp(`^(${NUMBER})(pt|px|pc|in|cm|mm|Q|em|rem)$`);
 const PERCENT = new RegExp(`^(${NUMBER})%$`);
+/** Points per unit. CSS fixes 1in = 2.54cm = 25.4mm = 101.6Q = 96px = 72pt = 6pc; rem is the 12pt root size. */
+const POINTS: Record<string, number> = {
+	pt: 1,
+	px: 0.75,
+	pc: 12,
+	in: 72,
+	cm: 72 / 2.54,
+	mm: 72 / 25.4,
+	Q: 72 / 101.6,
+	rem: 12,
+};
 
 export function point(value: unknown, parent = 12, positive = false): number {
 	if (typeof value === "number") return number(value, positive);
@@ -25,8 +36,7 @@ export function point(value: unknown, parent = 12, positive = false): number {
 	if (typeof value !== "string") throw new Error(`invalid length: ${String(value)}`);
 	const match = LENGTH.exec(value.trim());
 	if (!match) throw new Error(`invalid length: ${value}`);
-	const scale = match[2] === "px" ? 0.75 : match[2] === "em" ? parent : match[2] === "rem" ? 12 : 1;
-	return number(Number(match[1]) * scale, positive);
+	return number(Number(match[1]) * (match[2] === "em" ? parent : POINTS[match[2]!]!), positive);
 }
 
 /** One radius: points, or a percent of the box side, which only the engine can resolve. */
@@ -69,51 +79,66 @@ export function spacing(value: unknown, size: number, name: string): number {
 	return amount;
 }
 
-const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|rem|%)$/;
+const DIMENSION = /^(\d+(?:\.\d*)?|\.\d+)(pt|px|pc|in|cm|mm|Q|rem|%)$/;
 
 /** A `width` or img `height`: points (kind 1) or percent of the container width (kind 2). */
 export function dimension(
 	value: unknown,
-	name: "width" | "height",
+	name: string,
+	zero = false,
 ): { kind: 1 | 2; value: number } {
 	const match = typeof value === "string" ? DIMENSION.exec(value) : null;
 	const amount =
 		typeof value === "number"
 			? value
-			: match
-				? Number(match[1]) * (match[2] === "px" ? 0.75 : match[2] === "rem" ? 12 : 1)
-				: NaN;
+			: value === "0"
+				? 0
+				: match
+					? Number(match[1]) * (match[2] === "%" ? 1 : POINTS[match[2]!]!)
+					: NaN;
 	// The engine takes f32, so a long digit string must not round to Infinity.
-	if (!(amount > 0) || !Number.isFinite(Math.fround(amount)))
+	if (!(amount > 0 || (zero && amount === 0)) || !Number.isFinite(Math.fround(amount)))
 		throw new Error(`invalid ${name}: ${String(value)}`);
-	return { kind: match?.[2] === "%" ? 2 : 1, value: Math.fround(amount) };
+	return { kind: match?.[2] === "%" && amount > 0 ? 2 : 1, value: Math.fround(amount) };
 }
 
-const FLEX_KEYWORD = new Map([
-	["none", 0],
-	["initial", 0],
-	["auto", 1],
-]);
-/** Only grow survives from the `flex` shorthand; shrink has no meaning without content sizing.
- *  The basis is reported so a caller can reject one that would be dropped. */
-export function flexGrow(value: unknown): { grow: number; basis: "zero" | "auto" | "length" } {
-	if (typeof value === "number") return { grow: number(value), basis: "zero" };
-	if (typeof value !== "string") throw new Error(`invalid flex: ${String(value)}`);
-	const [first, ...rest] = value.trim().split(/\s+/);
-	const keyword = FLEX_KEYWORD.get(first!);
-	if (keyword !== undefined) return { grow: keyword, basis: "auto" };
-	const grow = Number(first);
-	if (Number.isNaN(grow)) throw new Error(`invalid flex: ${value}`);
-	// After grow and an optional unitless shrink, the first other token is the basis.
-	const basis = rest.find((token) => !/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(token));
+/** `auto`, or a zero, length, or percent basis. */
+export function flexBasis(value: unknown) {
+	if (value === "auto") return undefined;
+	if (value === "content") throw new Error("flex-basis: content is not supported; use auto");
+	return dimension(value, "flex-basis", true);
+}
+
+const FACTOR = /^(?:\d+(?:\.\d*)?|\.\d+)$/;
+/** The `flex` shorthand's longhands: `none`, `auto`, or grow and shrink factors with a basis
+ *  before or after them. Factors alone have a zero basis; a basis alone grows and shrinks by 1. */
+export function flexShorthand(value: unknown): {
+	flexGrow: number;
+	flexShrink: number;
+	flexBasis: unknown;
+} {
+	if (typeof value === "number") return { flexGrow: number(value), flexShrink: 1, flexBasis: 0 };
+	const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+	if (!text) throw new Error(`invalid flex: ${String(value)}`);
+	if (text === "none") return { flexGrow: 0, flexShrink: 0, flexBasis: "auto" };
+	if (text === "auto") return { flexGrow: 1, flexShrink: 1, flexBasis: "auto" };
+	const tokens = text.split(/\s+/);
+	let basis = FACTOR.test(tokens[0]!) ? undefined : tokens.shift();
+	let [grow, shrink, last, ...extra] = tokens;
+	// A second token that is no number, or any third token, is the basis.
+	if (shrink !== undefined && !FACTOR.test(shrink) && last === undefined)
+		[shrink, last] = [undefined, shrink];
+	if (last !== undefined) {
+		if (basis !== undefined) extra.push(last);
+		basis = last;
+	}
+	if (extra.length || [grow, shrink].some((token) => token !== undefined && !FACTOR.test(token)))
+		throw new Error(`invalid flex: ${String(value)}`);
+	flexBasis(basis ?? 0);
 	return {
-		grow: number(grow),
-		basis:
-			basis === undefined || /^(?:0+\.?0*|\.0+)(?:%|[a-z]+)?$/.test(basis)
-				? "zero"
-				: basis === "auto"
-					? "auto"
-					: "length",
+		flexGrow: number(Number(grow ?? 1)),
+		flexShrink: number(Number(shrink ?? 1)),
+		flexBasis: basis ?? 0,
 	};
 }
 

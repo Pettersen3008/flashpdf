@@ -97,12 +97,14 @@ export type ElementNode = {
 	readonly start?: number | undefined;
 	readonly reversed?: boolean | undefined;
 	readonly value?: number | undefined;
+	readonly colSpan?: number | undefined;
+	readonly rowSpan?: number | undefined;
 };
 export type Node = TextNode | ElementNode;
 
 const HINTS: Record<string, string> = {
-	colgroup: "column widths come from the first row's <th>/<td> width or flex",
-	col: "column widths come from the first row's <th>/<td> width or flex",
+	colgroup: "each column's width comes from its first <th>/<td> without colSpan",
+	col: "each column's width comes from its first <th>/<td> without colSpan",
 	caption: "captions are not supported; use a <p> before the table",
 };
 
@@ -129,7 +131,7 @@ export function locate(error: unknown, where: string): unknown {
 	return error;
 }
 
-/** Explains a PageOverflow that no decorated box, image, or table claimed. */
+/** Explains a PageOverflow that no `break-inside: avoid` box, image, or table claimed. */
 export function pageOverflow(error: unknown): unknown {
 	if (!(error instanceof Error) || error.message !== "PageOverflow") return error;
 	const where = overflows.get(error);
@@ -343,6 +345,14 @@ function reversed(value: unknown, where: string): boolean | undefined {
 	return value;
 }
 
+/** 256 columns is the protocol's row limit; 65535 rows fit its u16 row span. */
+function span(value: unknown, name: string, max: number, where: string) {
+	if (value === undefined || value === null) return undefined;
+	if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > max)
+		throw new Error(`${name} must be an integer from 1 to ${max}${where}`);
+	return value as number;
+}
+
 function isTag(value: unknown): value is Tag {
 	return typeof value === "string" && (tags as readonly string[]).includes(value);
 }
@@ -379,8 +389,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		);
 	}
 	const where = ` on <${element.type}>${inside}`;
-	if ("colSpan" in object(element.props) || "rowSpan" in object(element.props))
-		throw new Error(`colSpan and rowSpan are not supported yet; use one cell per column${where}`);
+	const cell = element.type === "td" || element.type === "th";
 	// React 19 passes `ref` as a plain prop; a host element has nothing to attach it to.
 	const heading = /^h[1-6]$/.test(element.type);
 	const own =
@@ -396,7 +405,9 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 							? ["start", "reversed"]
 							: element.type === "li"
 								? ["value"]
-								: [];
+								: cell
+									? ["colSpan", "rowSpan"]
+									: [];
 	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
 		throw new Error(`<${element.type}> has no children${where}`);
@@ -427,6 +438,12 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 			? { start: ordinal(input.start, "start", where), reversed: reversed(input.reversed, where) }
 			: {}),
 		...(element.type === "li" ? { value: ordinal(input.value, "value", where) } : {}),
+		...(cell
+			? {
+					colSpan: span(input.colSpan, "colSpan", 256, where),
+					rowSpan: span(input.rowSpan, "rowSpan", 65535, where),
+				}
+			: {}),
 	};
 	const self = label(node);
 	// An svg's children became its drawing.
@@ -443,10 +460,11 @@ export async function resolveTree(value: unknown): Promise<readonly Node[]> {
 	return host(await reactTree(value));
 }
 
-/** `width` and `flex` size a flex row's columns; anywhere else they would be
+/** `flex` and `align-self` size and align a flex item; anywhere else they would be
  *  silently dropped, so they are rejected instead. */
 export function rowOnly(s: NormalizedStyle, inRow: boolean) {
 	if (inRow) return;
-	for (const key of ["width", "flex"] as const)
-		if (s[key] !== undefined) throw new Error(`${key} applies only to a flex row child`);
+	if (s.flexGrow !== undefined || s.flexShrink !== undefined || s.flexBasis !== undefined)
+		throw new Error("flex applies only to a flex item");
+	if (s.alignSelf !== undefined) throw new Error("align-self applies only to a flex item");
 }

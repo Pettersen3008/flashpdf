@@ -49,24 +49,24 @@ impl std::ops::SubAssign for Pt {
 pub struct Page {
     pub(crate) width: Pt,
     pub(crate) height: Pt,
-    pub(crate) margin: Pt,
+    pub(crate) margin: Edges<Pt>,
 }
 
 impl Page {
     pub const A4: Self = Self {
         width: Pt(595.0),
         height: Pt(842.0),
-        margin: Pt(36.0),
+        margin: Edges::all(Pt(36.0)),
     };
 
     pub const LETTER: Self = Self {
         width: Pt(612.0),
         height: Pt(792.0),
-        margin: Pt(36.0),
+        margin: Edges::all(Pt(36.0)),
     };
 
-    pub fn new(width: Pt, height: Pt, margin: Pt) -> Result<Self, RenderError> {
-        if width.0 > margin.0 * 2.0 && height.0 > margin.0 * 2.0 {
+    pub fn new(width: Pt, height: Pt, margin: Edges<Pt>) -> Result<Self, RenderError> {
+        if width.0 > margin.left.0 + margin.right.0 && height.0 > margin.top.0 + margin.bottom.0 {
             Ok(Self {
                 width,
                 height,
@@ -116,12 +116,10 @@ pub struct Rgb {
 impl Rgb {
     pub const BLACK: Self = Self { r: 0, g: 0, b: 0 };
 
+    /// Three decimals, which still round back to the same 8-bit channel.
     pub(crate) fn normalized(self) -> [f32; 3] {
-        [
-            f32::from(self.r) / 255.0,
-            f32::from(self.g) / 255.0,
-            f32::from(self.b) / 255.0,
-        ]
+        [self.r, self.g, self.b]
+            .map(|channel| (f32::from(channel) * 1000.0 / 255.0).round() / 1000.0)
     }
 }
 
@@ -184,6 +182,14 @@ pub enum TextAlign {
     /// Stretches the spaces of every wrapped line; the last line and a line
     /// ending in a hard break stay left-aligned.
     Justify,
+}
+
+/// Where a table cell's content sits when its row is taller than the content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerticalAlign {
+    Top,
+    Middle,
+    Bottom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -293,6 +299,8 @@ impl Default for RunDecoration {
 pub const OPAQUE: u8 = 255;
 
 /// An image's requested width; `Auto` is the intrinsic size at 96 px per inch, capped to the container.
+/// A width in points or percent of the container's width. An image's `Auto` is its
+/// intrinsic size at 96 px per inch, capped to the container.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ImageSize {
     Auto,
@@ -343,6 +351,77 @@ impl BoxStyle {
                         .iter()
                         .all(|line| *line == self.border_style.top)))
     }
+}
+
+/// CSS sizing of a box. `Auto` widths and `None` heights follow the content, and each
+/// value sizes the content box unless `border_box` is set.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxSize {
+    pub width: ImageSize,
+    /// `Auto` is zero in block flow and the min-content width for a flex item.
+    pub min_width: ImageSize,
+    /// `Auto` is `none`.
+    pub max_width: ImageSize,
+    pub height: Option<Pt>,
+    pub min_height: Pt,
+    pub max_height: Option<Pt>,
+    pub border_box: bool,
+    /// One bit per `auto` margin in `Edges` order: top 1, right 2, bottom 4, left 8.
+    pub auto_margin: u8,
+}
+
+impl BoxSize {
+    pub const AUTO: Self = Self {
+        width: ImageSize::Auto,
+        min_width: ImageSize::Auto,
+        max_width: ImageSize::Auto,
+        height: None,
+        min_height: Pt::ZERO,
+        max_height: None,
+        border_box: false,
+        auto_margin: 0,
+    };
+}
+
+/// `justify-content`; `start` and `end` are `flex-start` and `flex-end`, as nothing reverses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Justify {
+    Start,
+    End,
+    Center,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// `align-items` and `align-self`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Align {
+    Stretch,
+    Start,
+    End,
+    Center,
+}
+
+/// A single-line CSS flex container.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flex {
+    pub column: bool,
+    pub justify: Justify,
+    pub align: Align,
+    pub gap: Pt,
+    /// Bounds of the container's inner height; equal when the height is definite.
+    pub min_height: Pt,
+    pub max_height: Option<Pt>,
+}
+
+/// `align` `None` follows the container's `align-items`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlexItem {
+    pub grow: f32,
+    pub shrink: f32,
+    pub basis: ImageSize,
+    pub align: Option<Align>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -401,4 +480,6 @@ pub enum RenderError {
     TooManyPages,
     /// A link names a destination no element registered.
     UnknownDestination,
+    /// Content is taller than a box's fixed or maximum height, or than its flex container.
+    ContentOverflow,
 }

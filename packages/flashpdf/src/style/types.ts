@@ -16,6 +16,21 @@ export type NormalizedStyle = StyleInput & {
 	borderLeftStyle?: "solid" | "none";
 };
 
+/** Width-like sizes: points (kind 1) or percent of the container's width (kind 2). Heights
+ *  are points, percents already resolved against the parent's fixed height. */
+export type Size = {
+	borderBox: boolean;
+	/** One bit per `auto` margin: top 1, right 2, bottom 4, left 8. */
+	autoMargin: number;
+	width: Dimension | undefined;
+	minWidth: Dimension | undefined;
+	maxWidth: Dimension | undefined;
+	height: number | undefined;
+	minHeight: number | undefined;
+	maxHeight: number | undefined;
+};
+type Dimension = { kind: 1 | 2; value: number };
+
 export type Box = {
 	margin: [number, number, number, number];
 	padding: [number, number, number, number];
@@ -32,6 +47,7 @@ export type Box = {
 	radius?: Radius | undefined;
 	/** 0 to 1, with every ancestor's opacity multiplied in. */
 	opacity: number;
+	size?: Size | undefined;
 };
 
 /** Eight values, clockwise from the top left corner, horizontal then vertical, in points; bit `i`

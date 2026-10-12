@@ -1,12 +1,20 @@
-use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, MAX_IMAGE_BYTES, VERSION};
+use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, MAX_IMAGE_BYTES, MAX_BLOCK_BYTES, VERSION};
 use crate::renderer::MAX_PAGES;
+use crate::OwnedCommand;
 
 fn header(version: u16, width: f32, height: f32, margin: f32) -> Vec<u8> {
+    page_header(version, width, height, [margin; 4])
+}
+
+/// Margins in CSS order: top, right, bottom, left.
+fn page_header(version: u16, width: f32, height: f32, margin: [f32; 4]) -> Vec<u8> {
     let mut bytes = MAGIC.to_vec();
     bytes.extend(version.to_le_bytes());
     bytes.extend(width.to_le_bytes());
     bytes.extend(height.to_le_bytes());
-    bytes.extend(margin.to_le_bytes());
+    for side in margin {
+        bytes.extend(side.to_le_bytes());
+    }
     assert_eq!(bytes.len(), HEADER_LEN);
     bytes
 }
@@ -25,10 +33,20 @@ fn text(value: &[u8]) -> Vec<u8> {
 }
 
 fn columns(values: &[(u8, f32)]) -> Vec<u8> {
+    let plain: Vec<_> = values
+        .iter()
+        .map(|(kind, value)| (*kind, *value, &[0][..]))
+        .collect();
+    slotted(&plain)
+}
+
+/// Columns with their slot bytes: the flags, then a u16 row span when bit 2 is set.
+fn slotted(values: &[(u8, f32, &[u8])]) -> Vec<u8> {
     let mut bytes = (values.len() as u16).to_le_bytes().to_vec();
-    for (kind, value) in values {
+    for (kind, value, slot) in values {
         bytes.push(*kind);
         bytes.extend(value.to_le_bytes());
+        bytes.extend(*slot);
     }
     bytes
 }
@@ -49,7 +67,8 @@ type LinkedRun<'a> = (u8, f32, [u8; 3], u16, Option<u16>, &'a [u8]);
 
 /// `links` is the URI table the runs' link indices point into.
 fn linked_paragraph(align: u8, links: &[&[u8]], runs: &[LinkedRun<'_>]) -> Vec<u8> {
-    let mut payload = vec![align];
+    // One orphan and one widow, so lines break wherever the page ends.
+    let mut payload = vec![align, 1, 0, 1, 0];
     payload.extend((links.len() as u16).to_le_bytes());
     for link in links {
         payload.extend(text(link));
@@ -102,15 +121,21 @@ fn decorated_box(border: f32, tail: &[u8]) -> Vec<u8> {
     payload.extend([1, 0xee, 0xee, 0xee]);
     payload.extend([0, 0, 0].repeat(4));
     payload.extend(tail);
+    payload.extend([0; 7]);
     record(17, &payload)
 }
 
 /// Every opcode the JSX lowering emits, on a 120x60 page whose 40pt of body
-/// forces the stream across four pages.
+/// forces the stream across five pages.
 fn representative() -> Vec<u8> {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
     bytes.extend(anchor("top", 1, "Invoice"));
+    bytes.extend(record(13, &[1]));
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    bytes.extend(paragraph(0, &[(0, 1.0, [0, 0, 0], 0, b"\x1f")]));
+    bytes.extend(record(4, &[]));
     bytes.extend(plain(b"Before"));
+    bytes.extend(record(22, &[]));
     bytes.extend(box_start());
     bytes.extend(plain(b"Boxed"));
     bytes.extend(record(18, &[]));
@@ -126,6 +151,23 @@ fn representative() -> Vec<u8> {
         bytes.extend(record(6, &[]));
     }
     bytes.extend(record(11, &[]));
+    // A middle-aligned cell two columns wide and two rows tall beside a bottom-aligned one.
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    let span: &[u8] = &[5, 2, 0];
+    bytes.extend(record(
+        5,
+        &slotted(&[(1, 1.0, span), (1, 1.0, &[8]), (1, 1.0, &[2])]),
+    ));
+    bytes.extend(plain(b"span"));
+    bytes.extend(plain(b"x"));
+    bytes.extend(record(6, &[]));
+    bytes.extend(record(
+        5,
+        &slotted(&[(1, 1.0, &[16]), (1, 1.0, &[16]), (1, 1.0, &[0])]),
+    ));
+    bytes.extend(plain(b"y"));
+    bytes.extend(record(6, &[]));
+    bytes.extend(record(4, &[]));
     bytes.extend(record(2, &5.0_f32.to_le_bytes()));
     bytes.extend(record(3, &0.0_f32.to_le_bytes()));
     bytes.extend(plain(b"Stacked"));
@@ -159,20 +201,24 @@ fn decode(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[test]
-fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
+fn given_a_footer_and_a_first_page_footer_when_decoding_then_page_one_paints_the_first_and_later_pages_resolve_numbers(
+) {
     let mut bytes = header(VERSION, 595.0, 842.0, 36.0);
-    let mut footer = 10.0_f32.to_le_bytes().to_vec();
-    footer.extend([0, 0, 0, 0, 0, 0, 0]);
-    footer.extend(text("Page \u{1e} of \u{1f}".as_bytes()));
-    bytes.extend(record(8, &footer));
+    bytes.extend(record(8, &[0]));
+    bytes.extend(plain("Page \u{1e} of \u{1f}".as_bytes()));
+    bytes.extend(record(8, &[1]));
+    bytes.extend(plain(b"Cover"));
     bytes.extend(plain(b"First"));
     bytes.extend(record(7, &[]));
     bytes.extend(plain(b"Second"));
     bytes.extend(record(255, &[]));
 
     let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
-    assert_eq!(crate::tests::page_text(&pdf, 1), "First\nPage 1 of 2");
-    assert_eq!(crate::tests::page_text(&pdf, 2), "Second\nPage 2 of 2");
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "First\nCover");
+    assert_eq!(
+        pdf.extract_text(&[2]).unwrap().trim(),
+        "Second\nPage 2 of 2"
+    );
 }
 
 #[test]
@@ -265,10 +311,16 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     assert!(expected.starts_with(b"%PDF-"));
     let pdf = lopdf::Document::load_mem(&expected).unwrap();
     assert_eq!(pdf.get_pages().len(), 4);
-    assert_eq!(crate::tests::page_text(&pdf, 1), "Before\nBoxed\nrow\n1");
-    assert_eq!(crate::tests::page_text(&pdf, 2), "head\nbody\nStacked");
-    assert_eq!(crate::tests::page_text(&pdf, 3), "Styled top");
-    assert_eq!(crate::tests::page_text(&pdf, 4), "After");
+    assert_eq!(
+        pdf.extract_text(&[1]).unwrap().trim(),
+        "Before\nBoxed\nrow\n1\n4"
+    );
+    assert_eq!(
+        pdf.extract_text(&[2]).unwrap().trim(),
+        "head\nbody\nspan\nx\ny"
+    );
+    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Stacked\nStyled top");
+    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
     for split in 0..=bytes.len() {
         let mut decoder = decoder();
         decoder.push(&bytes[..split]).unwrap();
@@ -322,13 +374,19 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&unsupported), "UnsupportedCharacter('🙂')");
 
     let mut bad_length = header(VERSION, 120.0, 60.0, 10.0);
-    let mut payload = vec![0, 0, 0, 1, 0, 0];
+    let mut payload = vec![0, 1, 0, 1, 0, 0, 0, 1, 0, 0];
     payload.extend(10.0_f32.to_le_bytes());
     payload.extend([0, 0, 0, 0, 0]);
     payload.extend(4_u32.to_le_bytes());
     payload.push(b'x');
     bad_length.extend(record(9, &payload));
     assert_eq!(push_error(&bad_length), "truncated record");
+
+    let mut no_widows = header(VERSION, 120.0, 60.0, 10.0);
+    let mut zero = plain(b"x");
+    zero[8] = 0;
+    no_widows.extend(zero);
+    assert_eq!(push_error(&no_widows), "invalid orphans or widows");
 
     let mut bad_flags = header(VERSION, 120.0, 60.0, 10.0);
     bad_flags.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 3 << 13, b"x")]));
@@ -361,12 +419,27 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&invalid_metadata), "invalid metadata language");
 
     let mut duplicate_header = header(VERSION, 120.0, 60.0, 10.0);
-    let mut line = 10.0_f32.to_le_bytes().to_vec();
-    line.extend([0, 0, 0, 0, 0, 0, 0]);
-    line.extend(text(b"Header"));
-    duplicate_header.extend(record(13, &line));
-    duplicate_header.extend(record(13, &line));
+    for _ in 0..2 {
+        duplicate_header.extend(record(13, &[0]));
+        duplicate_header.extend(plain(b"Header"));
+    }
     assert_eq!(push_error(&duplicate_header), "InvalidLayout");
+
+    let mut bad_page = header(VERSION, 120.0, 60.0, 10.0);
+    bad_page.extend(record(8, &[2]));
+    assert_eq!(push_error(&bad_page), "invalid furniture page");
+
+    for after in [record(7, &[]), record(255, &[]), record(13, &[1])] {
+        let mut empty = header(VERSION, 120.0, 60.0, 10.0);
+        empty.extend(record(8, &[0]));
+        empty.extend(after);
+        assert_eq!(push_error(&empty), "invalid nesting");
+    }
+
+    let mut late = header(VERSION, 120.0, 60.0, 10.0);
+    late.extend(plain(b"Body"));
+    late.extend(record(13, &[0]));
+    assert_eq!(push_error(&late), "invalid nesting");
 }
 
 #[test]
@@ -505,6 +578,38 @@ fn given_invalid_numbers_layout_and_rows_when_decoding_then_rejects() {
     oversized.extend(plain("word ".repeat(100).as_bytes()));
     oversized.extend(record(4, &[]));
     assert_eq!(push_error(&oversized), "PageOverflow");
+}
+
+#[test]
+fn given_bad_cell_slots_when_decoding_then_rejects() {
+    let row = |slots: &[(u8, f32, &[u8])], cells: usize| {
+        let mut bytes = record(5, &slotted(slots));
+        for _ in 0..cells {
+            bytes.extend(plain(b"x"));
+        }
+        bytes.extend(record(6, &[]));
+        bytes
+    };
+    let span: &[u8] = &[4, 2, 0];
+    for (body, error) in [
+        (row(&[(1, 1.0, &[3])], 1), "invalid cell slot"),
+        (row(&[(1, 1.0, &[4, 1, 0])], 1), "invalid row span"),
+        (row(&[(1, 1.0, &[8])], 0), "InvalidLayout"),
+        (row(&[(1, 1.0, &[16]), (1, 1.0, &[8])], 0), "InvalidLayout"),
+        (
+            [
+                record(3, &0.0_f32.to_le_bytes()),
+                row(&[(1, 1.0, span)], 1),
+                record(4, &[]),
+            ]
+            .concat(),
+            "InvalidLayout",
+        ),
+    ] {
+        let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+        bytes.extend(body);
+        assert_eq!(push_error(&bytes), error);
+    }
 }
 
 #[test]
@@ -904,6 +1009,50 @@ fn given_page_breaks_past_the_page_cap_when_decoding_then_rejects_naming_the_cap
 }
 
 #[test]
+fn given_a_top_level_table_over_the_block_cap_when_decoding_then_streams_its_rows() {
+    let row = [
+        record(5, &columns(&[(1, 1.0)])),
+        plain(b"a"),
+        record(6, &[]),
+    ]
+    .concat();
+    // Each row buffers at least three commands, so these rows together exceed the cap.
+    let rows = MAX_BLOCK_BYTES / (3 * size_of::<OwnedCommand>()) + 1;
+    let mut decoder = Decoder::default();
+    decoder.push(&header(VERSION, 595.0, 842.0, 36.0)).unwrap();
+    decoder.push(&record(10, &table_start(1))).unwrap();
+    for _ in 0..=rows {
+        decoder.push(&row).unwrap();
+    }
+    decoder.push(&record(11, &[])).unwrap();
+    decoder.push(&record(255, &[])).unwrap();
+    decoder.finish().unwrap();
+}
+
+#[test]
+fn given_a_painted_box_around_a_table_over_the_block_cap_when_decoding_then_buffers_about_a_page() {
+    let row = [
+        record(5, &columns(&[(1, 1.0)])),
+        plain(b"a"),
+        record(6, &[]),
+    ]
+    .concat();
+    let rows = MAX_BLOCK_BYTES / (3 * size_of::<OwnedCommand>()) + 1;
+    let mut decoder = Decoder::default();
+    decoder.push(&header(VERSION, 595.0, 842.0, 36.0)).unwrap();
+    decoder.push(&box_start()).unwrap();
+    decoder.push(&record(10, &table_start(1))).unwrap();
+    for _ in 0..=rows {
+        decoder.push(&row).unwrap();
+        assert!(decoder.block_bytes < 1024);
+    }
+    decoder.push(&record(11, &[])).unwrap();
+    decoder.push(&record(18, &[])).unwrap();
+    decoder.push(&record(255, &[])).unwrap();
+    decoder.finish().unwrap();
+}
+
+#[test]
 fn given_a_page_side_over_14400_units_when_decoding_then_rejects() {
     assert_eq!(
         push_error(&header(VERSION, 14_401.0, 60.0, 10.0)),
@@ -913,6 +1062,18 @@ fn given_a_page_side_over_14400_units_when_decoding_then_rejects() {
         push_error(&header(VERSION, 120.0, f32::MAX, 10.0)),
         "invalid page size"
     );
+}
+
+#[test]
+fn given_page_margins_that_leave_no_width_or_no_height_when_decoding_then_rejects() {
+    for margin in [[0.0, 60.0, 0.0, 60.0], [30.0, 0.0, 30.0, 0.0]] {
+        assert_eq!(
+            push_error(&page_header(VERSION, 120.0, 60.0, margin)),
+            "InvalidPage"
+        );
+    }
+    let narrow = page_header(VERSION, 120.0, 60.0, [29.0, 0.0, 30.0, 119.0]);
+    Decoder::default().push(&narrow).unwrap();
 }
 
 #[test]
@@ -1238,4 +1399,24 @@ fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_
         .unwrap_err()
         .to_string();
     assert_eq!(message, "attachments exceed 64 MiB per render");
+}
+
+#[test]
+fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
+    let mut bytes = header(VERSION, 595.0, 842.0, 36.0);
+    bytes.extend(record(8, &[0]));
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    bytes.extend(plain("Page \u{1e} of \u{1f}".as_bytes()));
+    bytes.extend(record(4, &[]));
+    bytes.extend(plain(b"First"));
+    bytes.extend(record(7, &[]));
+    bytes.extend(plain(b"Second"));
+    bytes.extend(record(255, &[]));
+
+    let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "First\nPage 1 of 2");
+    assert_eq!(
+        pdf.extract_text(&[2]).unwrap().trim(),
+        "Second\nPage 2 of 2"
+    );
 }

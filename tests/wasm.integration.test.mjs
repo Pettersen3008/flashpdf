@@ -4,6 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { test } from "vitest";
 
+import { Binary } from "../packages/flashpdf/dist/binary.js";
+import { ProtocolWriter } from "../packages/flashpdf/dist/protocol.js";
 import { PdfRenderer, initSync } from "../packages/flashpdf/wasm/flashpdf_wasm.js";
 
 const encoder = new TextEncoder();
@@ -47,15 +49,17 @@ function record(opcode, payload = new Uint8Array()) {
 }
 
 function protocolHeader() {
-	return join(encoder.encode("FPDF"), u16(20), f32(120), f32(60), f32(10));
+	return join(encoder.encode("FPDF"), u16(20), f32(120), f32(60), ...[10, 10, 10, 10].map(f32));
 }
 
-/** A left-aligned paragraph of one plain Helvetica run. */
+/** A left-aligned paragraph of one plain Helvetica run, with two orphans and two widows. */
 function text(value, size = 10) {
 	return record(
 		9,
 		join(
 			Uint8Array.of(0),
+			u16(2),
+			u16(2),
 			u16(0),
 			u16(1),
 			Uint8Array.of(0),
@@ -69,7 +73,18 @@ function text(value, size = 10) {
 
 function row(left, right) {
 	return join(
-		record(5, join(u16(2), Uint8Array.of(0), f32(50), Uint8Array.of(1), f32(1))),
+		record(
+			5,
+			join(
+				u16(2),
+				Uint8Array.of(0),
+				f32(50),
+				Uint8Array.of(0),
+				Uint8Array.of(1),
+				f32(1),
+				Uint8Array.of(0),
+			),
+		),
 		text(left),
 		text(right),
 		record(6),
@@ -153,9 +168,57 @@ test("given invalid protocol input, when pushed, then the release WASM reports t
 			join(protocolHeader(), record(3, f32(0)), text("word ".repeat(100)), record(4)),
 			/PageOverflow/,
 		],
-		[join(encoder.encode("XPDF"), u16(20), f32(120), f32(60), f32(10)), /invalid magic/],
+		[join(encoder.encode("XPDF"), protocolHeader().subarray(4)), /invalid magic/],
 	]) {
 		assert.throws(() => renderProtocol(wasm, [stream]), message);
 	}
 	assert.throws(() => renderProtocol(wasm, [protocolHeader()]), /truncated protocol/);
+});
+
+test("given typography and a sized translucent box, when the JavaScript writer feeds WASM, then the decoder preserves the text", () => {
+	const wasm = loadWasm();
+	const renderer = new PdfRenderer();
+	const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
+	writer.header(120, 60, [10, 10, 10, 10]);
+	writer.boxStart({
+		margin: [0, 0, 0, 0],
+		padding: [2, 2, 2, 2],
+		border: [1, 1, 1, 1],
+		borderColor: Array.from({ length: 4 }, () => [0, 0, 0]),
+		borderStyle: [1, 1, 1, 1],
+		background: [240, 240, 240],
+		radius: { values: Array(8).fill(2), percent: 0 },
+		opacity: 0.6,
+		size: { width: { kind: 1, value: 80 }, height: 20 },
+	});
+	writer.paragraph(
+		[
+			{
+				font: 0,
+				size: 10,
+				lineHeight: 12,
+				color: [0, 0, 0],
+				text: "Wire valid",
+				break: false,
+				underline: true,
+				lineThrough: true,
+				decorationColor: [20, 40, 60],
+				link: "https://example.com/",
+				opacity: 0.6,
+				oblique: true,
+				letterSpacing: 0.5,
+				wordSpacing: 1,
+				kerning: false,
+				rise: 1,
+				background: [255, 255, 0],
+				marker: 0,
+				whiteSpace: "normal",
+				transform: "none",
+			},
+		],
+		"left",
+	);
+	writer.boxEnd();
+	writer.end();
+	assert.equal(validate(renderer.finish(), "protocol-writer-wasm"), "Wire valid");
 });

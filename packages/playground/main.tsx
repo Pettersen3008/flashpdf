@@ -187,8 +187,6 @@ function App() {
 				}
 				const start = performance.now();
 				const pdf = await flashpdf.render(document as Element, {
-					pageFormat: "A4",
-					margin: 36,
 					stylesheets: [css],
 					fonts,
 					...options,
