@@ -275,7 +275,7 @@ Supported CSS, the intentional v1 limits, and the reason behind each rejection l
 
 ## Working on FlashPDF
 
-Requirements: Node 22.12+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools (`mutool`) are optional locally, each enabling a check in `tests/e2e.mjs`, and CI requires all three. The package itself runs on Node 20.19+.
+Requirements: Node 22.18+ in the 22.x line or Node 24.11+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools (`mutool`) are optional locally, each enabling a check in `tests/e2e.mjs`, and CI requires all three. The package itself runs on Node 20.19+.
 
 pnpm 10 cannot switch itself to pnpm 12, and Corepack 0.34 cannot launch it, so install the pinned version directly.
 
