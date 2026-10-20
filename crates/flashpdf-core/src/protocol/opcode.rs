@@ -21,6 +21,9 @@ pub(super) enum Opcode {
     PdfA = 20,
     Attachment = 21,
     Anchor = 22,
+    Avoid = 23,
+    FlexStart = 24,
+    FlexEnd = 25,
     End = 255,
 }
 
@@ -47,6 +50,9 @@ impl TryFrom<u8> for Opcode {
             20 => Self::PdfA,
             21 => Self::Attachment,
             22 => Self::Anchor,
+            23 => Self::Avoid,
+            24 => Self::FlexStart,
+            25 => Self::FlexEnd,
             255 => Self::End,
             _ => return Err(ProtocolError::UnknownOpcode),
         })

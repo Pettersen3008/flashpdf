@@ -2,8 +2,28 @@ import { asError, Binary } from "./binary.js";
 import type { Box, Transform, WhiteSpace } from "./style.js";
 
 export type Column = { kind: 0 | 1 | 2; value: number };
+/** A table row's column: a cell that starts there, more of the cell to its left, or part of a cell from an earlier row. */
+export type Slot = { align: 0 | 1 | 2; rows: number } | "join" | "covered";
 /** An image dimension: 1 is points, 2 is percent of the container width. */
 export type Dimension = { kind: 1 | 2; value: number };
+/** Alignment codes: 0 auto, then stretch, start, end, center. */
+export type Flex = {
+	column: boolean;
+	/** Start, end, center, space-between, space-around, space-evenly. */
+	justify: number;
+	align: number;
+	gap: number;
+	/** Bounds of the container's content height; equal when the height is fixed. */
+	minHeight: number;
+	maxHeight: number | undefined;
+};
+/** `basis` undefined is `auto`. */
+export type FlexItem = {
+	grow: number;
+	shrink: number;
+	basis: Dimension | undefined;
+	align: number;
+};
 /** One styled stretch of a paragraph; `break` ends the line after it. */
 export type Run = {
 	font: number;
@@ -56,6 +76,8 @@ const opcode = {
 	stackEnd: 4,
 	rowStart: 5,
 	rowEnd: 6,
+	flexStart: 24,
+	flexEnd: 25,
 	pageBreak: 7,
 	footer: 8,
 	header: 13,
@@ -69,6 +91,7 @@ const opcode = {
 	pdfa: 20,
 	attachment: 21,
 	anchor: 22,
+	avoid: 23,
 	end: 255,
 } as const;
 /** The core's caps; images are checked here because `add_image` copies the bytes into WASM memory. */
@@ -76,8 +99,8 @@ const MAX_IMAGE_BYTES = 64 * 1024 * 1024;
 const MAX_PAGES = 10_000;
 
 export class ProtocolWriter {
-	private repeating: "header" | "footer" | undefined;
-	private repeatWritten = false;
+	/** The render option whose header or footer block is being written. */
+	private repeating: string | undefined;
 	/** Slot per registered byte array, so a logo reused on every row embeds once. */
 	private readonly images = new Map<Uint8Array, number>();
 	private imageBytes = 0;
@@ -94,7 +117,7 @@ export class ProtocolWriter {
 		private readonly assets: { add_image(bytes: Uint8Array): number },
 	) {}
 
-	header(width: number, height: number, margin: number) {
+	header(width: number, height: number, margin: readonly number[]) {
 		this.binary.header(width, height, margin);
 	}
 
@@ -134,37 +157,8 @@ export class ProtocolWriter {
 		});
 	}
 
-	paragraph(runs: readonly Run[], align: string) {
+	paragraph(runs: readonly Run[], align: string, orphans = 2, widows = 2) {
 		const alignment = ["left", "center", "right", "justify"].indexOf(align);
-		if (this.repeating) {
-			const [only] = runs;
-			if (this.repeatWritten || runs.length !== 1 || only!.break)
-				throw new Error(`${this.repeating} must be a single text line`);
-			if (
-				only!.underline ||
-				only!.lineThrough ||
-				only!.link !== undefined ||
-				only!.rise ||
-				only!.background ||
-				only!.marker
-			)
-				throw new Error(
-					`${this.repeating} text cannot be underlined, linked, raised, or highlighted`,
-				);
-			if (alpha(only!.opacity) !== 255)
-				throw new Error(`${this.repeating} text cannot take opacity`);
-			this.repeatWritten = true;
-			this.binary.record(opcode[this.repeating], () => {
-				this.binary.f32(only!.size);
-				this.binary.u8(alignment);
-				for (const channel of only!.color) this.binary.u8(channel);
-				this.binary.u8(only!.font);
-				this.binary.u16(typography(only!));
-				this.spacing(only!);
-				this.binary.text(only!.text);
-			});
-			return;
-		}
 		this.body();
 		const links: string[] = [];
 		for (const run of runs)
@@ -173,6 +167,8 @@ export class ProtocolWriter {
 		try {
 			this.binary.record(opcode.paragraph, () => {
 				this.binary.u8(alignment);
+				this.binary.u16(orphans);
+				this.binary.u16(widows);
 				this.binary.u16(links.length);
 				for (const link of links) this.binary.text(link);
 				this.binary.u16(runs.length);
@@ -224,7 +220,6 @@ export class ProtocolWriter {
 		link: string | undefined,
 		opacity: number,
 	) {
-		this.body();
 		let slot = this.images.get(src);
 		if (slot === undefined) {
 			if (this.imageBytes + src.byteLength > MAX_IMAGE_BYTES)
@@ -270,7 +265,6 @@ export class ProtocolWriter {
 	}
 
 	spacer(height: number) {
-		this.body();
 		this.binary.record(opcode.spacer, () => this.binary.f32(height));
 	}
 
@@ -299,25 +293,54 @@ export class ProtocolWriter {
 		this.close(through, opcode.stackEnd);
 	}
 
-	rowStart(columns: readonly Column[]) {
-		this.body();
+	/** Without `slots`, each column holds its own top-aligned cell. */
+	rowStart(columns: readonly Column[], slots: readonly Slot[] = []) {
 		this.binary.record(opcode.rowStart, () => {
 			this.binary.u16(columns.length);
-			for (const column of columns) {
+			for (const [index, column] of columns.entries()) {
 				this.binary.u8(column.kind);
 				this.binary.f32(column.value);
+				// Bits 0-1 align a cell top, middle, or bottom, and bit 2 means a u16 row span follows;
+				// 8 joins the cell to the left, and 16 marks a column a cell from an earlier row covers.
+				const slot = slots[index] ?? { align: 0, rows: 1 };
+				if (slot === "join") this.binary.u8(8);
+				else if (slot === "covered") this.binary.u8(16);
+				else if (slot.rows > 1) {
+					this.binary.u8(4 | slot.align);
+					this.binary.u16(slot.rows);
+				} else this.binary.u8(slot.align);
 			}
 		});
 	}
 
 	rowEnd() {
-		this.body();
 		this.binary.record(opcode.rowEnd);
+	}
+
+	flexStart(flex: Flex, items: readonly FlexItem[]) {
+		this.binary.record(opcode.flexStart, () => {
+			this.binary.u8(flex.column ? 1 : 0);
+			this.binary.u8(flex.justify);
+			this.binary.u8(flex.align);
+			this.binary.f32(flex.gap);
+			this.binary.f32(flex.minHeight);
+			this.height(flex.maxHeight);
+			this.binary.u16(items.length);
+			for (const item of items) {
+				this.binary.f32(item.grow);
+				this.binary.f32(item.shrink);
+				this.size(item.basis);
+				this.binary.u8(item.align);
+			}
+		});
+	}
+
+	flexEnd() {
+		this.binary.record(opcode.flexEnd);
 	}
 
 	/** The first `headerRows` children repeat on every page the table continues on. */
 	tableStart(headerRows: number, footerRows: number, width: Column) {
-		this.body();
 		if (headerRows > 0xffff) throw new Error("too many header rows");
 		if (footerRows > 0xffff) throw new Error("too many footer rows");
 		this.binary.record(opcode.tableStart, () => {
@@ -329,12 +352,12 @@ export class ProtocolWriter {
 	}
 
 	tableEnd() {
-		this.body();
 		this.binary.record(opcode.tableEnd);
 	}
 
-	/** CSS drops the margin before a forced break and keeps the one after. */
+
 	pageBreak() {
+		if (this.repeating) throw new Error(`${this.repeating} cannot contain page breaks`);
 		this.held = 0;
 		this.body();
 		if (++this.pages > MAX_PAGES)
@@ -342,14 +365,21 @@ export class ProtocolWriter {
 		this.binary.record(opcode.pageBreak);
 	}
 
-	repeatStart(position: "header" | "footer") {
-		this.repeating = position;
-		this.repeatWritten = false;
+	/** Avoids a page break here; a header or footer line has no breaks. */
+	avoid() {
+		if (!this.repeating) this.binary.record(opcode.avoid);
+	}
+
+	/** The engine takes the next top-level block, this stack, as the header or footer. */
+	repeatStart(position: "header" | "footer", first: boolean, option: string) {
+		this.binary.record(opcode[position], () => this.binary.u8(first ? 1 : 0));
+		this.stackStart(0);
+		this.repeating = option;
 	}
 
 	repeatEnd() {
-		if (!this.repeatWritten) throw new Error(`${this.repeating} must be a single text line`);
 		this.repeating = undefined;
+		this.stackEnd();
 	}
 
 	/** With `through`, the start waits for content so a held margin collapses past it to land outside
@@ -374,8 +404,25 @@ export class ProtocolWriter {
 					this.binary.u8(radius.percent);
 					for (const value of radius.values) this.binary.f32(value);
 				}
+				const size = box.size;
+				this.binary.u8((size?.borderBox ? 1 : 0) | ((size?.autoMargin ?? 0) << 1));
+				this.size(size?.width);
+				this.size(size?.minWidth);
+				this.size(size?.maxWidth);
+				this.height(size?.height);
+				this.height(size?.minHeight);
+				this.height(size?.maxHeight);
 			}),
 		);
+	}
+	/** Kind 0 is `auto`. */
+	private size(value: Dimension | undefined) {
+		this.binary.u8(value?.kind ?? 0);
+		if (value) this.binary.f32(value.value);
+	}
+
+	private height(value: number | undefined) {
+		this.size(value === undefined ? undefined : { kind: 1, value });
 	}
 
 	boxEnd(through = false) {
@@ -407,7 +454,6 @@ export class ProtocolWriter {
 
 	/** Every body record first writes what is held, unless it is held itself. */
 	private body(flush = true) {
-		if (this.repeating) throw new Error(`${this.repeating} must be a single text line`);
 		if (flush) this.flush();
 	}
 }

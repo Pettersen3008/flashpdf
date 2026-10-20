@@ -90,15 +90,18 @@ pub(crate) struct ParagraphLayouter<'a> {
     space: Option<Space>,
     /// The list marker's segment, slot width, and whether it sits inside the line, until the first line takes it.
     marker: Option<(usize, Pt, bool)>,
+    /// The widest word so far: the paragraph's min-content width.
+    widest: Pt,
 }
 
 impl<'a> ParagraphLayouter<'a> {
+    /// Returns the height and the widest word.
     pub(crate) fn layout(
         fonts: &'a FontBook,
         paragraph: &Paragraph<'_>,
         area: LayoutArea,
         output: &mut LayoutBuffer,
-    ) -> Result<Pt, LayoutError> {
+    ) -> Result<(Pt, Pt), LayoutError> {
         let mut runs = Vec::with_capacity(paragraph.runs.len());
         for run in &paragraph.runs {
             if run.size == Pt::ZERO {
@@ -144,6 +147,7 @@ impl<'a> ParagraphLayouter<'a> {
             previous: None,
             space: None,
             marker: None,
+            widest: Pt::ZERO,
         };
         let mut rest = paragraph.text;
         for (index, run) in paragraph.runs.iter().enumerate() {
@@ -171,7 +175,7 @@ impl<'a> ParagraphLayouter<'a> {
         if state.has_word {
             state.push_line(output, false);
         }
-        Ok(state.height)
+        Ok((state.height, state.widest))
     }
 
     /// Measures the list marker and queues it for the first line, which `push_line` pairs it
@@ -323,6 +327,9 @@ impl<'a> ParagraphLayouter<'a> {
             .iter()
             .fold(Pt::ZERO, |total, piece| total + piece.lead + piece.width);
         let space = self.space.take();
+        if width > self.widest {
+            self.widest = width;
+        }
         let gap = space.as_ref().map_or(Pt::ZERO, |space| space.width);
         let started = self.has_word || self.used > Pt::ZERO;
         let overflow = self.used + gap + width > self.area.width;

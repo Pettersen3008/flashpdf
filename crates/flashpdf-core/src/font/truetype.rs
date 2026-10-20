@@ -15,6 +15,8 @@ pub(crate) struct EmbeddedFont {
     advances: Vec<u16>,
     /// Glyph ids shown so far; the subset and `/W` array cover exactly these.
     pub(crate) used: BTreeSet<u16>,
+    /// A bit per glyph id in `used`, so a glyph shown again skips the tree.
+    seen: Vec<u64>,
     pub(crate) bbox: Rect,
     pub(crate) name: String,
     pub(crate) ascent: f32,
@@ -122,6 +124,7 @@ impl EmbeddedFont {
             cmap,
             advances,
             used: BTreeSet::new(),
+            seen: vec![0; 1024],
             bbox,
             name,
             ascent,
@@ -135,6 +138,14 @@ impl EmbeddedFont {
             kerning,
             scale,
         })
+    }
+
+    pub(crate) fn mark(&mut self, gid: u16) {
+        let (word, bit) = (usize::from(gid / 64), 1 << (gid % 64));
+        if self.seen[word] & bit == 0 {
+            self.seen[word] |= bit;
+            self.used.insert(gid);
+        }
     }
 
     pub(crate) fn glyph(&self, character: char) -> Option<u16> {

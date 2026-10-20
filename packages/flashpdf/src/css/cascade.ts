@@ -42,12 +42,12 @@ const uaStyles: Partial<Record<Tag, CascadedStyle>> = {
 	dd: { marginLeft: "40px" },
 	address: { fontStyle: "italic" },
 	hr: { borderBottom: "1pt solid black", margin: "0.5em 0" },
-	h1: { fontSize: "2em", fontWeight: "bold", margin: "0.67em 0" },
-	h2: { fontSize: "1.5em", fontWeight: "bold", margin: "0.83em 0" },
-	h3: { fontSize: "1.17em", fontWeight: "bold", margin: "1em 0" },
-	h4: { fontSize: "1em", fontWeight: "bold", margin: "1.33em 0" },
-	h5: { fontSize: "0.83em", fontWeight: "bold", margin: "1.67em 0" },
-	h6: { fontSize: "0.67em", fontWeight: "bold", margin: "2.33em 0" },
+	h1: { fontSize: "2em", fontWeight: "bold", breakAfter: "avoid", margin: "0.67em 0" },
+	h2: { fontSize: "1.5em", fontWeight: "bold", breakAfter: "avoid", margin: "0.83em 0" },
+	h3: { fontSize: "1.17em", fontWeight: "bold", breakAfter: "avoid", margin: "1em 0" },
+	h4: { fontSize: "1em", fontWeight: "bold", breakAfter: "avoid", margin: "1.33em 0" },
+	h5: { fontSize: "0.83em", fontWeight: "bold", breakAfter: "avoid", margin: "1.67em 0" },
+	h6: { fontSize: "0.67em", fontWeight: "bold", breakAfter: "avoid", margin: "2.33em 0" },
 };
 
 /** The user-agent rules that depend on nesting: a list inside a list has no vertical margin, and

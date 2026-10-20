@@ -10,6 +10,7 @@ import type {
 	HeadingProps,
 	ListItemProps,
 	OrderedListProps,
+	CellProps,
 	VoidProps,
 } from "./element.js";
 import type { BlockTag, TableTag, TextTag } from "./tree.js";
@@ -69,5 +70,7 @@ export namespace JSX {
 		h6: HeadingProps;
 		ol: OrderedListProps;
 		li: ListItemProps;
+		td: CellProps;
+		th: CellProps;
 	}
 }

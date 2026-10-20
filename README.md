@@ -6,22 +6,24 @@ Render invoices and reports from native JSX and a static CSS subset. A Rust layo
 
 ```tsx
 /** @jsxImportSource @pettersen3008/flashpdf */
-import { render } from '@pettersen3008/flashpdf';
+import { render } from "@pettersen3008/flashpdf";
 
 function Invoice({ total }: { total: string }) {
   return (
-    <main style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <main style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <h1>Invoice</h1>
-      <p>Due in <b>14 days</b></p>
-      <div style={{ display: 'flex', flexDirection: 'row' }}>
+      <p>
+        Due in <b>14 days</b>
+      </p>
+      <div style={{ display: "flex", flexDirection: "row" }}>
         <span style={{ flex: 1 }}>Consulting</span>
-        <span style={{ width: '90pt', textAlign: 'right' }}>{total}</span>
+        <span style={{ width: "90pt", textAlign: "right" }}>{total}</span>
       </div>
     </main>
   );
 }
 
-const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', margin: 36 });
+const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: "A4", margin: 36 });
 ```
 
 ## Playground
@@ -30,28 +32,28 @@ The playground at https://pettersen3008.github.io/flashpdf/ renders a TSX templa
 
 ## Tables
 
-A `<table>` splits between rows and repeats its `<thead>` on every page. Column widths come from the first row's cells, cells stretch to the row height, and `th` is bold by default.
+A `<table>` splits between rows and repeats its `<thead>` on every page. Each column takes its width from its first cell without `colSpan`, cells stretch to the row height, and `th` is bold by default. `colSpan` and `rowSpan` span cells, `vertical-align: top | middle | bottom` places a cell's content, and `border-collapse: collapse` draws one line between neighbouring cells.
 
 ```tsx
 <table>
   <thead>
     <tr>
       <th>Description</th>
-      <th style={{ width: '90pt', textAlign: 'right' }}>Amount</th>
+      <th style={{ width: "90pt", textAlign: "right" }}>Amount</th>
     </tr>
   </thead>
   <tbody>
     {items.map((item) => (
       <tr key={item.id}>
-        <td style={{ borderBottom: '0.5pt solid #ddd' }}>{item.description}</td>
-        <td style={{ borderBottom: '0.5pt solid #ddd', textAlign: 'right' }}>{item.amount}</td>
+        <td style={{ borderBottom: "0.5pt solid #ddd" }}>{item.description}</td>
+        <td style={{ borderBottom: "0.5pt solid #ddd", textAlign: "right" }}>{item.amount}</td>
       </tr>
     ))}
   </tbody>
 </table>
 ```
 
-`colSpan`, `rowSpan`, `vertical-align` on a cell, and `border-collapse` reject with a reason; see [CSS.md](./CSS.md).
+Rows that a `rowSpan` joins move between pages together, and a `rowSpan` stays inside its `thead`, `tbody`, or `tfoot`. `vertical-align: baseline`, `border-spacing` other than 0, and `<colgroup>` reject with a reason; see [CSS.md](./CSS.md).
 
 ## Lists, preformatted text, and inline elements
 
@@ -91,7 +93,7 @@ PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and base
 `svg` draws logos, icons, and simple charts as vector paths and sizes like `img`. Shapes, `path` with the full `d` grammar, transforms, strokes and dashes, opacity, and `currentColor` work; text, gradients, filters, masks, clip paths, and `use` reject with a reason. `<img src={svgBytes}>` takes an SVG file with the same subset.
 
 ```tsx
-<svg viewBox="0 0 24 24" width={32} aria-label="Paid" style={{ color: '#0a7' }}>
+<svg viewBox="0 0 24 24" width={32} aria-label="Paid" style={{ color: "#0a7" }}>
   <circle cx={12} cy={12} r={10} fill="none" stroke="currentColor" strokeWidth={2} />
   <path d="M7 12l3 3 7-7" fill="none" stroke="currentColor" strokeLinecap="round" />
 </svg>
@@ -109,6 +111,22 @@ import { Barcode, QRCode } from '@pettersen3008/flashpdf';
 ```
 
 `QRCode` takes `value`, `level` (`'L'`, `'M'`, `'Q'`, or `'H'`, default `'M'`), and `quietZone` in modules (default 4). It uses numeric or alphanumeric mode when the whole value fits, otherwise UTF-8 bytes, picks the smallest version from 1 to 40 at that level, and applies the mask with the lowest penalty from the QR standard. A `style` width sizes it; without one, each module is 1.5 pt. Children draw over the symbol in a 100 by 100 box, for a logo or the Swiss cross. `Barcode` draws Code 128 with automatic switching between code sets B and C and the checksum. `moduleWidth` and `height` are points (defaults 1 and 36), `quietZone` is 10 modules, and `text={false}` hides the value printed below. Both take `alt`, `style`, `className`, and `id`. Code set A, FNC1 (GS1-128), and other symbologies are not supported. FlashPDF does not validate payment payloads; the [guide](./docs/guide.md) has EPC (GiroCode) and Swiss QR-bill recipes.
+
+## Page setup
+
+`pageFormat` takes `'A3'`, `'A4'`, `'A5'`, `'Letter'`, `'Legal'`, or `{ width, height }`, and `orientation: 'landscape'` puts the longer side across. `margin` takes one to four lengths in CSS shorthand order or `{ top, right, bottom, left }`. A number is points, and every length also accepts `mm`, `cm`, `in`, `pc`, and `Q`, in styles too. The header and footer sit inside the top and bottom margins.
+
+```tsx
+// DIN 5008 form B: content starts at the address field, 45mm down and 25mm from the left edge.
+const letter = await render(<Invoice />, { pageFormat: "A4", margin: "45mm 20mm 20mm 25mm" });
+const report = await render(<Report />, {
+  pageFormat: "A4",
+  orientation: "landscape",
+  margin: "15mm",
+});
+```
+
+A stylesheet can set the same through `@page { size: A4 landscape; margin: 15mm }`. Options win over `@page`, as an inline style wins over a stylesheet. `@page :first` and margin boxes reject; see [CSS.md](./CSS.md).
 
 ## Install
 
@@ -132,7 +150,7 @@ FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImpor
 `render` returns a `Uint8Array`. FlashPDF ships no viewer, download, or upload helper, so you own what happens next:
 
 ```ts
-const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
+const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
 ```
 
 ## Styling with CSS
@@ -140,8 +158,8 @@ const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
 Compile stylesheets with the consuming app's build tool and pass the resulting string to `render`:
 
 ```tsx
-import css from './invoice.css?inline';
-import { render } from '@pettersen3008/flashpdf';
+import css from "./invoice.css?inline";
+import { render } from "@pettersen3008/flashpdf";
 
 const pdf = await render(<main className="invoice">…</main>, { stylesheets: [css] });
 ```
@@ -150,28 +168,42 @@ CSS Modules, minification, and syntax transforms belong to the frontend build. L
 
 Runnable Tailwind, StyleX, and styled-components build-step examples live in [`packages/flashpdf/examples/css-integrations`](./packages/flashpdf/examples/css-integrations). They compile or extract static CSS, then pass that string through `render({ stylesheets })`.
 
-FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules other than `@media` and `@property`, and selectors that match nothing in a PDF (`:hover`, `::before`) are skipped. A selector it cannot evaluate, such as `[href]` or `:has()`, rejects.
+FlashPDF rejects any declaration it cannot honour on an element it renders, naming the property, selector, source position, and element path. Unused rules, at-rules other than `@media`, `@property`, and `@page`, and selectors that match nothing in a PDF (`:hover`, `::before`) are skipped. A selector it cannot evaluate, such as `[href]` or `:has()`, rejects.
 
 ## API
 
-| Export | Signature | Notes |
-| --- | --- | --- |
-| `render` | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
-| `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
-| `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
-| `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
-| `QRCode` | `(props: QRCodeProps) => Element` | A vector QR code; see [QR codes and barcodes](#qr-codes-and-barcodes). |
-| `Barcode` | `(props: BarcodeProps) => Element` | A vector Code 128 barcode. |
+| Export       | Signature                                                                                 | Notes                                                                                                                              |
+| ------------ | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `render`     | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process.                              |
+| `stylesheet` | `(source: string) => string`                                                              | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
+| `PageNumber` | `() => Element`                                                                           | Resolves to the current page number inside a header or footer.                                                                     |
+| `TotalPages` | `() => Element`                                                                           | Resolves to the final page count inside a header or footer.                                                                        |
+| `QRCode`     | `(props: QRCodeProps) => Element`                                                         | A vector QR code; see [QR codes and barcodes](#qr-codes-and-barcodes).                                                             |
+| `Barcode`    | `(props: BarcodeProps) => Element`                                                        | A vector Code 128 barcode.                                                                                                         |
 
-`RenderOptions` is `{ pageFormat?: 'A4' | 'Letter'; margin?: number; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element; footer?: Element; metadata?: PdfMetadata; tagged?: boolean; outline?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array; italic?: Uint8Array; boldItalic?: Uint8Array }`. Margins are points, and the default is 36. Headers and footers each accept one styled text line with optional page tokens. They repeat on every page and reserve their measured height before body pagination.
+`RenderOptions` is `{ pageFormat?: 'A3' | 'A4' | 'A5' | 'Letter' | 'Legal' | { width: Length; height: Length }; orientation?: 'portrait' | 'landscape'; margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length }; stylesheets?: readonly string[]; fonts?: readonly EmbeddedFont[]; header?: Element | Iterable<Element>; footer?: Element | Iterable<Element>; firstPageHeader?: Element | Iterable<Element> | null; firstPageFooter?: Element | Iterable<Element> | null; metadata?: PdfMetadata; tagged?: boolean; outline?: boolean; pdfa?: '3b'; attachments?: readonly Attachment[]; facturx?: FacturX }`; see [PDF/A and e-invoices](#pdfa-and-e-invoices) for the last three. An `EmbeddedFont` is `{ family: string; regular: Uint8Array; bold?: Uint8Array; italic?: Uint8Array; boldItalic?: Uint8Array }`. The page defaults to A4 portrait with 36pt margins; see [Page setup](#page-setup).
+
+A header or footer takes any element tree the body takes: several lines, links, flex columns, images, tables, borders, and backgrounds. It paints on every page and reserves its height before body pagination. `firstPageHeader` and `firstPageFooter` replace them on the first page, and `null` leaves the first page without one. Together a page's header and footer may take at most half the page between its margins.
 
 ```tsx
-import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
+import { PageNumber, TotalPages } from "@pettersen3008/flashpdf";
 
 const pdf = await render(<Invoice />, {
-  header: <header style={{ fontSize: '9pt' }}>Acme invoice</header>,
-  footer: <footer style={{ fontSize: '9pt', textAlign: 'center' }}>Page <PageNumber /> of <TotalPages /></footer>,
-  metadata: { title: 'Invoice 42', author: 'Acme', language: 'en-US' },
+  firstPageHeader: <Letterhead />,
+  header: <header style={{ fontSize: "9pt" }}>Acme invoice 42</header>,
+  footer: (
+    <footer style={{ display: "flex", fontSize: "8pt", borderTop: "1px solid #ccc" }}>
+      <p>
+        Acme Supply AS
+        <br />
+        Org. no. 912 345 678
+      </p>
+      <p style={{ textAlign: "right" }}>
+        Page <PageNumber /> of <TotalPages />
+      </p>
+    </footer>
+  ),
+  metadata: { title: "Invoice 42", author: "Acme", language: "en-US" },
   tagged: true,
 });
 ```
@@ -205,11 +237,11 @@ Lines break at ASCII whitespace and between CJK characters (ideographs, kana, Ha
 `facturx: { xml, profile }` makes a Factur-X or ZUGFeRD 2.x hybrid invoice and implies `pdfa: '3b'`. FlashPDF embeds the CII XML as `factur-x.xml` (`xrechnung.xml` for the `XRECHNUNG` profile) with the relationship the profile requires (`Data` for `MINIMUM` and `BASIC WL`, `Alternative` for the rest), and writes the Factur-X XMP extension schema with `fx:Version` 1.0. `profile` is `'MINIMUM'`, `'BASIC WL'`, `'BASIC'`, `'EN 16931'`, `'EXTENDED'`, or `'XRECHNUNG'`.
 
 ```tsx
-const xml = new Uint8Array(await readFile('invoice-42.xml'));
+const xml = new Uint8Array(await readFile("invoice-42.xml"));
 const pdf = await render(<Invoice />, {
-  fonts: [{ family: 'Invoice', regular, bold }],
-  metadata: { title: 'Invoice 42', author: 'Acme', language: 'de-DE' },
-  facturx: { xml, profile: 'EN 16931' },
+  fonts: [{ family: "Invoice", regular, bold }],
+  metadata: { title: "Invoice 42", author: "Acme", language: "de-DE" },
+  facturx: { xml, profile: "EN 16931" },
 });
 ```
 
@@ -217,14 +249,14 @@ FlashPDF only checks that `xml` is UTF-8 text that starts with `<` and ends with
 
 ## Compatibility
 
-| Target | `render` |
-| --- | --- |
-| Browser via Vite, webpack, or Rollup | Yes, including host-provided `Uint8Array` TTFs, the bundler emits the WASM as an asset |
-| Node 20.19+ | Yes, including host-provided `Uint8Array` TTFs |
-| Bun 1.x | Yes, including host-provided `Uint8Array` TTFs |
-| AWS Lambda Node.js 20.19+ | Yes, include the package's `wasm/` directory in the deployment artifact |
-| Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
-| Vercel Edge | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
+| Target                               | `render`                                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Browser via Vite, webpack, or Rollup | Yes, including host-provided `Uint8Array` TTFs, the bundler emits the WASM as an asset                              |
+| Node 20.19+                          | Yes, including host-provided `Uint8Array` TTFs                                                                      |
+| Bun 1.x                              | Yes, including host-provided `Uint8Array` TTFs                                                                      |
+| AWS Lambda Node.js 20.19+            | Yes, include the package's `wasm/` directory in the deployment artifact                                             |
+| Cloudflare Workers                   | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module                                     |
+| Vercel Edge                          | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
 
 Every target runs the same decoder. `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
 

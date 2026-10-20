@@ -450,6 +450,50 @@ function preludeEnd(source: string, start: number) {
 	}
 	throw invalid(source, start);
 }
+/** One `@page` declaration, in source order. */
+export type PageDeclaration = { name: string; value: string; important: boolean; where: string };
+const PAGE_PROPERTIES = [
+	"size",
+	"margin",
+	"margin-top",
+	"margin-right",
+	"margin-bottom",
+	"margin-left",
+];
+/** Reads an `@page` rule into `pages` and returns the index past it. */
+function pageRule(source: string, start: number, pages: PageDeclaration[]) {
+	const open = source.indexOf("{", start);
+	if (open < 0) throw invalid(source, start);
+	const where = ` in @page at ${position(source, start)}`;
+	const selector = source.slice(start + 5, open).trim();
+	if (selector)
+		throw new Error(
+			`unsupported @page selector: ${selector} (one size and margin apply to every page)${where}`,
+		);
+	const end = closing(source, open);
+	const body = source.slice(open + 1, end - 1);
+	const box = /@[\w-]+/.exec(body);
+	if (box)
+		throw new Error(
+			`unsupported @page margin box: ${box[0]} (use the header and footer options)${where}`,
+		);
+	for (const item of body.split(";")) {
+		if (!item.trim()) continue;
+		const colon = item.indexOf(":");
+		if (colon < 1) throw new Error(`invalid CSS declaration: ${item.trim()}${where}`);
+		const name = item.slice(0, colon).trim();
+		if (!PAGE_PROPERTIES.includes(name))
+			throw new Error(`unsupported @page property: ${name} (only size and margin apply)${where}`);
+		const value = item.slice(colon + 1).trim();
+		pages.push({
+			name,
+			value: value.replace(IMPORTANT, ""),
+			important: IMPORTANT.test(value),
+			where,
+		});
+	}
+	return end;
+}
 
 const COMPARE = {
 	">=": (width: number, limit: number) => width >= limit,
@@ -505,6 +549,7 @@ function register(name: string, body: string): Registration {
 }
 
 export type ParseContext = {
+	pages?: PageDeclaration[];
 	/** The page content width in points that `@media` width conditions compare. */
 	width?: number | undefined;
 	/** Collects the stylesheet's `@property` rules by name. */
@@ -533,7 +578,9 @@ function parseBlock(
 			const name = /^@([\w-]+)/.exec(clean.slice(index, index + 32))?.[1]?.toLowerCase();
 			const open = preludeEnd(clean, index);
 			const end = clean[open] === ";" ? open + 1 : closing(clean, open);
-			if (clean[open] === "{" && name === "media") {
+			if (clean[open] === "{" && name === "page") {
+				pageRule(clean, index, context.pages ?? []);
+			} else if (clean[open] === "{" && name === "media") {
 				if (depth >= MAX_MEDIA_DEPTH)
 					throw new Error(
 						`@media nests deeper than ${MAX_MEDIA_DEPTH} levels at ${position(clean, index)}`,
@@ -586,7 +633,8 @@ function parseBlock(
 	}
 }
 
-export function parse(source: string, context: ParseContext = {}): Rule[] {
+export function parse(source: string, supplied: ParseContext | PageDeclaration[] = {}): Rule[] {
+	const context: ParseContext = Array.isArray(supplied) ? { pages: supplied } : supplied;
 	const rules: Rule[] = [];
 	const clean = withoutComments(source);
 	parseBlock(clean, 0, clean.length, rules, context, 0);

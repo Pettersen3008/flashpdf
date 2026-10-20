@@ -490,6 +490,57 @@ test("given a page token character in user text, when it sits in a footer, then 
 	);
 });
 
+test("given first-page variants and a two-column linked footer, when rendering tagged pages, then page one paints its own and all furniture is an artifact", async () => {
+	const document = jsx("main", {
+		children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+	});
+	const footer = jsxs("div", {
+		style: { display: "flex", gap: "12pt", borderTop: "1px solid #999", fontSize: "8pt" },
+		children: [
+			jsxs("p", { children: ["Acme AS", jsx("br", {}), "Org. no. 123 456 789"] }),
+			jsxs("a", {
+				href: "https://example.com",
+				style: { textAlign: "right" },
+				children: ["Page ", jsx(PageNumber, {}), " of ", jsx(TotalPages, {})],
+			}),
+		],
+	});
+	const pdf = await render(document, {
+		header: jsx("p", { children: "Continued" }),
+		firstPageHeader: jsx("h1", { children: "Letterhead" }),
+		footer,
+		firstPageFooter: null,
+		metadata: { language: "en" },
+		tagged: true,
+	});
+	const output = string(pdf);
+	assert.equal(output.match(/\/Type \/Page\b/g).length, 2);
+	for (const text of ["Letterhead", "Continued", "Org. no. 123 456 789", "Page 2 of 2"])
+		assert.equal(output.split(`(${text})`).length, 2, text);
+	assert.equal(output.match(/\/URI \(https:\/\/example\.com\/\)/g).length, 1);
+	assert.doesNotMatch(output, /\(Page 1 of/);
+	for (const text of ["(Letterhead)", "(Continued)", "(Page 2 of 2)"]) {
+		const at = output.indexOf(text);
+		assert.ok(output.lastIndexOf("/Artifact BMC", at) > output.lastIndexOf("BDC", at), text);
+	}
+});
+
+test("given furniture the engine cannot place, when rendering, then rejects with the reason", async () => {
+	const body = jsx("main", { children: "x" });
+	await assert.rejects(
+		render(body, { footer: jsx("div", { style: { paddingTop: "400pt" }, children: "x" }) }),
+		/^Error: PageOverflow: with footer, the header and footer take more than half the page/,
+	);
+	await assert.rejects(
+		render(body, { header: jsx("div", { style: { breakAfter: "page" }, children: "x" }) }),
+		/^Error: header cannot break the page on <div>$/,
+	);
+	await assert.rejects(
+		render(body, { firstPageFooter: ["Page ", jsx(PageNumber, {})] }),
+		/firstPageFooter expects elements/,
+	);
+});
+
 test("given layouts the engine rejects, when rendering, then explains the code and names the element", async () => {
 	const column = jsx("div", {
 		style: { display: "flex" },
@@ -519,6 +570,40 @@ test("given an engine error queued in a batch before a compile error, when rende
 	await assert.rejects(
 		render(jsx("main", { children: [...lines, huge, ...lines, jsx("td", { children: "x" })] })),
 		/^Error: TextTooWide: .* on <p\.huge> in <main>$/,
+	);
+});
+
+test("given an invoice header with space-between and centred items and an mx-auto block, when rendering, then places them as CSS does", async () => {
+	const pdf = await render(
+		jsxs("main", {
+			children: [
+				jsxs("header", {
+					style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+					children: [
+						jsx("div", { style: { width: 60, height: 40, background: "#ccc" } }),
+						jsx("p", { children: "Invoice 42" }),
+					],
+				}),
+				jsx("div", {
+					style: { maxWidth: "50%", margin: "0 auto", background: "#eee" },
+					children: "Centred",
+				}),
+			],
+		}),
+	);
+	const content = string(pdf);
+	// The 40pt logo sets the row height; the 11.1pt text line sits 14.45pt down, ending at the right margin.
+	assert.match(content, /36 766 60 40 re/);
+	assert.match(content, /504\.303 782\.934 Td\n\(Invoice 42\)/);
+	assert.match(content, /166\.75 754\.9 261\.5 11\.1 re/);
+});
+
+test("given content taller than a fixed height, when rendering, then rejects with ContentOverflow naming the element", async () => {
+	await assert.rejects(
+		render(
+			jsx("main", { children: jsx("div", { style: { height: 10 }, children: "a b c d e f g h" }) }),
+		),
+		/^Error: ContentOverflow: the content is taller than its box's height.* on <div> in <main>$/,
 	);
 });
 
@@ -620,6 +705,170 @@ test("given a long margin-only wrapper, when rendering, then it paginates", asyn
 	assert.match(string(pdf), /\/Count 2/);
 });
 
+test("given a long table in a bordered card inside a padded main, when rendering, then both boxes split and the header row repeats on every page", async () => {
+	const items = Array.from({ length: 150 }, (_, index) => `Item ${index + 1}`);
+	const pdf = await render(
+		jsx("main", {
+			style: { padding: 24, background: "#f9fafb" },
+			children: jsx("div", {
+				style: { border: "1pt solid #d0d5dd", padding: 8 },
+				children: jsxs("table", {
+					children: [
+						jsx("thead", { children: jsx("tr", { children: jsx("th", { children: "Name" }) }) }),
+						jsx("tbody", {
+							children: items.map((item) => jsx("tr", { children: jsx("td", { children: item }) })),
+						}),
+					],
+				}),
+			}),
+		}),
+		{ header: jsx("header", { children: "Acme" }) },
+	);
+	const path = new URL("../../../dist/split-boxes.pdf", import.meta.url);
+	writeFileSync(path, pdf);
+	const pages = (...flags) => {
+		const parsed = spawnSync(
+			"cargo",
+			[
+				"run",
+				"--locked",
+				"-q",
+				"-p",
+				"flashpdf-core",
+				"--example",
+				"validate_pdf",
+				"--",
+				path.pathname,
+				"3",
+				...flags,
+			],
+			{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+		);
+		assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+		return parsed.stdout.split("\f");
+	};
+	const body = pages().flatMap((page) => {
+		assert.match(page, /^Name\n[\s\S]*\nAcme$/);
+		return page.split("\n").filter((line) => line.startsWith("Item"));
+	});
+	assert.deepEqual(body, items);
+	// The card's 475pt-wide top edge paints on the first page only, its bottom edge on the last.
+	assert.deepEqual(
+		pages("--operators").map((page) => page.match(/ 475 1 re/g)?.length ?? 0),
+		[1, 0, 1],
+	);
+	await assert.rejects(
+		render(
+			jsx("main", {
+				children: jsx("div", {
+					style: { padding: 8, breakInside: "avoid" },
+					children: items.map((item) => jsx("p", { children: item })),
+				}),
+			}),
+		),
+		/^Error: PageOverflow: the box is taller than a page; drop break-inside: avoid on <div> in <main>$/,
+	);
+});
+
+/** Each page's text, or its content stream with `--operators`; `pdf` must have `count` pages. */
+function pageContents(pdf, name, count, ...flags) {
+	const path = new URL(`../../../dist/${name}.pdf`, import.meta.url);
+	writeFileSync(path, pdf);
+	const parsed = spawnSync(
+		"cargo",
+		[
+			"run",
+			"--locked",
+			"-q",
+			"-p",
+			"flashpdf-core",
+			"--example",
+			"validate_pdf",
+			"--",
+			path.pathname,
+			String(count),
+			...flags,
+		],
+		{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+	);
+	assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+	return parsed.stdout.split("\f");
+}
+
+// A4 with 36pt margins has 770pt of body, and a 12pt Helvetica line is 11.1pt tall.
+const lines = (...texts) =>
+	jsx("p", { children: texts.flatMap((text, index) => (index ? [jsx("br", {}), text] : [text])) });
+
+test("given a heading whose next paragraph cannot start below it, when rendering, then the heading moves with the paragraph unless break-after is auto", async () => {
+	const page = (heading) =>
+		render(
+			jsx("main", {
+				children: [
+					jsx("p", { children: "Intro" }),
+					jsx("div", { style: { marginTop: 718 } }),
+					heading,
+					lines("a", "b", "c"),
+				],
+			}),
+		);
+	const kept = await page(jsx("h2", { style: { fontSize: 12 }, children: "Section" }));
+	assert.deepEqual(pageContents(kept, "heading-kept", 2), ["Intro", "Section\na\nb\nc"]);
+	const loose = await page(
+		jsx("h2", { style: { fontSize: 12, breakAfter: "auto" }, children: "Section" }),
+	);
+	assert.deepEqual(pageContents(loose, "heading-loose", 2), ["Intro\nSection", "a\nb\nc"]);
+});
+
+test("given a table row with break-after: avoid at a page end, when rendering, then it moves with the next row under the repeated header and the footer closes each page", async () => {
+	const row = (text, style) => jsx("tr", { style, children: jsx("td", { children: text }) });
+	const pdf = await render(
+		jsx("main", {
+			children: [
+				jsx("div", { style: { marginTop: 698 } }),
+				jsxs("table", {
+					children: [
+						jsx("thead", { children: row("Item") }),
+						jsx("tbody", {
+							children: ["r1", "r2", "r3", "r4", "r5", "r6"].map((text) =>
+								row(text, text === "r4" ? { breakAfter: "avoid" } : undefined),
+							),
+						}),
+						jsx("tfoot", { children: row("Sum") }),
+					],
+				}),
+			],
+		}),
+	);
+	assert.deepEqual(pageContents(pdf, "row-avoid", 2), [
+		"Item\nr1\nr2\nr3\nSum",
+		"Item\nr4\nr5\nr6\nSum",
+	]);
+});
+
+test("given forced breaks inside bordered boxes, when rendering, then a box continues on the next page and breaks at its first or last child move to its edge", async () => {
+	const card = (...children) =>
+		jsx("div", { style: { border: "1pt solid black", padding: 4 }, children });
+	const p = (children, style) => jsx("p", { style, children });
+	const pdf = await render(
+		jsx("main", {
+			children: [
+				p("intro"),
+				card(p("a"), p("b", { breakBefore: "page" })),
+				card(p("c", { breakBefore: "page" }), p("d", { breakAfter: "page" })),
+				p("e"),
+			],
+		}),
+	);
+	assert.deepEqual(pageContents(pdf, "forced-in-box", 4), ["intro\na", "b", "c\nd", "e"]);
+	// The 523pt-wide top and bottom edges: no page holds a box edge without its content.
+	assert.deepEqual(
+		pageContents(pdf, "forced-in-box", 4, "--operators").map(
+			(page) => page.match(/ 523 1 re/g)?.length ?? 0,
+		),
+		[1, 1, 2, 0],
+	);
+});
+
 test("given per-edge borders and hr, when rendering, then emits native rules", async () => {
 	const pdf = await render(
 		jsx("main", {
@@ -630,7 +879,19 @@ test("given per-edge borders and hr, when rendering, then emits native rules", a
 		}),
 	);
 	assert.match(string(pdf), /1 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
-	assert.match(string(pdf), /0 0 0 rg\n36 [\d.]+ 523 1 re\nf/);
+	// Box rules paint beneath the page's text, so the hr sets black after the red border.
+	assert.match(string(pdf), /f\n0 0 0 rg\n36 [\d.]+ 523 1 re\nf\nBT/);
+});
+
+test("given A5 landscape with per-side mm margins, when rendering, then the page turns and text starts at the left and top margins", async () => {
+	const pdf = await render(jsx("p", { children: "x" }), {
+		pageFormat: "A5",
+		orientation: "landscape",
+		margin: "20mm 15mm 10mm 25mm",
+	});
+	assert.match(string(pdf), /\/MediaBox \[0 0 595 420\]/);
+	// 25mm is 70.866pt; 12pt Helvetica's baseline sits 8.616pt under the 20mm top margin.
+	assert.match(string(pdf), /\n70\.86614 354\.6911 Td\n/);
 });
 
 test("given an invalid option, when rendering, then rejects before running any component", async () => {
@@ -639,7 +900,7 @@ test("given an invalid option, when rendering, then rejects before running any c
 		ran = true;
 		return jsx("main", { children: "x" });
 	};
-	await assert.rejects(render(jsx(Page, {}), { pageFormat: "A5" }), /invalid page format/);
+	await assert.rejects(render(jsx(Page, {}), { pageFormat: "B5" }), /unsupported page size: B5/);
 	assert.equal(ran, false);
 });
 
@@ -652,7 +913,7 @@ test("given non-native JSX, when rendering, then rejects it", async () => {
 	await assert.rejects(render({ type: "marquee", props: {} }), /unsupported element <marquee>/);
 });
 
-test("given a table that spans two pages, when rendering, then the header row repeats on the second page", async () => {
+test("given a table that spans two pages, when rendering, then the header row repeats on top and the footer row under the last body row of each page", async () => {
 	const items = Array.from({ length: 70 }, (_, index) => `Item ${index + 1}`);
 	const pdf = await render(
 		jsx("main", {
@@ -675,6 +936,11 @@ test("given a table that spans two pages, when rendering, then the header row re
 								],
 							}),
 						),
+					}),
+					jsx("tfoot", {
+						children: jsxs("tr", {
+							children: [jsx("td", { children: "Total" }), jsx("td", { children: "70" })],
+						}),
 					}),
 				],
 			}),
@@ -703,6 +969,7 @@ test("given a table that spans two pages, when rendering, then the header row re
 	assert.equal(pages.length, 2);
 	const body = pages.flatMap((page) => {
 		assert.match(page, /^Name\nQty\n/);
+		assert.match(page, /\nTotal\n70\s*$/);
 		return page
 			.split("\n")
 			.slice(2)
@@ -713,11 +980,82 @@ test("given a table that spans two pages, when rendering, then the header row re
 		render(jsx("main", { children: jsx("tr", { children: jsx("td", { children: "x" }) }) })),
 		/<tr> belongs in a <table> on <tr> in <main>/,
 	);
+});
+
+test("given rows joined by rowSpan across a page end, when rendering, then they move to the next page together", async () => {
+	const pages = async (lead) => {
+		const pair = (index) => [
+			jsxs("tr", {
+				children: [
+					jsx("td", { rowSpan: 2, style: { verticalAlign: "middle" }, children: `Pair ${index}` }),
+					jsx("td", { children: `A${index}` }),
+				],
+			}),
+			jsx("tr", { children: jsx("td", { children: `B${index}` }) }),
+		];
+		const rows = [
+			...Array.from({ length: lead }, () =>
+				jsxs("tr", { children: [jsx("td", { children: "lead" }), jsx("td", { children: "-" })] }),
+			),
+			...Array.from({ length: 40 }, (_, index) => pair(index)).flat(),
+		];
+		const path = new URL(`../../../dist/table-row-span-${lead}.pdf`, import.meta.url);
+		writeFileSync(path, await render(jsx("table", { children: jsx("tbody", { children: rows }) })));
+		const parsed = spawnSync(
+			"cargo",
+			[
+				"run",
+				"--locked",
+				"-q",
+				"-p",
+				"flashpdf-core",
+				"--example",
+				"validate_pdf",
+				"--",
+				path.pathname,
+				"2",
+			],
+			{ cwd: new URL("../../../", import.meta.url), encoding: "utf8" },
+		);
+		assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+		return parsed.stdout.split("\f").map((page) => page.trim().split("\n"));
+	};
+	// One lead row shifts every pair by a row, so one of the two layouts would split a pair.
+	for (const lead of [0, 1]) {
+		const text = await pages(lead);
+		assert.equal(text.length, 2);
+		for (let index = 0; index < 40; index++)
+			assert.ok(
+				text.some((page) => page.includes(`A${index}`) && page.includes(`B${index}`)),
+				`pair ${index} split with ${lead} lead rows`,
+			);
+	}
+});
+
+test("given a table row or rowSpan rows taller than the page, when rendering, then rejects naming the first row", async () => {
+	const tall = Array.from({ length: 80 }, () => jsx("p", { children: "line" }));
 	await assert.rejects(
 		render(
-			jsx("table", { children: jsx("tr", { children: jsx("td", { colSpan: 2, children: "x" }) }) }),
+			jsx("table", {
+				children: jsx("tbody", {
+					children: jsx("tr", { className: "tall", children: jsx("td", { children: tall }) }),
+				}),
+			}),
 		),
-		/colSpan and rowSpan are not supported yet; use one cell per column on <td> in <tr> > <table>/,
+		/^Error: a table row is taller than the page beside its repeated header and footer; split its content on <tr\.tall> in <tbody> > <table>$/,
+	);
+	await assert.rejects(
+		render(
+			jsx("table", {
+				children: [
+					jsxs("tr", {
+						children: [jsx("td", { rowSpan: 2, children: tall }), jsx("td", { children: "a" })],
+					}),
+					jsx("tr", { children: jsx("td", { children: "b" }) }),
+				],
+			}),
+		),
+		/^Error: rows that rowSpan joins are taller than the page beside the repeated header and footer; shorten the spanning cell or split the rows on <tr> in <table>$/,
 	);
 });
 
@@ -747,10 +1085,6 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
-		[
-			{ height: 40 },
-			/height applies only to <img> and <svg> \(block height comes from content\) on <main>/,
-		],
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
 		[
 			{ boxShadow: "0 1px 2px red" },
@@ -778,9 +1112,23 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 			/unsupported border style: double \(only none, solid, dashed, and dotted are drawn\) on <main>/,
 		],
 		[{ opacity: "half" }, /invalid opacity: half on <main>/],
+		[{ flexWrap: "wrap" }, /flex-wrap: wrap is not supported; flex items stay on one line/],
+		[{ display: "flex", alignItems: "baseline" }, /alignItems: baseline is not supported/],
+		[
+			{ boxDecorationBreak: "clone" },
+			/boxDecorationBreak \(.*clone is not implemented\) on <main>/,
+		],
+		[
+			{ breakBefore: "left" },
+			/breakBefore: left is not supported \(pages have no sides; use page\) on <main>/,
+		],
+		[{ orphans: 0 }, /invalid orphans: 0 \(use a whole number of lines from 1\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
 		[{ display: "grid" }, /invalid display/],
-		[{ width: "40pt" }, /width applies only to a flex row child on <main>/],
+		[
+			{ justifyContent: "center" },
+			/justify-content and align-items apply only to a flex container on <main>/,
+		],
 	])
 		await assert.rejects(
 			render(jsx("main", { style, children: "x" })),
@@ -864,7 +1212,7 @@ test("given an invoice with a PNG logo on every row and a link, when rendering, 
 	assert.match(text, /\/Subtype \/Link[\s\S]*?\/URI \(https:\/\/example\.com\/\)/);
 	assert.match(text, /\/URI \(https:\/\/example\.com\/pay\?id=42\)/);
 	assert.equal(text.match(/\/Subtype \/Link/g).length, 2);
-	assert.match(text, /0 0 0\.93333334 rg/, "link colour #0000EE");
+	assert.match(text, /0 0 0\.933 rg/, "link colour #0000EE");
 	if (spawnSync("qpdf", ["--version"]).status === 0) {
 		const path = new URL("../../../target/render-images.pdf", import.meta.url);
 		writeFileSync(path, pdf);

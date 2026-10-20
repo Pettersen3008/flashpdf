@@ -8,47 +8,47 @@ Build it from a clone with the commands in the repository [README](https://githu
 
 ```tsx
 /** @jsxImportSource @pettersen3008/flashpdf */
-import { render } from '@pettersen3008/flashpdf';
+import { render } from "@pettersen3008/flashpdf";
 
 function Invoice({ total }: { total: string }) {
   return (
-    <main style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <main style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <h1>Invoice</h1>
-      <div style={{ display: 'flex', flexDirection: 'row' }}>
+      <div style={{ display: "flex", flexDirection: "row" }}>
         <span style={{ flex: 1 }}>Consulting</span>
-        <span style={{ width: '90pt', textAlign: 'right' }}>{total}</span>
+        <span style={{ width: "90pt", textAlign: "right" }}>{total}</span>
       </div>
     </main>
   );
 }
 
-const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: 'A4', margin: 36 });
+const pdf = await render(<Invoice total="EUR 1200.00" />, { pageFormat: "A4", margin: 36 });
 ```
 
 ## Tables
 
-A `<table>` splits between rows and repeats its `<thead>` on every page. Column widths come from the first row's cells, cells stretch to the row height, and `th` is bold by default.
+A `<table>` splits between rows and repeats its `<thead>` on every page. Each column takes its width from its first cell without `colSpan`, cells stretch to the row height, and `th` is bold by default. `colSpan` and `rowSpan` span cells, `vertical-align: top | middle | bottom` places a cell's content, and `border-collapse: collapse` draws one line between neighbouring cells.
 
 ```tsx
 <table>
   <thead>
     <tr>
       <th>Description</th>
-      <th style={{ width: '90pt', textAlign: 'right' }}>Amount</th>
+      <th style={{ width: "90pt", textAlign: "right" }}>Amount</th>
     </tr>
   </thead>
   <tbody>
     {items.map((item) => (
       <tr key={item.id}>
-        <td style={{ borderBottom: '0.5pt solid #ddd' }}>{item.description}</td>
-        <td style={{ borderBottom: '0.5pt solid #ddd', textAlign: 'right' }}>{item.amount}</td>
+        <td style={{ borderBottom: "0.5pt solid #ddd" }}>{item.description}</td>
+        <td style={{ borderBottom: "0.5pt solid #ddd", textAlign: "right" }}>{item.amount}</td>
       </tr>
     ))}
   </tbody>
 </table>
 ```
 
-`colSpan`, `rowSpan`, `vertical-align`, and `border-collapse` reject with a reason; see [CSS.md](https://github.com/pettersen3008/flashpdf/blob/main/CSS.md).
+Rows that a `rowSpan` joins move between pages together, and a `rowSpan` stays inside its `thead`, `tbody`, or `tfoot`. `vertical-align: baseline`, `border-spacing` other than 0, and `<colgroup>` reject with a reason; see [CSS.md](https://github.com/pettersen3008/flashpdf/blob/main/CSS.md).
 
 ## Images and links
 
@@ -84,7 +84,7 @@ FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImpor
 `render` returns a `Uint8Array`. FlashPDF ships no viewer, download, or upload helper, so you own what happens next:
 
 ```ts
-const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
+const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
 ```
 
 ## Styling with CSS
@@ -92,8 +92,8 @@ const url = URL.createObjectURL(new Blob([pdf], { type: 'application/pdf' }));
 Compile stylesheets with the consuming app's build tool and pass the resulting string to `render`:
 
 ```tsx
-import css from './invoice.css?inline';
-import { render } from '@pettersen3008/flashpdf';
+import css from "./invoice.css?inline";
+import { render } from "@pettersen3008/flashpdf";
 
 const pdf = await render(<main className="invoice">…</main>, { stylesheets: [css] });
 ```
@@ -106,22 +106,26 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 
 ## API
 
-| Export | Signature | Notes |
-| --- | --- | --- |
-| `render` | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
-| `stylesheet` | `(source: string) => string` | Validates CSS and returns it unchanged, for tagging literals at author time. |
-| `PageNumber` | `() => Element` | Resolves to the current page number inside a header or footer. |
-| `TotalPages` | `() => Element` | Resolves to the final page count inside a header or footer. |
+| Export       | Signature                                                                                 | Notes                                                                                                 |
+| ------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `render`     | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
+| `stylesheet` | `(source: string) => string`                                                              | Validates CSS and returns it unchanged, for tagging literals at author time.                          |
+| `PageNumber` | `() => Element`                                                                           | Resolves to the current page number inside a header or footer.                                        |
+| `TotalPages` | `() => Element`                                                                           | Resolves to the final page count inside a header or footer.                                           |
 
 `RenderOptions` accepts page format, margin, stylesheets, embedded fonts, a one-line repeating `header` and `footer`, `metadata`, and `tagged`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. Tagged mode requires a language and writes paragraph-line and figure tags with image `alt` text; it is not PDF/UA conformant.
 
 ```tsx
-import { PageNumber, TotalPages } from '@pettersen3008/flashpdf';
+import { PageNumber, TotalPages } from "@pettersen3008/flashpdf";
 
 const pdf = await render(<Invoice />, {
-  header: <header style={{ fontSize: '9pt' }}>Acme invoice</header>,
-  footer: <footer style={{ fontSize: '9pt', textAlign: 'center' }}>Page <PageNumber /> of <TotalPages /></footer>,
-  metadata: { title: 'Invoice 42', language: 'en-US' },
+  header: <header style={{ fontSize: "9pt" }}>Acme invoice</header>,
+  footer: (
+    <footer style={{ fontSize: "9pt", textAlign: "center" }}>
+      Page <PageNumber /> of <TotalPages />
+    </footer>
+  ),
+  metadata: { title: "Invoice 42", language: "en-US" },
   tagged: true,
 });
 ```
@@ -142,14 +146,14 @@ Embedded TrueType files are subset to used glyphs and support Unicode through cm
 
 ## Compatibility
 
-| Target | `render` |
-| --- | --- |
-| Browser via Vite, webpack, or Rollup | Yes, including host-provided `Uint8Array` TTFs, the bundler emits the WASM as an asset |
-| Node 20.19+ | Yes, including host-provided `Uint8Array` TTFs |
-| Bun 1.x | Yes, including host-provided `Uint8Array` TTFs |
-| AWS Lambda Node.js 20.19+ | Yes, include the package's `wasm/` directory in the deployment artifact |
-| Cloudflare Workers | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module |
-| Vercel Edge | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
+| Target                               | `render`                                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Browser via Vite, webpack, or Rollup | Yes, including host-provided `Uint8Array` TTFs, the bundler emits the WASM as an asset                              |
+| Node 20.19+                          | Yes, including host-provided `Uint8Array` TTFs                                                                      |
+| Bun 1.x                              | Yes, including host-provided `Uint8Array` TTFs                                                                      |
+| AWS Lambda Node.js 20.19+            | Yes, include the package's `wasm/` directory in the deployment artifact                                             |
+| Cloudflare Workers                   | Yes, Wrangler selects the `workerd` export and uploads the imported WASM module                                     |
+| Vercel Edge                          | Untested. The `edge-light` condition selects the same static WASM import as Cloudflare Workers, but no test runs it |
 
 Every target runs the same decoder. The repository's `tests/e2e.mjs` installs a packed tarball, renders one invoice with an embedded font, a PNG, and a link, and requires the bytes to match Node's from the AWS Lambda handler, Bun, Chromium (built with Vite), and Wrangler's local Workers runtime. Vercel Edge has no test, so treat it as expected to work rather than proven. Content streams and embedded fonts are Flate-compressed. Lambda bundlers must copy `node_modules/@pettersen3008/flashpdf/wasm/` beside the package output. Wrangler handles its static WASM import automatically.
 

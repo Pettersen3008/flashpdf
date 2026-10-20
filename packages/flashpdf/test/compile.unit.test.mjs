@@ -64,7 +64,7 @@ async function written(element) {
 									? ["spacer", values[0]]
 									: opcode === 17
 										? ["boxStart", values[0], values[2]]
-										: { 7: "pageBreak", 9: "paragraph", 18: "boxEnd" }[opcode],
+										: { 7: "pageBreak", 9: "paragraph", 18: "boxEnd", 23: "avoid" }[opcode],
 							);
 						}
 					: (value) => values.push(value),
@@ -105,7 +105,7 @@ test("given text with an inline bold child, when compiling, then emits one parag
 	);
 	assert.deepEqual(calls, [
 		["margin", 12],
-		["paragraph", [run(0, "Hello "), run(1, "World")], "left"],
+		["paragraph", [run(0, "Hello "), run(1, "World")], "left", 2, 2],
 		["margin", 12],
 	]);
 });
@@ -119,6 +119,8 @@ test("given a br between text, when compiling, then flags a hard break on the pr
 			"paragraph",
 			[run(0, "one", { break: true }), run(0, "", { break: true }), run(0, "two")],
 			"left",
+			2,
+			2,
 		],
 	]);
 });
@@ -170,6 +172,8 @@ test("given a link inside a paragraph, when compiling, then its runs carry the h
 				run(0, " old", { lineThrough: true }),
 			],
 			"left",
+			2,
+			2,
 		],
 		["margin", 12],
 	]);
@@ -208,11 +212,12 @@ test("given a table with thead and tbody, when compiling, then emits the contain
 		{ kind: 1, value: 1 },
 		{ kind: 0, value: 80 },
 	];
+	const top = { align: 0, rows: 1 };
 	const row = (font, ...texts) => [
-		["rowStart", columns],
+		["rowStart", columns, [top, top]],
 		...texts.flatMap((text) => [
 			["stackStart", 0, false],
-			["paragraph", [run(font, text)], font === 1 ? "center" : "left"],
+			["paragraph", [run(font, text)], font === 1 ? "center" : "left", 2, 2],
 			["stackEnd", false],
 		]),
 		["rowEnd"],
@@ -239,6 +244,189 @@ test("given rows with different cell counts, when compiling, then rejects naming
 	);
 });
 
+test("given a totals row whose label spans three columns, when compiling, then each column takes its width from its first cell without colSpan", async () => {
+	const cell = (text, props = {}) => jsx("td", { ...props, children: text });
+	const calls = await compiled(
+		jsxs("table", {
+			children: [
+				jsxs("tr", {
+					children: [
+						cell("Item", { colSpan: 2 }),
+						cell("Qty", { style: { width: "40pt" } }),
+						cell("Total", { style: { width: "60pt" } }),
+					],
+				}),
+				jsxs("tr", {
+					children: [
+						cell("Coffee", { style: { width: "50%" } }),
+						cell("Beans"),
+						cell("2", { style: { width: "90pt" } }),
+						cell("$8"),
+					],
+				}),
+				jsxs("tr", { children: [cell("Subtotal", { colSpan: 3 }), cell("$8")] }),
+			],
+		}),
+	);
+	const top = { align: 0, rows: 1 };
+	assert.deepEqual(
+		calls.filter(([method]) => method === "rowStart"),
+		[
+			[top, "join", top, top],
+			[top, top, top, top],
+			[top, "join", "join", top],
+		].map((slots) => [
+			"rowStart",
+			[
+				{ kind: 2, value: 50 },
+				{ kind: 1, value: 1 },
+				{ kind: 0, value: 40 },
+				{ kind: 0, value: 60 },
+			],
+			slots,
+		]),
+	);
+});
+
+test("given a cell spanning two rows beside striped rows, when compiling, then both rows sit in one stack and each row's background moves into its own cells", async () => {
+	const calls = await compiled(
+		jsx("table", {
+			children: jsxs("tbody", {
+				children: [
+					jsxs("tr", {
+						style: { background: "#ff0000" },
+						children: [
+							jsx("td", { rowSpan: 2, children: "a" }),
+							jsx("td", { style: { verticalAlign: "bottom" }, children: "b" }),
+						],
+					}),
+					jsx("tr", {
+						style: { background: "#0000ff", verticalAlign: "middle" },
+						children: jsx("td", { children: "c" }),
+					}),
+				],
+			}),
+		}),
+	);
+	const filled = (background) => [
+		"boxStart",
+		{
+			margin: [0, 0, 0, 0],
+			padding: [0, 0, 0, 0],
+			border: [0, 0, 0, 0],
+			borderColor: [
+				[0, 0, 0],
+				[0, 0, 0],
+				[0, 0, 0],
+				[0, 0, 0],
+			],
+			borderStyle: [0, 0, 0, 0],
+			opacity: 1,
+			background,
+		},
+		false,
+	];
+	const columns = [
+		{ kind: 1, value: 1 },
+		{ kind: 1, value: 1 },
+	];
+	const text = (value) => [
+		["stackStart", 0, false],
+		["paragraph", [run(0, value)], "left", 2, 2],
+		["stackEnd", false],
+	];
+	assert.deepEqual(calls, [
+		["tableStart", 0, 0, { kind: 1, value: 1 }],
+		["stackStart", 0],
+		[
+			"rowStart",
+			columns,
+			[
+				{ align: 0, rows: 2 },
+				{ align: 2, rows: 1 },
+			],
+		],
+		filled([255, 0, 0]),
+		...text("a"),
+		["boxEnd", false],
+		filled([255, 0, 0]),
+		...text("b"),
+		["boxEnd", false],
+		["rowEnd"],
+		["rowStart", columns, ["covered", { align: 1, rows: 1 }]],
+		filled([0, 0, 255]),
+		...text("c"),
+		["boxEnd", false],
+		["rowEnd"],
+		["stackEnd"],
+		["tableEnd"],
+	]);
+});
+
+test("given collapsed 1pt cell borders under a 2pt header rule, when compiling, then each cell draws half of every shared edge and all of each outer edge", async () => {
+	const grey = "1pt solid #808080";
+	const cell = (tag, text) => jsx(tag, { style: { border: grey }, children: text });
+	const calls = await compiled(
+		jsxs("table", {
+			style: { borderCollapse: "collapse" },
+			children: [
+				jsx("thead", {
+					children: jsxs("tr", {
+						style: { borderBottom: "2pt solid black" },
+						children: [cell("th", "a"), cell("th", "b")],
+					}),
+				}),
+				jsx("tbody", { children: jsxs("tr", { children: [cell("td", "c"), cell("td", "d")] }) }),
+			],
+		}),
+	);
+	const black = [0, 0, 0];
+	const gray = [128, 128, 128];
+	// The row's rule merges into its cells, so the row emits no box of its own.
+	assert.deepEqual(
+		calls
+			.filter(([method]) => method === "boxStart")
+			.map(([, { border, borderColor }]) => ({ border, borderColor })),
+		[
+			{ border: [1, 0.5, 1, 1], borderColor: [gray, gray, black, gray] },
+			{ border: [1, 1, 1, 0.5], borderColor: [gray, gray, black, gray] },
+			{ border: [1, 0.5, 1, 1], borderColor: [black, gray, gray, gray] },
+			{ border: [1, 1, 1, 0.5], borderColor: [black, gray, gray, gray] },
+		],
+	);
+});
+
+test("given table input outside the supported subset, when compiling, then rejects with the reason", async () => {
+	const table = (...rows) => jsxs("table", { children: rows });
+	const tr = (...cells) => jsxs("tr", { children: cells });
+	const td = (props = {}) => jsx("td", { ...props, children: "x" });
+	for (const [input, message] of [
+		[
+			table(jsx("tbody", { children: tr(td({ rowSpan: 2 })) })),
+			/^Error: rowSpan 2 runs past the last row of its <tbody>; rows joined by rowSpan stay in one row group on <td> in <tr> > <tbody> > <table>$/,
+		],
+		[
+			table(tr(td(), td({ rowSpan: 2 })), tr(td({ colSpan: 2 }))),
+			/colSpan runs into a cell that rowSpan brings down from an earlier row/,
+		],
+		[table(tr(td({ colSpan: 2, style: { width: "50pt" } }))), /width and flex size one column/],
+		[
+			table(tr(td({ style: { verticalAlign: "baseline" } }))),
+			/vertical-align: baseline is not implemented/,
+		],
+		[
+			jsx("table", { style: { borderSpacing: "2pt" }, children: tr(td()) }),
+			/border-spacing is not implemented/,
+		],
+		[
+			jsx("div", { style: { verticalAlign: "middle" }, children: "x" }),
+			/vertical-align applies only to inline elements and <td>, <th>, <tr>, and row groups on <div>$/,
+		],
+		[table(tr(td({ colSpan: 0 }))), /colSpan must be an integer from 1 to 256 on <td>/],
+	])
+		await assert.rejects(compiled(input), message);
+});
+
 test("given a td outside a table row, when compiling, then rejects naming it", async () => {
 	await assert.rejects(
 		compiled(jsx("div", { children: jsx("td", { children: "x" }) })),
@@ -254,11 +442,28 @@ test("given an hr with break-before: page, when compiling, then breaks the page 
 	);
 });
 
-test("given width on an hr or padding on a br, when compiling, then rejects instead of dropping it", async () => {
-	await assert.rejects(
-		compiled(jsx("hr", { style: { width: "50%" } })),
-		/width applies only to a flex row child on <hr>$/,
+test("given orphans and widows on a block, when compiling, then its paragraphs inherit them", async () => {
+	const calls = await compiled(
+		jsx("div", { style: { orphans: 3, widows: "1" }, children: jsx("p", { children: "x" }) }),
 	);
+	assert.deepEqual(
+		calls.filter(([method]) => method === "paragraph"),
+		[["paragraph", [run(0, "x")], "left", 3, 1]],
+	);
+});
+
+test("given break-inside: avoid on a paragraph, when compiling, then it is one kept-together group", async () => {
+	const calls = await compiled(jsx("p", { style: { breakInside: "avoid-page" }, children: "x" }));
+	assert.deepEqual(
+		calls.map(([method]) => method),
+		["margin", "stackStart", "paragraph", "stackEnd", "margin"],
+	);
+});
+
+test("given width on an hr or padding on a br, when compiling, then honours the rule width and rejects br padding", async () => {
+	const calls = await compiled(jsx("hr", { style: { width: "50%" } }));
+	assert.equal(calls.find(([method]) => method === "boxStart")[1].size.width.value, 50);
+
 	await assert.rejects(
 		compiled(jsxs("p", { children: ["a", jsx("br", { style: { padding: 10 } }), "b"] })),
 		/<br> takes no paddingTop; style the text around it on <br> in <p>$/,
@@ -274,7 +479,7 @@ test("given a flex row with a 12pt gap, when compiling, then a fixed 12pt empty 
 	);
 	const cell = (text) => [
 		["stackStart", 0, false],
-		["paragraph", [run(0, text)], "left"],
+		["paragraph", [run(0, text)], "left", 2, 2],
 		["stackEnd", false],
 	];
 	assert.deepEqual(calls, [
@@ -318,13 +523,13 @@ test("given whitespace-only text between flex items and column children, when co
 				{ kind: 1, value: 1 },
 			],
 		],
-		["paragraph", [run(0, "a")], "left"],
-		["paragraph", [run(0, "b")], "left"],
+		["paragraph", [run(0, "a")], "left", 2, 2],
+		["paragraph", [run(0, "b")], "left", 2, 2],
 		["rowEnd"],
 		["flush"],
 		["spacer", 10],
 		["flush"],
-		["paragraph", [run(0, "c "), run(1, "d")], "left"],
+		["paragraph", [run(0, "c "), run(1, "d")], "left", 2, 2],
 		["flush"],
 	]);
 });
@@ -342,6 +547,8 @@ test("given a unitless line-height on a block, when a child changes font size, t
 			"paragraph",
 			[run(0, "a", { lineHeight: 18 }), run(0, "b", { size: 20, lineHeight: 30 })],
 			"left",
+			2,
+			2,
 		],
 		["margin", 12],
 	]);
@@ -359,7 +566,7 @@ test("given em, i, and cite, when compiling, then they default to the Helvetica-
 	);
 	assert.deepEqual(calls, [
 		["margin", 12],
-		["paragraph", [run(2, "abc")], "left"],
+		["paragraph", [run(2, "abc")], "left", 2, 2],
 		["margin", 12],
 	]);
 });
@@ -378,7 +585,7 @@ test("given bold italic text in a family with only regular and bold faces, when 
 	);
 	assert.deepEqual(calls, [
 		["margin", 12],
-		["paragraph", [run(5, "x", { oblique: true })], "left"],
+		["paragraph", [run(5, "x", { oblique: true })], "left", 2, 2],
 		["margin", 12],
 	]);
 });
@@ -401,6 +608,8 @@ test("given capitalize over a word split across runs, when compiling, then only 
 				run(0, " E-Mail", capitalize),
 			],
 			"left",
+			2,
+			2,
 		],
 		["margin", 12],
 	]);
@@ -415,7 +624,7 @@ test("given letter-spacing in em on a parent, when a child changes font size, th
 	);
 	assert.deepEqual(calls, [
 		["margin", 12],
-		["paragraph", [run(0, "x", { size: 24, letterSpacing: 6, wordSpacing: -1 })], "left"],
+		["paragraph", [run(0, "x", { size: 24, letterSpacing: 6, wordSpacing: -1 })], "left", 2, 2],
 		["margin", 12],
 	]);
 });
@@ -436,6 +645,8 @@ test("given a text-decoration shorthand without a colour inside one with a colou
 				run(0, "b", { lineThrough: true }),
 			],
 			"left",
+			2,
+			2,
 		],
 		["margin", 12],
 	]);
@@ -611,7 +822,7 @@ test("given a p with a 10pt bottom margin before an h2 with a 16pt top margin, w
 			],
 		}),
 	);
-	assert.deepEqual(records, [["spacer", 12], "paragraph", ["spacer", 16], "paragraph"]);
+	assert.deepEqual(records, [["spacer", 12], "paragraph", ["spacer", 16], "paragraph", "avoid"]);
 });
 
 test("given a box with a left border and bottom padding, when compiling, then a child's top margin collapses through it and its bottom margin stays inside", async () => {
@@ -759,7 +970,7 @@ test("given a link target and headings with an outline, when compiling the body,
 	);
 	assert.deepEqual(
 		calls
-			.filter(([method]) => method !== "margin")
+			.filter(([method]) => method !== "margin" && method !== "avoid")
 			.map(([method, ...args]) => (method === "anchor" ? args : method)),
 		[
 			"paragraph",
@@ -774,7 +985,7 @@ test("given a link target and headings with an outline, when compiling the body,
 	);
 	assert.deepEqual(
 		(await compiledBody(jsx("h1", { children: "Title" })))
-			.filter(([method]) => method !== "margin")
+			.filter(([method]) => method !== "margin" && method !== "avoid")
 			.map(([method]) => method),
 		["paragraph"],
 		"without the outline option or a link target, no anchor is written",
@@ -812,5 +1023,55 @@ test("given more than 10000 bookmarked headings, when compiling the body, then r
 			true,
 		),
 		/more than 10000 link targets and bookmarks on <h2>/,
+	);
+});
+
+test("given padding on a br, when compiling, then rejects instead of dropping it", async () => {
+	await assert.rejects(
+		compiled(jsxs("p", { children: ["a", jsx("br", { style: { padding: 10 } }), "b"] })),
+		/<br> takes no paddingTop; style the text around it on <br> in <p>$/,
+	);
+});
+
+test("given justify-content on a row, when compiling, then emits one flex record and keeps each item's width on its own box", async () => {
+	const calls = await compiled(
+		jsxs("div", {
+			style: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+			children: [
+				jsx("div", { style: { width: "80pt" }, children: "Logo" }),
+				jsx("p", { style: { flex: "1 0 50%" }, children: "Due" }),
+			],
+		}),
+	);
+	assert.deepEqual(calls[0], [
+		"flexStart",
+		{ column: false, justify: 3, align: 4, gap: 0, minHeight: 0, maxHeight: undefined },
+		[
+			{ grow: 0, shrink: 1, basis: undefined, align: 0 },
+			{ grow: 1, shrink: 0, basis: { kind: 2, value: 50 }, align: 0 },
+		],
+	]);
+	assert.equal(calls[1][0], "boxStart");
+	assert.deepEqual(calls[1][1].size.width, { kind: 1, value: 80 });
+	assert.deepEqual(
+		calls.slice(2).map(([method]) => method),
+		["paragraph", "boxEnd", "boxStart", "paragraph", "boxEnd", "flexEnd"],
+	);
+});
+
+test("given a flex column without a height, when compiling justify-content or a grow factor, then rejects with the reason", async () => {
+	const column = { display: "flex", flexDirection: "column" };
+	await assert.rejects(
+		compiled(jsx("div", { style: { ...column, justifyContent: "center" }, children: "x" })),
+		/justify-content in a flex column needs a height or min-height on the column on <div>$/,
+	);
+	await assert.rejects(
+		compiled(
+			jsx("div", {
+				style: { ...column, height: 100 },
+				children: jsx("p", { style: { flex: 1 }, children: "x" }),
+			}),
+		),
+		/flex-grow and flex-basis size flex row items; give a column item a height on <p> in <div>$/,
 	);
 });

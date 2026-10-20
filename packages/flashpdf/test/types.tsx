@@ -25,6 +25,13 @@ const invoice = (
 );
 void render(invoice, { pageFormat: "A4", margin: 36, stylesheets: [".invoice { color: #222 }"] });
 void render([invoice]);
+void render(invoice, { pageFormat: "A5", orientation: "landscape", margin: "20mm 15mm" });
+void render(invoice, {
+	pageFormat: { width: "210mm", height: 400 },
+	margin: { top: "45mm", right: "2cm", bottom: "1in", left: 72 },
+});
+// @ts-expect-error Page lengths take a unit; a bare numeric string is not points.
+void render(invoice, { margin: { top: "45", right: 0, bottom: 0, left: 0 } });
 const font: EmbeddedFont = { family: "Invoice", regular: new Uint8Array(), bold: new Uint8Array() };
 void render(invoice, { fonts: [font] });
 void render(invoice, {
@@ -33,7 +40,11 @@ void render(invoice, {
 			Page <PageNumber /> of <TotalPages />
 		</footer>
 	),
+	firstPageHeader: [<h1 key="name">Acme</h1>, <p key="address">Storgata 1</p>],
+	firstPageFooter: null,
 });
+// @ts-expect-error Only the first-page variants take null.
+void render(invoice, { header: null });
 // @ts-expect-error A PDF document starts with one or more React elements.
 void render("bare text");
 // @ts-expect-error FlashPDF only accepts its documented intrinsic elements.
@@ -42,8 +53,6 @@ const _unsupported = <button>Print</button>;
 const _unknownProperty = <main potato={1}>Invoice</main>;
 // @ts-expect-error Grid is not part of FlashPDF's supported CSS subset.
 const _grid = <main style={{ display: "grid" }}>Invoice</main>;
-// @ts-expect-error Margin and padding take one to four lengths, never "auto".
-const _auto = <main style={{ margin: "auto" }}>Invoice</main>;
 const _decorated = (
 	<main style={{ borderRadius: "4pt 8pt / 50%", borderTopStyle: "dashed", opacity: "50%" }}>x</main>
 );
@@ -51,6 +60,14 @@ const _decorated = (
 const _shadow = <main style={{ boxShadow: "0 1px 2px #000" }}>Invoice</main>;
 // @ts-expect-error Only none, solid, dashed, and dotted borders are drawn.
 const _double = <main style={{ borderTopStyle: "double" }}>Invoice</main>;
+// @ts-expect-error Padding takes one to four lengths, never "auto".
+const _auto = <main style={{ padding: "auto" }}>Invoice</main>;
+const _flex = (
+	<header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+		<div style={{ width: 60, height: 40, margin: "0 auto", boxSizing: "border-box" }} />
+		<p style={{ flex: "1 1 0%", maxWidth: "50%", alignSelf: "flex-end" }}>Due</p>
+	</header>
+);
 const _rich = (
 	<p>
 		Hello <b>World</b>
@@ -76,8 +93,17 @@ const _table = (
 		</tbody>
 	</table>
 );
-// @ts-expect-error Spanning cells are not supported yet.
-const _colSpan = <td colSpan={2}>x</td>;
+const _spans = (
+	<table style={{ borderCollapse: "collapse" }}>
+		<tr>
+			<td colSpan={2} rowSpan={1} style={{ verticalAlign: "middle" }}>
+				x
+			</td>
+		</tr>
+	</table>
+);
+// @ts-expect-error Only table cells span columns.
+const _divSpan = <div colSpan={2}>x</div>;
 const _assets = (
 	<main>
 		<a href="https://example.com/">

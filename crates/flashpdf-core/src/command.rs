@@ -1,7 +1,13 @@
+use std::mem::discriminant;
+
 use crate::document::{
-    Block, BoxNode, Cell, Document, Element, ImageNode, Paragraph, Row, Spacer, Stack, Table,
+    Block, BoxNode, Cell, Document, Element, FlexNode, ImageNode, Paragraph, Row, Spacer, Stack,
+    Table,
 };
-use crate::{BoxStyle, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun, TextStyle};
+use crate::{
+    BoxSize, BoxStyle, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun,
+    TextStyle, VerticalAlign,
+};
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
 pub(crate) const MAX_COLUMNS: usize = 256;
@@ -16,6 +22,8 @@ pub enum Command<'a> {
     /// `runs` slice `text` consecutively and must cover it exactly on char boundaries.
     Paragraph {
         align: TextAlign,
+        orphans: u16,
+        widows: u16,
         text: &'a str,
         runs: &'a [TextRun],
         /// URIs the runs' `decoration.link` index into.
@@ -23,6 +31,7 @@ pub enum Command<'a> {
     },
     BoxStart {
         style: BoxStyle,
+        size: BoxSize,
     },
     BoxEnd,
     Spacer(Pt),
@@ -30,12 +39,20 @@ pub enum Command<'a> {
         gap: Pt,
     },
     StackEnd,
+    /// `slots` has one entry per column; empty gives every column its own top-aligned cell.
     RowStart {
         columns: &'a [ColumnWidth],
+        slots: &'a [Slot],
     },
     RowEnd,
+    /// A CSS flex container with exactly one child per item.
+    FlexStart {
+        style: Flex,
+        items: &'a [FlexItem],
+    },
+    FlexEnd,
     /// The first `header_rows` children repeat at the top of every page the table continues on,
-    /// the last `footer_rows` after the last body row of every page.
+    /// the next `footer_rows` after the last body row of every page. Body rows follow them.
     TableStart {
         header_rows: u16,
         footer_rows: u16,
@@ -43,6 +60,8 @@ pub enum Command<'a> {
     },
     TableEnd,
     PageBreak,
+    /// Avoids a page break at this point, between the blocks around it.
+    Avoid,
     /// A registered image as an atomic block box; `height` follows the aspect ratio when absent.
     Image {
         slot: u16,
@@ -64,16 +83,31 @@ pub enum ColumnWidth {
     Percent(Percent),
 }
 
+/// What a row's column holds. Rows that a `rowspan` joins must be the
+/// children of one Stack, which lays them out together.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    /// Starts a cell that spans `rows` rows.
+    Cell { rows: u16, align: VerticalAlign },
+    /// Widens the cell to its left (`colspan`).
+    Join,
+    /// A cell from an earlier row covers this column.
+    Covered,
+}
+
 /// The protocol's decoded form owns data across input chunks.
+#[derive(Clone)]
 pub(crate) enum OwnedCommand {
-    Paragraph(TextAlign, String, Vec<TextRun>, Vec<String>),
-    BoxStart(BoxStyle),
+    Paragraph(TextAlign, [u16; 2], String, Vec<TextRun>, Vec<String>),
+    BoxStart(BoxStyle, BoxSize),
     BoxEnd,
     Spacer(Pt),
     StackStart(Pt),
     StackEnd,
-    RowStart(Vec<ColumnWidth>),
+    RowStart(Vec<ColumnWidth>, Vec<Slot>),
     RowEnd,
+    FlexStart(Flex, Vec<FlexItem>),
+    FlexEnd,
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
     Image(u16, ImageSize, Option<Pt>, Option<String>, String, u8),
@@ -83,19 +117,29 @@ pub(crate) enum OwnedCommand {
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Paragraph(align, text, runs, links) => Command::Paragraph {
+            Self::Paragraph(align, [orphans, widows], text, runs, links) => Command::Paragraph {
                 align: *align,
+                orphans: *orphans,
+                widows: *widows,
                 text,
                 runs,
                 links,
             },
-            Self::BoxStart(style) => Command::BoxStart { style: *style },
+            Self::BoxStart(style, size) => Command::BoxStart {
+                style: *style,
+                size: *size,
+            },
             Self::BoxEnd => Command::BoxEnd,
             Self::Spacer(value) => Command::Spacer(*value),
             Self::StackStart(gap) => Command::StackStart { gap: *gap },
             Self::StackEnd => Command::StackEnd,
-            Self::RowStart(columns) => Command::RowStart { columns },
+            Self::RowStart(columns, slots) => Command::RowStart { columns, slots },
             Self::RowEnd => Command::RowEnd,
+            Self::FlexStart(style, items) => Command::FlexStart {
+                style: *style,
+                items,
+            },
+            Self::FlexEnd => Command::FlexEnd,
             Self::TableStart(header_rows, footer_rows, width) => Command::TableStart {
                 header_rows: *header_rows,
                 footer_rows: *footer_rows,
@@ -177,18 +221,21 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_block(&mut self) -> Result<Block<'a>, CommandParseError> {
-        if matches!(self.peek(), Some(Command::PageBreak)) {
-            self.index += 1;
-            Ok(Block::PageBreak)
-        } else {
-            Ok(Block::Element(self.parse_element(0)?))
-        }
+        let block = match self.peek() {
+            Some(Command::PageBreak) => Block::PageBreak,
+            Some(Command::Avoid) => Block::Avoid,
+            _ => return Ok(Block::Element(self.parse_element(0)?)),
+        };
+        self.index += 1;
+        Ok(block)
     }
 
     fn parse_element(&mut self, depth: usize) -> Result<Element<'a>, CommandParseError> {
         match self.next()? {
             Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
                 align: style.align,
+                orphans: 2,
+                widows: 2,
                 text,
                 runs: vec![TextRun {
                     len: text.len(),
@@ -204,11 +251,15 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             })),
             Command::Paragraph {
                 align,
+                orphans,
+                widows,
                 text,
                 runs,
                 links,
             } => Ok(Element::Paragraph(Paragraph {
                 align,
+                orphans,
+                widows,
                 text,
                 runs: runs.to_vec(),
                 links,
@@ -230,39 +281,73 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::Anchor(slot) => Ok(Element::Anchor(slot)),
-            Command::BoxStart { style } => {
+            Command::BoxStart { style, size } => {
                 self.check_depth(depth)?;
                 let children = self.parse_children(Command::BoxEnd, depth + 1)?;
-                Ok(Element::Box(BoxNode { style, children }))
+                Ok(Element::Box(BoxNode {
+                    style,
+                    size,
+                    children,
+                }))
             }
             Command::StackStart { gap } => {
                 self.check_depth(depth)?;
                 let children = self.parse_children(Command::StackEnd, depth + 1)?;
                 Ok(Element::Stack(Stack { gap, children }))
             }
-            Command::RowStart { columns } => {
+            Command::RowStart { columns, slots } => {
                 self.check_depth(depth)?;
-                if columns.is_empty() || columns.len() > MAX_COLUMNS {
+                if columns.is_empty()
+                    || columns.len() > MAX_COLUMNS
+                    || !(slots.is_empty() || slots.len() == columns.len())
+                {
                     return Err(CommandParseError::InvalidRow);
                 }
-                let mut cells = Vec::with_capacity(columns.len());
-                for width in columns {
-                    // Anchors before a cell belong to it, so they do not count as cells.
+                let mut cells: Vec<Cell<'a>> = Vec::with_capacity(columns.len());
+                for column in 0..columns.len() {
+                    match slots.get(column).copied().unwrap_or(Slot::Cell {
+                        rows: 1,
+                        align: VerticalAlign::Top,
+                    }) {
+                        Slot::Cell { rows, align } => {
                     let mut anchors = Vec::new();
-                    while let Some(Command::Anchor(slot)) = self.peek() {
-                        self.index += 1;
-                        anchors.push(slot);
+                    while let Some(Command::Anchor(slot)) = self.peek() { self.index += 1; anchors.push(slot); }
+                    cells.push(Cell { anchors,
+                            column,
+                            span: 1,
+                            rows,
+                            align,
+                            content: self.parse_element(depth + 1)?,
+                        }); },
+                        Slot::Join => match cells.last_mut() {
+                            Some(cell) if cell.column + cell.span == column => cell.span += 1,
+                            _ => return Err(CommandParseError::InvalidRow),
+                        },
+                        Slot::Covered => {}
                     }
-                    cells.push(Cell {
-                        width: *width,
-                        anchors,
-                        content: self.parse_element(depth + 1)?,
-                    });
                 }
                 if !matches!(self.next()?, Command::RowEnd) {
                     return Err(CommandParseError::InvalidRow);
                 }
-                Ok(Element::Row(Row { cells }))
+                Ok(Element::Row(Row { columns, cells }))
+            }
+            Command::FlexStart { style, items } => {
+                self.check_depth(depth)?;
+                if items.is_empty() || items.len() > MAX_COLUMNS {
+                    return Err(CommandParseError::InvalidRow);
+                }
+                let mut children = Vec::with_capacity(items.len());
+                for _ in items {
+                    children.push(self.parse_element(depth + 1)?);
+                }
+                if !matches!(self.next()?, Command::FlexEnd) {
+                    return Err(CommandParseError::InvalidRow);
+                }
+                Ok(Element::Flex(FlexNode {
+                    style,
+                    items,
+                    children,
+                }))
             }
             Command::TableStart {
                 header_rows,
@@ -289,11 +374,14 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             Command::BoxEnd
             | Command::StackEnd
             | Command::RowEnd
+            | Command::FlexEnd
             | Command::TableEnd
-            | Command::PageBreak => Err(CommandParseError::UnexpectedCommand),
+            | Command::PageBreak
+            | Command::Avoid => Err(CommandParseError::UnexpectedCommand),
         }
     }
 
+    /// Comparing variants rather than whole commands keeps `Command`'s `PartialEq` out of the WASM.
     fn parse_children(
         &mut self,
         end: Command<'_>,
@@ -301,10 +389,9 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     ) -> Result<Vec<Element<'a>>, CommandParseError> {
         let mut children = Vec::new();
         loop {
-            // Only the kind matters, and comparing kinds keeps `Command`'s deep equality out of the build.
             if self
                 .peek()
-                .is_some_and(|next| std::mem::discriminant(&next) == std::mem::discriminant(&end))
+                .is_some_and(|command| discriminant(&command) == discriminant(&end))
             {
                 self.index += 1;
                 return Ok(children);
@@ -339,10 +426,10 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
 }
 
 /// A table child is a Row, or a Box/Stack group of them, and every Row has the
-/// same cell count; `columns` learns it from the first Row.
-fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
+/// same column count; `columns` learns it from the first Row.
+pub(crate) fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
     match element {
-        Element::Row(row) => *columns.get_or_insert(row.cells.len()) == row.cells.len(),
+        Element::Row(row) => *columns.get_or_insert(row.columns.len()) == row.columns.len(),
         Element::Box(BoxNode { children, .. }) | Element::Stack(Stack { children, .. }) => {
             children.iter().all(|child| uniform_rows(child, columns))
         }
@@ -350,6 +437,7 @@ fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -> bool {
         | Element::Spacer(_)
         | Element::Table(_)
         | Element::Image(_)
-        | Element::Anchor(_) => false,
+        | Element::Anchor(_)
+        | Element::Flex(_) => false,
     }
 }

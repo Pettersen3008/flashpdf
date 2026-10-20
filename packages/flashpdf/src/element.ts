@@ -1,5 +1,6 @@
-export type Length = number | "0" | `${number}${"pt" | "px" | "em" | "rem"}`;
-export type Width = number | `${number}${"pt" | "px" | "%"}`;
+type Absolute = "pt" | "px" | "pc" | "in" | "cm" | "mm" | "Q";
+export type Length = number | "0" | `${number}${Absolute | "em" | "rem"}`;
+export type Width = number | `${number}${Absolute | "%"}`;
 export type SignedLength = Length | `-${Length}`;
 type TextDecorationLine = "none" | "underline" | "line-through" | "underline line-through";
 export type ListStyleType =
@@ -20,21 +21,58 @@ export type Edges =
 	| `${Length} ${Length}`
 	| `${Length} ${Length} ${Length}`
 	| `${Length} ${Length} ${Length} ${Length}`;
+/** `auto` horizontal margins centre a block with a width; flex items absorb free space with them. */
+export type Margin = Length | "auto";
+export type MarginEdges =
+	| Margin
+	| `${Margin} ${Margin}`
+	| `${Margin} ${Margin} ${Margin}`
+	| `${Margin} ${Margin} ${Margin} ${Margin}`;
+export type Alignment =
+	| "normal"
+	| "stretch"
+	| "flex-start"
+	| "start"
+	| "flex-end"
+	| "end"
+	| "center";
 
 export type BorderStyle = "none" | "hidden" | "solid" | "dashed" | "dotted";
 
 export type Style = {
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
-	flex?: number;
-	width?: Width;
-	/** Only `img` takes a height; block height comes from content. */
-	height?: Width;
-	margin?: Edges;
-	marginTop?: Length;
-	marginRight?: Length;
-	marginBottom?: Length;
-	marginLeft?: Length;
+	flexWrap?: "nowrap";
+	justifyContent?:
+		| "normal"
+		| "flex-start"
+		| "start"
+		| "flex-end"
+		| "end"
+		| "center"
+		| "space-between"
+		| "space-around"
+		| "space-evenly";
+	alignItems?: Alignment;
+	alignSelf?: Alignment | "auto";
+	/** `none`, `auto`, a grow factor, or grow and shrink factors with an optional basis. */
+	flex?: number | "auto" | "none" | `${number} ${string}`;
+	flexGrow?: number;
+	flexShrink?: number;
+	flexBasis?: Width | "auto";
+	width?: Width | "auto";
+	minWidth?: Width | "auto";
+	maxWidth?: Width | "none";
+	/** A percent needs a parent with a fixed `height`. */
+	height?: Width | "auto";
+	minHeight?: Width | "auto";
+	maxHeight?: Width | "none";
+	boxSizing?: "content-box" | "border-box";
+	margin?: MarginEdges;
+	marginTop?: Margin;
+	marginRight?: Margin;
+	marginBottom?: Margin;
+	marginLeft?: Margin;
 	padding?: Edges;
 	paddingTop?: Length;
 	paddingRight?: Length;
@@ -86,15 +124,22 @@ export type Style = {
 	/** Collapses whitespace unless `pre`, `pre-wrap`, or `pre-line`. `pre` and `nowrap` reject a line wider than its container. */
 	whiteSpace?: "normal" | "nowrap" | "pre" | "pre-wrap" | "pre-line";
 	/** Only on inline elements: `sub` and `super` shift the baseline by a fraction of the parent's size. */
-	verticalAlign?: "baseline" | "sub" | "super";
+	verticalAlign?: "baseline" | "sub" | "super" | "top" | "middle" | "bottom";
 	/** Omitted parts reset to `disc` and `outside`, as in CSS. */
 	listStyle?: string;
 	listStyleType?: ListStyleType;
 	listStylePosition?: "outside" | "inside";
 	color?: string;
-	breakBefore?: "auto" | "page";
-	breakAfter?: "auto" | "page";
-	breakInside?: "auto" | "avoid";
+	breakBefore?: "auto" | "page" | "avoid" | "avoid-page";
+	breakAfter?: "auto" | "page" | "avoid" | "avoid-page";
+	breakInside?: "auto" | "avoid" | "avoid-page";
+	/** Lines of a paragraph a page break leaves before it; 2 by default. */
+	orphans?: number;
+	/** Lines of a paragraph a page break carries after it; 2 by default. */
+	widows?: number;
+	borderCollapse?: "collapse" | "separate";
+	/** Only 0 is supported: cells tile their row. */
+	borderSpacing?: 0 | "0" | Length | `${Length} ${Length}`;
 	[customProperty: `--${string}`]: string | number | undefined;
 };
 
@@ -127,6 +172,11 @@ export type OrderedListProps = BlockProps & {
 export type ListItemProps = BlockProps & { value?: number | undefined };
 /** `src` is the PNG, JPEG, or SVG file bytes; `alt` is stored for accessibility tagging. */
 export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined };
+/** `colSpan` is 1 to 256 and `rowSpan` 1 to 65535, within the cell's row group. */
+export type CellProps = BlockProps & {
+	colSpan?: number | undefined;
+	rowSpan?: number | undefined;
+};
 /** `href` must be an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element with that id. */
 export type LinkProps = BlockProps & { href: string };
 
@@ -195,4 +245,5 @@ export type PdfProps =
 	| SvgProps
 	| SvgShapeProps
 	| OrderedListProps
-	| ListItemProps;
+	| ListItemProps
+	| CellProps;
