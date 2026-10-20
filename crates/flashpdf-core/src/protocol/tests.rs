@@ -343,9 +343,11 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     bad_magic[0] = b'X';
     assert_eq!(push_error(&bad_magic), "invalid magic");
 
-    let mut bad_version = representative();
-    bad_version[4..6].copy_from_slice(&1_u16.to_le_bytes());
-    assert_eq!(push_error(&bad_version), "unknown version");
+    for version in [1_u16, 20] {
+        let mut bad_version = representative();
+        bad_version[4..6].copy_from_slice(&version.to_le_bytes());
+        assert_eq!(push_error(&bad_version), "unknown version");
+    }
 
     let mut unknown = header(VERSION, 120.0, 60.0, 10.0);
     unknown.extend(record(42, &[]));

@@ -1,13 +1,13 @@
 import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { props } from "./assert.js";
 import { asError, Binary } from "./binary.js";
-import { compile, compileBody, engineError } from "./compile.js";
+import { compile, compileBody } from "./compile.js";
 import { styleResolver } from "./css.js";
 import type { Edges, Element, Length } from "./element.js";
-import { glyphError, registerFonts } from "./fonts.js";
+import { registerFonts } from "./fonts.js";
 import { pageSetup } from "./page.js";
 import { ProtocolWriter } from "./protocol.js";
-import { locate, pageOverflow, resolveTree, type Node } from "./tree.js";
+import { pageOverflow, resolveTree, type Node } from "./tree.js";
 
 /** A family without an italic face for a weight slants its upright face instead. */
 export type EmbeddedFont = {
