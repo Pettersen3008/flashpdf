@@ -7,7 +7,7 @@ import { corner, CORNERS, opacity, SIDES } from "./style/length.js";
 import { dimension, flexBasis, lineHeight, point, spacing } from "./style/length.js";
 import { listStylePosition, listStyleType } from "./style/list.js";
 import { normalize } from "./style/normalize.js";
-import type { NormalizedStyle, Size } from "./style/types.js";
+import type { NormalizedStyle } from "./style/types.js";
 
 export type { Box, FontSlots, NormalizedStyle, Size } from "./style/types.js";
 export { boxSize, boxStyle, edges, radiusOf } from "./style/box.js";
