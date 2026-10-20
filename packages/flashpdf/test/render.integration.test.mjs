@@ -374,14 +374,14 @@ test("given rounded, dashed, and translucent boxes with an image, when rendering
 	}
 });
 
-test("given opacity on a header or footer, when rendering, then rejects instead of dropping it", async () => {
-	for (const position of ["header", "footer"])
-		await assert.rejects(
-			render(jsx("p", { children: "x" }), {
-				[position]: jsx("p", { style: { opacity: 0.5 }, children: "Page" }),
-			}),
-			new RegExp(`${position} text cannot take opacity`),
-		);
+test("given opacity on a header or footer, when rendering, then paints translucent text", async () => {
+	for (const position of ["header", "footer"]) {
+		const pdf = await render(jsx("p", { children: "x" }), {
+			[position]: jsx("p", { style: { opacity: 0.5 }, children: "Page" }),
+		});
+		assert.match(shown(pdf), /\(Page\)/);
+		assert.match(string(pdf), /\/ca 0\.5019608/);
+	}
 });
 
 test("given paragraphs and headings in page furniture, when rendering, then default margins do not prevent their text", async () => {
@@ -391,12 +391,11 @@ test("given paragraphs and headings in page furniture, when rendering, then defa
 	});
 	for (const text of ["Body", "Header", "Footer"])
 		assert.match(shown(pdf), new RegExp(`\\(${text}\\)`));
-	await assert.rejects(
-		render(jsx("p", { children: "Body" }), {
-			header: jsx("p", { style: { marginTop: 10 }, children: "Header" }),
-		}),
-		/header must be a single text line/,
-	);
+	const inset = await render(jsx("p", { children: "Body" }), {
+		header: jsx("p", { style: { marginTop: 10 }, children: "Header" }),
+	});
+	const baseline = (pdf) => Number(shown(pdf).match(/([\d.]+) Td\n\[?\(Header\)/)[1]);
+	assert.equal(baseline(pdf) - baseline(inset), 10);
 });
 
 test("given collapsing margins around targeted headings, when adding bookmarks and links, then painted text keeps its position", async () => {
@@ -426,7 +425,7 @@ test("given Tailwind v4 border and md: utilities, when rendering with two margin
 	});
 	// 48rem is 576 pt: the default margin leaves 523 pt, and no margin leaves 595 pt.
 	const narrow = shown(await render(document, { stylesheets: [css] }));
-	assert.match(narrow, /0\.898\d* 0\.905\d* 0\.921\d* rg\n36 805\.25 523 0\.75 re\nf/);
+	assert.match(narrow, /0\.898 0\.906 0\.922 rg\n36 805\.25 523 0\.75 re\nf/);
 	assert.match(narrow, /\n48\.75 [\d.]+ Td\n\[?\(Total\)/);
 	const wide = shown(await render(document, { stylesheets: [css], margin: 0 }));
 	assert.match(wide, /\n24\.75 [\d.]+ Td\n\[?\(Total\)/);
@@ -492,7 +491,9 @@ test("given a page token character in user text, when it sits in a footer, then 
 
 test("given first-page variants and a two-column linked footer, when rendering tagged pages, then page one paints its own and all furniture is an artifact", async () => {
 	const document = jsx("main", {
-		children: Array.from({ length: 100 }, (_, index) => jsx("p", { children: `Line ${index}` })),
+		children: Array.from({ length: 100 }, (_, index) =>
+			jsx("p", { style: { margin: 0 }, children: `Line ${index}` }),
+		),
 	});
 	const footer = jsxs("div", {
 		style: { display: "flex", gap: "12pt", borderTop: "1px solid #999", fontSize: "8pt" },
@@ -513,7 +514,7 @@ test("given first-page variants and a two-column linked footer, when rendering t
 		metadata: { language: "en" },
 		tagged: true,
 	});
-	const output = string(pdf);
+	const output = shown(pdf);
 	assert.equal(output.match(/\/Type \/Page\b/g).length, 2);
 	for (const text of ["Letterhead", "Continued", "Org. no. 123 456 789", "Page 2 of 2"])
 		assert.equal(output.split(`(${text})`).length, 2, text);
@@ -533,7 +534,7 @@ test("given furniture the engine cannot place, when rendering, then rejects with
 	);
 	await assert.rejects(
 		render(body, { header: jsx("div", { style: { breakAfter: "page" }, children: "x" }) }),
-		/^Error: header cannot break the page on <div>$/,
+		/^Error: header cannot contain page breaks on <div>$/,
 	);
 	await assert.rejects(
 		render(body, { firstPageFooter: ["Page ", jsx(PageNumber, {})] }),
@@ -591,11 +592,11 @@ test("given an invoice header with space-between and centred items and an mx-aut
 			],
 		}),
 	);
-	const content = string(pdf);
-	// The 40pt logo sets the row height; the 11.1pt text line sits 14.45pt down, ending at the right margin.
+	const content = shown(pdf);
+	// The 40pt logo sets the row height; the kerned Helvetica line ends at the right margin.
 	assert.match(content, /36 766 60 40 re/);
-	assert.match(content, /504\.303 782\.934 Td\n\(Invoice 42\)/);
-	assert.match(content, /166\.75 754\.9 261\.5 11\.1 re/);
+	assert.match(content, /504\.84302 781\.83984 Td\n\[\(Invoice 42\)\] TJ/);
+	assert.match(content, /166\.75 752\.2012 261\.5 13\.798828 re/);
 });
 
 test("given content taller than a fixed height, when rendering, then rejects with ContentOverflow naming the element", async () => {
@@ -884,14 +885,14 @@ test("given per-edge borders and hr, when rendering, then emits native rules", a
 });
 
 test("given A5 landscape with per-side mm margins, when rendering, then the page turns and text starts at the left and top margins", async () => {
-	const pdf = await render(jsx("p", { children: "x" }), {
+	const pdf = await render(jsx("p", { style: { margin: 0 }, children: "x" }), {
 		pageFormat: "A5",
 		orientation: "landscape",
 		margin: "20mm 15mm 10mm 25mm",
 	});
 	assert.match(string(pdf), /\/MediaBox \[0 0 595 420\]/);
-	// 25mm is 70.866pt; 12pt Helvetica's baseline sits 8.616pt under the 20mm top margin.
-	assert.match(string(pdf), /\n70\.86614 354\.6911 Td\n/);
+	// 25mm is 70.866pt; Helvetica's line-box baseline sits 11.06pt under the 20mm top margin.
+	assert.match(string(pdf), /\n70\.86614 352\.24753 Td\n/);
 });
 
 test("given an invalid option, when rendering, then rejects before running any component", async () => {

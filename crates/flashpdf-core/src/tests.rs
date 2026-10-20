@@ -182,6 +182,14 @@ fn text(text: &str) -> Command<'_> {
     }
 }
 
+fn fixed_line(text: &str) -> Command<'_> {
+    Command::Text {
+        text,
+        // A 9.25pt normal line keeps four lines and a border inside the 40pt body.
+        style: TextStyle::plain(Pt(9.25 * 2048.0 / 2355.0)),
+    }
+}
+
 /// A page's text, without the space lopdf's extractor adds after each `TJ` array.
 pub(crate) fn page_text(pdf: &lopdf::Document, page: u32) -> String {
     let text = pdf.extract_text(&[page]).unwrap();
@@ -217,7 +225,7 @@ fn given_exact_bottom_stack_when_placed_then_stays_on_page() {
 fn given_exact_bottom_row_when_placed_then_stays_on_page() {
     let columns = [super::ColumnWidth::Fixed(Pt(100.0))];
     let pdf = parsed(&[
-        Command::Spacer(Pt(20.0)),
+        Command::Spacer(Pt(40.0 - 2.0 * 2355.0 * 10.0 / 2048.0)),
         Command::RowStart {
             columns: &columns,
             slots: &[],
@@ -375,11 +383,11 @@ fn given_four_different_page_margins_and_a_header_and_footer_when_rendered_then_
         .filter_map(|line| line.strip_suffix(" Td")?.split_once(' '))
         .map(|(x, y)| (x.parse().unwrap(), y.parse().unwrap()))
         .collect();
-    // 10pt Helvetica rises 7.18pt in a 9.25pt line, and "F" is 6.11pt wide.
+    // Arial metrics give Helvetica an 11.499023pt line and a 9.216309pt ascent; "F" is 6.11pt wide.
     let expected = [
-        (20.0, 80.0 - 5.0 - 9.25 - 7.18),
-        (20.0, 80.0 - 5.0 - 7.18),
-        (120.0 - 10.0 - 6.11, 15.0 + 9.25 - 7.18),
+        (20.0, 80.0 - 5.0 - 11.499023 - 9.216309),
+        (20.0, 80.0 - 5.0 - 9.216309),
+        (120.0 - 10.0 - 6.11, 15.0 + 11.499023 - 9.216309),
     ];
     assert_eq!(starts.len(), 3, "{starts:?}");
     for ((x, y), (left, baseline)) in starts.iter().zip(expected) {
@@ -414,14 +422,14 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
     assert_eq!(objects.len(), 3, "{content}");
     assert_eq!(
         objects[1].trim(),
-        "BT\n0 0 0 rg\n/F1 10 Tf\n10 29.284668 Td\n(WWWW) Tj\n/F2 10 Tf\n37.76 0 Td\n(WW) Tj"
+        "BT\n10 29.284668 Td\n(WWWW) Tj\n/F2 10 Tf\n37.76 0 Td\n(WW) Tj"
     );
 }
 
 #[test]
 fn given_lines_in_one_style_across_two_pages_when_painted_then_each_page_sets_colour_and_font_once()
 {
-    let pdf = parsed(&[text("line"); 8]);
+    let pdf = parsed(&[text("line"); 6]);
     let pages = pdf.get_pages();
     assert_eq!(pages.len(), 2);
     for page in pages.values() {
@@ -466,6 +474,8 @@ fn given_the_built_in_fonts_when_laying_out_two_lines_then_normal_line_height_is
             },
         ];
         let pdf = parsed(&[Command::Paragraph {
+            orphans: 2,
+            widows: 2,
             links: &[],
             align: TextAlign::Left,
             text: "ab",
@@ -561,7 +571,7 @@ fn given_a_bordered_box_taller_than_the_page_when_placed_then_splits_with_its_to
         Command::BoxEnd,
     ]);
     let pages = pdf.get_pages();
-    assert_eq!(pages.len(), 3);
+    assert_eq!(pages.len(), 4);
     // Each page's fill spans the 100pt body width; only the first and last carry a 1pt horizontal edge.
     let edges: Vec<usize> = pages
         .values()
@@ -571,11 +581,11 @@ fn given_a_bordered_box_taller_than_the_page_when_placed_then_splits_with_its_to
             content.matches(" 100 1 re").count()
         })
         .collect();
-    assert_eq!(edges, [1, 0, 1]);
+    assert_eq!(edges, [1, 0, 0, 1]);
     assert!(String::from_utf8(pdf.get_page_content(pages[&1]))
         .unwrap()
         .contains("10 49 100 1 re"));
-    let text: String = (1..=3)
+    let text: String = (1..=4)
         .map(|page| pdf.extract_text(&[page]).unwrap())
         .collect();
     assert_eq!(text.matches("word").count(), 40);
@@ -591,15 +601,15 @@ fn page_texts(pdf: &lopdf::Document) -> Vec<String> {
 fn given_a_bordered_box_that_crosses_the_page_end_when_placed_then_breaks_there_with_one_edge_per_page(
 ) {
     let pdf = parsed(&[
-        text("first"),
-        text("second"),
-        text("third"),
+        fixed_line("first"),
+        fixed_line("second"),
+        fixed_line("third"),
         Command::BoxStart {
             style: bordered(),
             size: crate::BoxSize::AUTO,
         },
-        text("a"),
-        text("b"),
+        fixed_line("a"),
+        fixed_line("b"),
         Command::BoxEnd,
     ]);
     assert_eq!(page_texts(&pdf), ["first\nsecond\nthird\na", "b"]);
@@ -667,12 +677,15 @@ const FOUR_WORDS: &str = "WWWWWWW WWWWWWW WWWWWWW WWWWWWW";
 #[test]
 fn given_room_for_one_line_of_a_four_line_paragraph_when_breaking_then_two_orphans_move_it_whole_and_one_splits_it(
 ) {
-    let runs = [run(FOUR_WORDS.len(), false, 10.0, false)];
+    let runs = [TextRun {
+        line_height: Some(Pt(10.0)),
+        ..run(FOUR_WORDS.len(), false, 10.0, false)
+    }];
     let lines = |keep| {
         parsed(&[
-            text("first"),
-            text("second"),
-            text("third"),
+            fixed_line("first"),
+            fixed_line("second"),
+            fixed_line("third"),
             four_lines(&runs, keep),
         ])
     };
@@ -700,11 +713,11 @@ fn given_room_for_three_lines_of_a_four_line_paragraph_when_breaking_then_two_wi
 fn given_a_heading_that_avoids_a_break_after_it_when_the_next_paragraph_moves_then_the_heading_moves_with_it(
 ) {
     let pdf = parsed(&[
-        text("first"),
-        text("second"),
-        text("Heading"),
+        fixed_line("first"),
+        fixed_line("second"),
+        fixed_line("Heading"),
         Command::Avoid,
-        text(&"WWWWWWW ".repeat(3)),
+        fixed_line(&"WWWWWWW ".repeat(3)),
     ]);
     assert_eq!(
         page_texts(&pdf),
@@ -725,7 +738,7 @@ fn given_an_avoided_break_after_a_page_filling_paragraph_when_the_next_block_mov
 fn given_a_chain_of_avoided_breaks_taller_than_a_page_when_placed_then_breaks_anyway() {
     let mut commands = Vec::new();
     for line in ["a", "b", "c", "d", "e"] {
-        commands.extend([text(line), Command::Avoid]);
+        commands.extend([fixed_line(line), Command::Avoid]);
     }
     assert_eq!(page_texts(&parsed(&commands)), ["a\nb\nc\nd", "e"]);
 }
@@ -740,8 +753,8 @@ fn given_a_margin_that_does_not_fit_at_a_page_end_when_the_next_line_moves_then_
         Command::Spacer(Pt(13.0)),
         text("next"),
     ]);
-    // The 40pt body starts at y 50, so a first line's baseline sits at 50 - 7.18.
-    assert_eq!(baselines(&pdf, pdf.get_pages()[&2]), [42.82]);
+    // The 40pt body starts at y 50, with a 9.216309pt ascent.
+    assert_eq!(baselines(&pdf, pdf.get_pages()[&2]), [40.78369]);
 }
 
 #[test]
@@ -959,6 +972,9 @@ fn red_box() -> Command<'static> {
             border: Edges::all(Pt(0.0)),
             background: Some(Rgb { r: 255, g: 0, b: 0 }),
             border_color: Edges::all(Rgb::BLACK),
+            border_style: Edges::all(LineStyle::Solid),
+            radius: None,
+            alpha: OPAQUE,
         },
     }
 }
@@ -983,8 +999,11 @@ fn given_a_cell_joined_to_the_next_column_when_laid_out_then_it_takes_both_width
         Command::RowEnd,
     ]);
     let content = content(&pdf);
-    assert!(content.contains("10 40.75 50 9.25 re"), "{content}");
-    assert!(content.contains("60 42.82 Td"), "{content}");
+    assert!(
+        content.contains("10 38.500977 50 11.499023 re"),
+        "{content}"
+    );
+    assert!(content.contains("60 40.78369 Td"), "{content}");
 }
 
 #[test]
@@ -1020,10 +1039,11 @@ fn given_a_cell_spanning_two_rows_taller_than_both_when_laid_out_then_the_last_r
         text("after"),
     ]);
     let content = content(&pdf);
-    // Three 9.25pt lines: the span's box covers both rows, and "after" follows them.
-    assert!(content.contains("10 22.25 50 27.75 re"), "{content}");
-    assert!(content.contains("60 33.57 Td"), "{content}");
-    assert!(content.contains("10 15.07 Td"), "{content}");
+    // Three 11.499023pt lines fill the span; the following line starts a new page.
+    assert!(content.contains("10 15.50293 50 34.49707 re"), "{content}");
+    assert!(content.contains("60 29.284668 Td"), "{content}");
+    assert_eq!(page_text(&pdf, 2), "after");
+    assert_eq!(baselines(&pdf, pdf.get_pages()[&2]), [40.78369]);
 }
 
 #[test]
@@ -1054,11 +1074,11 @@ fn given_middle_and_bottom_cells_beside_a_taller_cell_when_laid_out_then_their_c
     let content = content(&pdf);
     // The middle cell's background still covers the row; only its text moves.
     assert!(
-        content.contains("43.333332 22.25 33.333332 27.75 re"),
+        content.contains("43.333332 15.50293 33.333332 34.49707 re"),
         "{content}"
     );
-    assert!(content.contains("43.333332 33.57 Td"), "{content}");
-    assert!(content.contains("76.666664 24.32 Td"), "{content}");
+    assert!(content.contains("43.333332 29.284668 Td"), "{content}");
+    assert!(content.contains("76.666664 17.785645 Td"), "{content}");
 }
 
 #[test]
@@ -1418,13 +1438,13 @@ fn given_a_header_and_footer_when_a_stack_or_table_row_is_taller_than_the_body_b
         let mut renderer = super::Renderer::new(page());
         for footer in [false, true] {
             renderer
-                .set_furniture(footer, false, line("x", TextStyle::plain(Pt(10.0))))
+                .set_furniture(footer, false, line("x", TextStyle::plain(Pt(8.0))))
                 .unwrap();
         }
         renderer.push(commands)?;
         renderer.finish()
     };
-    // 40pt of content minus the 11.5pt header and footer holds one 11.5pt line, not three.
+    // Two 9.2pt furniture lines leave room for one 11.5pt body line, not three.
     let mut stack = vec![Command::StackStart { gap: Pt(0.0) }];
     stack.extend(std::iter::repeat_n(text("line"), 3));
     stack.push(Command::StackEnd);
@@ -1509,7 +1529,14 @@ fn round(value: f32, percent: u8) -> Option<Radii> {
 }
 
 fn boxed(style: super::BoxStyle) -> lopdf::Document {
-    parsed(&[Command::BoxStart { style }, text("x"), Command::BoxEnd])
+    parsed(&[
+        Command::BoxStart {
+            size: crate::BoxSize::AUTO,
+            style,
+        },
+        text("x"),
+        Command::BoxEnd,
+    ])
 }
 
 #[test]
@@ -1608,8 +1635,13 @@ fn given_a_translucent_box_and_text_when_rendered_then_each_sets_its_alpha_and_t
         ..run(1, false, 10.0, false)
     };
     let commands = [
-        Command::BoxStart { style },
+        Command::BoxStart {
+            size: crate::BoxSize::AUTO,
+            style,
+        },
         Command::Paragraph {
+            orphans: 2,
+            widows: 2,
             links: &[],
             align: TextAlign::Left,
             text: "x",
@@ -1619,8 +1651,8 @@ fn given_a_translucent_box_and_text_when_rendered_then_each_sets_its_alpha_and_t
     ];
     let bytes = super::render(page(), &commands).unwrap();
     let stream = content(&lopdf::Document::load_mem(&bytes).unwrap());
-    // The box sets the alpha once and the text, in the same alpha, reuses it.
-    assert_eq!(stream.matches("/G8080 gs\n").count(), 1, "{stream}");
+    // The background restores opaque graphics before the text sets its own alpha.
+    assert_eq!(stream.matches("/G8080 gs\n").count(), 2, "{stream}");
     assert!(stream.trim_end().ends_with("/GFFFF gs"), "{stream}");
     // One stroked outline replaces four rectangles whose overlapping corners would composite twice.
     assert!(stream.contains("\nS\n"), "{stream}");
@@ -1633,6 +1665,7 @@ fn given_a_translucent_box_and_text_when_rendered_then_each_sets_its_alpha_and_t
 fn given_an_opaque_document_when_rendered_then_declares_no_graphics_states() {
     let commands = [
         Command::BoxStart {
+            size: crate::BoxSize::AUTO,
             style: decorated(1.0),
         },
         text("x"),
@@ -1653,7 +1686,10 @@ fn given_a_rounded_box_that_does_not_fit_the_page_when_placed_then_moves_whole_t
         text("a"),
         text("b"),
         text("c"),
-        Command::BoxStart { style },
+        Command::BoxStart {
+            size: crate::BoxSize::AUTO,
+            style,
+        },
         text("x"),
         Command::BoxEnd,
     ]);
@@ -1694,6 +1730,8 @@ fn operands(pdf: &lopdf::Document, name: &str) -> Vec<Vec<f32>> {
 fn given_justified_text_that_wraps_when_rendered_then_only_the_wrapped_line_stretches_its_spaces() {
     let runs = [run(24, false, 10.0, false)];
     let pdf = parsed(&[Command::Paragraph {
+        orphans: 2,
+        widows: 2,
         links: &[],
         align: TextAlign::Justify,
         text: "aaaa aaaa aaaa aaaa aaaa",
@@ -1800,6 +1838,8 @@ fn given_an_underlined_struck_run_with_a_decoration_colour_when_painted_then_str
         ..run(1, false, 10.0, false)
     }];
     let pdf = parsed(&[Command::Paragraph {
+        orphans: 2,
+        widows: 2,
         links: &[],
         align: TextAlign::Left,
         text: "x",
@@ -1906,6 +1946,8 @@ fn given_a_list_marker_when_its_first_line_moves_to_the_next_page_then_the_marke
     let pdf = parsed(&[
         Command::Spacer(Pt(32.0)),
         Command::Paragraph {
+            orphans: 2,
+            widows: 2,
             links: &[],
             align: TextAlign::Left,
             text: "1.item",
@@ -1926,6 +1968,8 @@ fn given_a_list_marker_when_its_first_line_moves_to_the_next_page_then_the_marke
 fn given_an_inside_marker_when_laid_out_then_the_first_line_starts_after_it() {
     let runs = [marked(2, super::Marker::Inside), run(4, false, 10.0, false)];
     let pdf = parsed(&[Command::Paragraph {
+        orphans: 2,
+        widows: 2,
         links: &[],
         align: TextAlign::Left,
         text: "1.item",
@@ -1936,23 +1980,26 @@ fn given_an_inside_marker_when_laid_out_then_the_first_line_starts_after_it() {
     assert!(
         (starts[0] - 18.34).abs() < 0.001 && starts[1] == 10.0,
         "{starts:?}"
+    );
 }
 
 #[test]
 fn given_a_two_line_first_page_header_and_a_numbered_header_when_rendering_then_each_page_paints_and_reserves_its_own(
 ) {
     let mut renderer = super::Renderer::new(page());
-    let plain = TextStyle::plain(Pt(10.0));
+    let plain = TextStyle::plain(Pt(8.0));
     renderer
         .set_furniture(false, false, line("Later \u{1e}", plain))
         .unwrap();
-    let runs = vec![run(5, false, 10.0, true), run(4, false, 10.0, false)];
+    let runs = vec![run(5, false, 8.0, true), run(4, false, 8.0, false)];
     let first =
         crate::OwnedCommand::Paragraph(TextAlign::Left, [2, 2], "Firstpage".into(), runs, vec![]);
     renderer.set_furniture(false, true, vec![first]).unwrap();
-    renderer.push(&["a", "b", "c", "d", "e"].map(text)).unwrap();
+    renderer
+        .push(&["a", "b", "c", "d", "e"].map(fixed_line))
+        .unwrap();
     let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
-    // 40pt of body keeps 21.5pt under the 18.5pt first header and 30.75pt under the later one.
+    // The 18.4pt first header leaves two 9.25pt lines; the 9.2pt later header leaves three.
     assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "a\nb\nFirst\npage");
     assert_eq!(pdf.extract_text(&[2]).unwrap().trim(), "c\nd\ne\nLater 2");
 }
@@ -1964,7 +2011,7 @@ fn given_a_header_and_first_page_footer_over_half_the_page_between_margins_when_
     renderer
         .set_furniture(false, false, line("x", TextStyle::plain(Pt(10.0))))
         .unwrap();
-    // 9.25pt plus 11.1pt passes half of the 40pt between the margins.
+    // 11.5pt plus 13.8pt passes half of the 40pt between the margins.
     assert_eq!(
         renderer.set_furniture(true, true, line("x", TextStyle::plain(Pt(12.0)))),
         Err(RenderError::PageOverflow)
@@ -1974,11 +2021,11 @@ fn given_a_header_and_first_page_footer_over_half_the_page_between_margins_when_
 #[test]
 fn given_a_page_number_whose_real_width_pulls_a_larger_word_up_a_line_when_finishing_then_rejects_with_page_overflow(
 ) {
-    let page = Page::new(Pt(100.0), Pt(200.0), Edges::all(Pt(5.0))).unwrap();
+    let page = Page::new(Pt(100.0), Pt(180.0), Edges::all(Pt(5.0))).unwrap();
     let mut renderer = super::Renderer::new(page);
-    // In 90pt, ten 10pt digits push the first 40pt "M" to a second line; "1" lets it
-    // stay and pushes the second one down, so two 37pt lines replace 9.25pt and 37pt.
-    let runs = vec![run(1, false, 10.0, false), run(4, false, 40.0, false)];
+    // In 90pt, five 20pt digits push the first 40pt "M" to a second line; "1" lets it
+    // stay and pushes the second one down, so two 46pt lines replace 23pt and 46pt.
+    let runs = vec![run(1, false, 20.0, false), run(4, false, 40.0, false)];
     let footer =
         crate::OwnedCommand::Paragraph(TextAlign::Left, [2, 2], "\u{1e} M M".into(), runs, vec![]);
     renderer.set_furniture(true, false, vec![footer]).unwrap();
@@ -2009,7 +2056,7 @@ fn given_space_between_and_center_when_a_row_lays_out_then_items_touch_both_edge
     ]);
     // "b" is 5.56pt wide plus the 0.001pt that keeps it on one line; "a" sits half a line lower.
     let content = content(&pdf);
-    for position in ["104.439 42.82 Td", "10 38.195 Td"] {
+    for position in ["104.439 40.78369 Td", "10 35.03418 Td"] {
         assert!(content.contains(position), "{position}: {content}");
     }
 }
@@ -2030,7 +2077,7 @@ fn given_bases_wider_than_the_row_when_shrinking_then_an_item_stops_at_its_longe
     ]);
     // An even shrink leaves 50pt each, but seven W's need 66.08pt, so "a" takes the rest.
     assert!(
-        content(&pdf).contains("76.08099 42.82 Td"),
+        content(&pdf).contains("76.08099 40.78369 Td"),
         "{}",
         content(&pdf)
     );
@@ -2055,7 +2102,11 @@ fn given_grow_factors_and_bases_when_space_is_left_then_items_share_it_by_factor
         Command::FlexEnd,
     ]);
     // 60pt is left over: the first takes 15pt and ends at 35pt, the second takes 45pt.
-    assert!(content(&pdf).contains("45 42.82 Td"), "{}", content(&pdf));
+    assert!(
+        content(&pdf).contains("45 40.78369 Td"),
+        "{}",
+        content(&pdf)
+    );
 }
 
 #[test]
@@ -2076,7 +2127,7 @@ fn given_stretch_when_a_painted_item_is_shorter_than_the_row_then_its_box_fills_
         Command::FlexEnd,
     ]);
     assert!(
-        content(&pdf).contains("10 31.5 5.561 18.5 re"),
+        content(&pdf).contains("10 27.001953 5.561 22.998047 re"),
         "{}",
         content(&pdf)
     );
@@ -2091,7 +2142,7 @@ fn given_a_max_width_and_auto_side_margins_when_a_box_lays_out_then_it_centres()
     };
     let pdf = parsed(&[sized(size, RED), text("a"), Command::BoxEnd]);
     assert!(
-        content(&pdf).contains("30 40.75 60 9.25 re"),
+        content(&pdf).contains("30 38.500977 60 11.499023 re"),
         "{}",
         content(&pdf)
     );
@@ -2111,6 +2162,8 @@ fn given_disc_circle_and_square_markers_when_painted_then_draw_shapes_instead_of
         .iter()
         .zip(&paragraphs)
         .map(|(text, runs)| Command::Paragraph {
+            orphans: 2,
+            widows: 2,
             links: &[],
             align: TextAlign::Left,
             text,
@@ -2143,6 +2196,8 @@ fn given_a_nowrap_word_wider_than_its_line_when_laid_out_then_rejects_where_a_no
         super::render(
             page(),
             &[Command::Paragraph {
+                orphans: 2,
+                widows: 2,
                 links: &[],
                 align: TextAlign::Left,
                 text: "WWWWWWWWWWWW",
@@ -2168,6 +2223,8 @@ fn given_a_raised_run_when_painted_then_it_moves_up_by_the_rise_and_grows_the_li
             },
         ];
         parsed(&[Command::Paragraph {
+            orphans: 2,
+            widows: 2,
             links: &[],
             align: TextAlign::Left,
             text: "xy",
@@ -2195,6 +2252,8 @@ fn given_a_run_background_when_painted_then_fills_its_text_extent_before_the_tex
         ..run(2, false, 10.0, false)
     }];
     let pdf = parsed(&[Command::Paragraph {
+        orphans: 2,
+        widows: 2,
         links: &[],
         align: TextAlign::Left,
         text: "ab",
@@ -2226,6 +2285,8 @@ fn given_a_word_split_across_two_colours_when_laid_out_then_its_pair_still_kerns
         run(1, false, 10.0, false),
     ];
     let pdf = parsed(&[Command::Paragraph {
+        orphans: 2,
+        widows: 2,
         links: &[],
         align: TextAlign::Left,
         text: "AV",
@@ -2234,8 +2295,8 @@ fn given_a_word_split_across_two_colours_when_laid_out_then_its_pair_still_kerns
     // The V segment starts at A's 6.67pt advance less the 0.7pt kern.
     assert!((operands(&pdf, "Td")[1][0] - 5.97).abs() < 0.001);
 }
-}
 
+#[test]
 fn given_border_box_sizing_when_a_box_has_padding_then_its_width_includes_the_padding() {
     let size = super::BoxSize {
         width: super::ImageSize::Fixed(Pt(50.0)),
@@ -2255,7 +2316,7 @@ fn given_border_box_sizing_when_a_box_has_padding_then_its_width_includes_the_pa
         Command::BoxEnd,
     ]);
     assert!(
-        content(&pdf).contains("10 30.75 50 19.25 re"),
+        content(&pdf).contains("10 28.500977 50 21.499023 re"),
         "{}",
         content(&pdf)
     );
@@ -2307,9 +2368,9 @@ fn given_a_column_with_a_height_and_space_between_when_laid_out_then_items_touch
         text("b"),
         Command::FlexEnd,
     ]);
-    // The last line box ends on the 10pt bottom margin, so its baseline sits 9.25 - 7.18 above it.
+    // The last line box ends on the 10pt bottom margin, with a 2.282715pt descent.
     let content = content(&pdf);
-    for position in ["10 42.82 Td", "10 12.07 Td"] {
+    for position in ["10 40.78369 Td", "10 12.282715 Td"] {
         assert!(content.contains(position), "{position}: {content}");
     }
 }
@@ -2345,6 +2406,9 @@ fn sized(size: super::BoxSize, background: Option<Rgb>) -> Command<'static> {
             border: Edges::all(Pt(0.0)),
             background,
             border_color: Edges::all(Rgb::BLACK),
+            border_style: Edges::all(LineStyle::Solid),
+            radius: None,
+            alpha: OPAQUE,
         },
         size,
     }

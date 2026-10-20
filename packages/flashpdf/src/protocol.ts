@@ -295,6 +295,7 @@ export class ProtocolWriter {
 
 	/** Without `slots`, each column holds its own top-aligned cell. */
 	rowStart(columns: readonly Column[], slots: readonly Slot[] = []) {
+		this.body();
 		this.binary.record(opcode.rowStart, () => {
 			this.binary.u16(columns.length);
 			for (const [index, column] of columns.entries()) {
@@ -314,10 +315,12 @@ export class ProtocolWriter {
 	}
 
 	rowEnd() {
+		this.body();
 		this.binary.record(opcode.rowEnd);
 	}
 
 	flexStart(flex: Flex, items: readonly FlexItem[]) {
+		this.body();
 		this.binary.record(opcode.flexStart, () => {
 			this.binary.u8(flex.column ? 1 : 0);
 			this.binary.u8(flex.justify);
@@ -336,6 +339,7 @@ export class ProtocolWriter {
 	}
 
 	flexEnd() {
+		this.body();
 		this.binary.record(opcode.flexEnd);
 	}
 
@@ -343,6 +347,7 @@ export class ProtocolWriter {
 	tableStart(headerRows: number, footerRows: number, width: Column) {
 		if (headerRows > 0xffff) throw new Error("too many header rows");
 		if (footerRows > 0xffff) throw new Error("too many footer rows");
+		this.body();
 		this.binary.record(opcode.tableStart, () => {
 			this.binary.u16(headerRows);
 			this.binary.u16(footerRows);
@@ -352,9 +357,9 @@ export class ProtocolWriter {
 	}
 
 	tableEnd() {
+		this.body();
 		this.binary.record(opcode.tableEnd);
 	}
-
 
 	pageBreak() {
 		if (this.repeating) throw new Error(`${this.repeating} cannot contain page breaks`);

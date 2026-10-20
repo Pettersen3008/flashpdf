@@ -154,9 +154,19 @@ export function createRenderer(loadWasm: LoadWasm) {
 				writer.metadata(metadata, p.tagged === true);
 				attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 				for (const [position, first, option, nodes] of repeating) {
-					writer.repeatStart(position, first, option);
-					compile(styles(nodes, true), writer, fonts, undefined, 0, true);
-					writer.repeatEnd();
+					try {
+						writer.repeatStart(position, first, option);
+						compile(styles(nodes, true), writer, fonts, undefined, 0, true);
+						writer.repeatEnd();
+						binary.flush();
+					} catch (error) {
+						if (error instanceof Error && error.message === "PageOverflow")
+							throw new Error(
+								`PageOverflow: with ${option}, the header and footer take more than half the page`,
+								{ cause: error },
+							);
+						throw error;
+					}
 				}
 				compileBody(styles(tree), writer, fonts, p.outline === true);
 				writer.end();

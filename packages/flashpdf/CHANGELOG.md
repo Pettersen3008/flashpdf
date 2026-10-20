@@ -68,7 +68,7 @@
 - Page setup: `pageFormat` takes `A3`, `A4`, `A5`, `Letter`, `Legal`, or `{ width, height }`, `orientation: 'landscape'` puts the longer side across, and `margin` takes one to four lengths in CSS shorthand order or `{ top, right, bottom, left }`. The body, header, and footer follow all four margins.
 - `@page { size; margin }` in stylesheets, with the four margin longhands. `size` takes `auto`, a named size with an optional orientation, or one or two lengths. Render options win over `@page`.
 - `mm`, `cm`, `in`, `pc`, and `Q` lengths wherever a length or width is accepted, converted at 72pt per inch.
-- `header` and `footer` take any element tree the body takes: several lines, bold and coloured runs, links, flex rows and columns, images, tables, borders, and backgrounds. `PageNumber` and `TotalPages` work anywhere inside them. Each page lays its header and footer out again with its own numbers; the reserved height counts every number as ten digits.
+- `header` and `footer` take any element tree the body takes: several lines, bold and coloured runs, links, flex rows and columns, images, tables, borders, and backgrounds. `PageNumber` and `TotalPages` work anywhere inside them. Each page lays its header and footer out again with its own numbers; the reserved height counts every number as five digits.
 - `firstPageHeader` and `firstPageFooter` replace the header and footer on the first page, and `null` leaves the first page without one. Each page reserves the height of the header and footer it paints.
 - Flex alignment in rows and columns: `justify-content` (`flex-start`, `flex-end`, `center`, `space-between`, `space-around`, `space-evenly`), and `align-items` and `align-self` (`stretch`, `flex-start`, `flex-end`, `center`), plus `start`, `end`, and `normal`. Tailwind's `justify-between` and `items-center` work. A column needs a `height` or `min-height` for `justify-content`.
 - Flex item sizing in rows: `flex-grow`, `flex-shrink`, `flex-basis` in `pt`, `px`, `rem`, or `%`, and every `flex` shorthand form, resolved as CSS does. An item shrinks no further than its longest word or image unless `min-width` allows. `auto` margins on items take the free space, so `ml-auto` pushes an item right.
@@ -120,6 +120,7 @@
 
 ### Fixed
 
+- Deferred block margins flush before row, flex, and table boundaries, so they cannot become extra cells. Oversized page furniture errors name the header or footer option.
 - Buffered layout frames close without consuming their parent frame. Atomic blocks and table rows respect the different body heights of first and later pages, and split-box backgrounds continue below the header on the next page. Rounded boxes remain whole at page breaks.
 - A table's body rows stream: the engine lays out and places each row as it arrives and keeps only the header, footer, and current row. Before, the whole table buffered, so 20,000 padded rows (30,000 plain) failed with `block exceeds 16 MiB`, and 10,000 rows grew WASM memory to 29 MB. 50,000 rows now render in 16 MB. A table inside a flex row or a `break-inside: avoid` group still buffers whole.
 - With a header, a line or image taller than the page rejects with `PageOverflow` instead of looping until the renderer runs out of memory.
