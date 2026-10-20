@@ -310,15 +310,20 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                         align: VerticalAlign::Top,
                     }) {
                         Slot::Cell { rows, align } => {
-                    let mut anchors = Vec::new();
-                    while let Some(Command::Anchor(slot)) = self.peek() { self.index += 1; anchors.push(slot); }
-                    cells.push(Cell { anchors,
-                            column,
-                            span: 1,
-                            rows,
-                            align,
-                            content: self.parse_element(depth + 1)?,
-                        }); },
+                            let mut anchors = Vec::new();
+                            while let Some(Command::Anchor(slot)) = self.peek() {
+                                self.index += 1;
+                                anchors.push(slot);
+                            }
+                            cells.push(Cell {
+                                anchors,
+                                column,
+                                span: 1,
+                                rows,
+                                align,
+                                content: self.parse_element(depth + 1)?,
+                            });
+                        }
                         Slot::Join => match cells.last_mut() {
                             Some(cell) if cell.column + cell.span == column => cell.span += 1,
                             _ => return Err(CommandParseError::InvalidRow),

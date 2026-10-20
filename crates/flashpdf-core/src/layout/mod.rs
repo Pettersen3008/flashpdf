@@ -6,7 +6,9 @@ mod text;
 use std::collections::BTreeMap;
 
 use output::Marks;
-pub(crate) use output::{Decoration, Gap, LayoutBuffer, PositionedBox, PositionedImage, Segment, MARKER_SHAPE};
+pub(crate) use output::{
+    Decoration, Gap, LayoutBuffer, PositionedBox, PositionedImage, Segment, MARKER_SHAPE,
+};
 pub(crate) use row::table_width;
 
 use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Table};
@@ -387,7 +389,9 @@ impl<'a> LayoutEngine<'a> {
         for cell in &row.cells {
             let start = output.marks();
             let line = output.lines.len();
-            output.anchors.extend(cell.anchors.iter().map(|slot| (*slot, line)));
+            output
+                .anchors
+                .extend(cell.anchors.iter().map(|slot| (*slot, line)));
             let cell_height = self.layout(
                 &cell.content,
                 area.translated(sum(&widths[..cell.column]), Pt::ZERO)

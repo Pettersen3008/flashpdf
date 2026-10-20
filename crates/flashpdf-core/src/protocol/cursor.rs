@@ -1,5 +1,7 @@
 use crate::win_ansi::valid;
-use crate::{Align, Fraction, ImageSize, Marker, Percent, Pt, Rgb, TextAlign, Typography, VerticalAlign};
+use crate::{
+    Align, Fraction, ImageSize, Marker, Percent, Pt, Rgb, TextAlign, Typography, VerticalAlign,
+};
 
 /// Letter and word spacing in points, either sign; the largest page side.
 pub(super) const MAX_SPACING: f32 = 14_400.0;

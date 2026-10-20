@@ -1,4 +1,6 @@
-use super::{Decoder, HEADER_LEN, MAGIC, MAX_FONT_BYTES, MAX_IMAGE_BYTES, MAX_BLOCK_BYTES, VERSION};
+use super::{
+    Decoder, HEADER_LEN, MAGIC, MAX_BLOCK_BYTES, MAX_FONT_BYTES, MAX_IMAGE_BYTES, VERSION,
+};
 use crate::renderer::MAX_PAGES;
 use crate::OwnedCommand;
 
@@ -129,13 +131,13 @@ fn decorated_box(border: f32, tail: &[u8]) -> Vec<u8> {
 /// forces the stream across five pages.
 fn representative() -> Vec<u8> {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
-    bytes.extend(anchor("top", 1, "Invoice"));
     bytes.extend(record(13, &[1]));
     bytes.extend(record(3, &0.0_f32.to_le_bytes()));
     bytes.extend(paragraph(0, &[(0, 1.0, [0, 0, 0], 0, b"\x1f")]));
     bytes.extend(record(4, &[]));
+    bytes.extend(anchor("top", 1, "Invoice"));
     bytes.extend(plain(b"Before"));
-    bytes.extend(record(22, &[]));
+    bytes.extend(anchor("", 0, ""));
     bytes.extend(box_start());
     bytes.extend(plain(b"Boxed"));
     bytes.extend(record(18, &[]));
@@ -310,17 +312,19 @@ fn given_every_split_point_when_decoding_then_output_is_valid_and_deterministic(
     let expected = decode(&bytes).unwrap();
     assert!(expected.starts_with(b"%PDF-"));
     let pdf = lopdf::Document::load_mem(&expected).unwrap();
-    assert_eq!(pdf.get_pages().len(), 4);
-    assert_eq!(
-        pdf.extract_text(&[1]).unwrap().trim(),
-        "Before\nBoxed\nrow\n1\n4"
-    );
-    assert_eq!(
-        pdf.extract_text(&[2]).unwrap().trim(),
-        "head\nbody\nspan\nx\ny"
-    );
-    assert_eq!(pdf.extract_text(&[3]).unwrap().trim(), "Stacked\nStyled top");
-    assert_eq!(pdf.extract_text(&[4]).unwrap().trim(), "After");
+    assert_eq!(pdf.get_pages().len(), 5);
+    for (index, expected) in [
+        "Before\nBoxed\nrow\n1\n5",
+        "head\nbody",
+        "span\nx\ny\nStacked",
+        "Styled top",
+        "After",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(crate::tests::page_text(&pdf, index as u32 + 1), *expected);
+    }
     for split in 0..=bytes.len() {
         let mut decoder = decoder();
         decoder.push(&bytes[..split]).unwrap();
@@ -488,13 +492,13 @@ fn given_invalid_box_decoration_when_decoding_then_rejects() {
 }
 
 #[test]
-fn given_spacing_beyond_a_page_side_or_header_decoration_flags_when_decoding_then_rejects() {
+fn given_spacing_beyond_a_page_side_or_an_invalid_furniture_flag_when_decoding_then_rejects() {
     for (flag, value, error) in [
         (64_u16, f32::NAN, "invalid letter spacing"),
         (128, -14_401.0, "invalid word spacing"),
     ] {
         let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
-        let mut payload = vec![0, 0, 0, 1, 0, 0];
+        let mut payload = vec![0, 1, 0, 1, 0, 0, 0, 1, 0, 0];
         payload.extend(10.0_f32.to_le_bytes());
         payload.extend([0, 0, 0]);
         payload.extend(flag.to_le_bytes());
@@ -503,12 +507,9 @@ fn given_spacing_beyond_a_page_side_or_header_decoration_flags_when_decoding_the
         bytes.extend(record(9, &payload));
         assert_eq!(push_error(&bytes), error);
     }
-    let mut underlined_header = header(VERSION, 120.0, 60.0, 10.0);
-    let mut line = 10.0_f32.to_le_bytes().to_vec();
-    line.extend([0, 0, 0, 0, 0, 2, 0]);
-    line.extend(text(b"Header"));
-    underlined_header.extend(record(13, &line));
-    assert_eq!(push_error(&underlined_header), "invalid header flags");
+    let mut invalid_header = header(VERSION, 120.0, 60.0, 10.0);
+    invalid_header.extend(record(13, &[2]));
+    assert_eq!(push_error(&invalid_header), "invalid furniture page");
 }
 
 #[test]
@@ -997,13 +998,18 @@ fn given_rejected_fonts_and_images_at_the_cap_when_registering_more_then_their_b
 #[test]
 fn given_page_breaks_past_the_page_cap_when_decoding_then_rejects_naming_the_cap() {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(plain(b"x"));
     for _ in 1..MAX_PAGES {
         bytes.extend(record(7, &[]));
+        bytes.extend(plain(b"x"));
     }
     let mut decoder = Decoder::default();
     decoder.push(&bytes).unwrap();
     assert_eq!(
-        decoder.push(&record(7, &[])).unwrap_err().to_string(),
+        decoder
+            .push(&[record(7, &[]), plain(b"x")].concat())
+            .unwrap_err()
+            .to_string(),
         "document exceeds 10000 pages; split it across several renders"
     );
 }
@@ -1419,4 +1425,40 @@ fn given_a_footer_when_decoding_then_repeats_resolved_page_numbers() {
         pdf.extract_text(&[2]).unwrap().trim(),
         "Second\nPage 2 of 2"
     );
+}
+
+#[test]
+fn given_nested_buffered_frames_when_closing_then_each_end_completes_only_its_own_frame() {
+    let mut bytes = header(VERSION, 100.0, 100.0, 10.0);
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    bytes.extend(record(5, &columns(&[(0, 80.0)])));
+    bytes.extend(record(3, &0.0_f32.to_le_bytes()));
+    bytes.extend(paragraph(0, &[(0, 10.0, [0, 0, 0], 0, b"nested")]));
+    bytes.extend(record(4, &[]));
+    bytes.extend(record(6, &[]));
+    bytes.extend(record(4, &[]));
+    bytes.extend(record(255, &[]));
+    let mut decoder = Decoder::default();
+    decoder.push(&bytes).unwrap();
+    let pdf = lopdf::Document::load_mem(&decoder.finish().unwrap()).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "nested");
+}
+
+#[test]
+fn given_a_rounded_box_crossing_a_page_when_decoding_then_keeps_its_children_together() {
+    let mut bytes = header(VERSION, 100.0, 60.0, 10.0);
+    bytes.extend(record(2, &30.0_f32.to_le_bytes()));
+    let mut radius = vec![255, 0, 1, 0];
+    for _ in 0..8 {
+        radius.extend(2.0_f32.to_le_bytes());
+    }
+    bytes.extend(decorated_box(0.0, &radius));
+    bytes.extend(plain(b"one"));
+    bytes.extend(plain(b"two"));
+    bytes.extend(record(18, &[]));
+    bytes.extend(record(255, &[]));
+    let pdf = lopdf::Document::load_mem(&decode(&bytes).unwrap()).unwrap();
+    assert_eq!(pdf.get_pages().len(), 2);
+    assert!(crate::tests::page_text(&pdf, 1).is_empty());
+    assert_eq!(crate::tests::page_text(&pdf, 2), "one\ntwo");
 }

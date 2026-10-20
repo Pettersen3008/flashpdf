@@ -21,9 +21,8 @@ use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::Attachment;
 use crate::{
-    Edges, FontId, LineStyle, Marker, OwnedCommand, Radii, RunDecoration, TextRun,
-    BUILT_IN, OPAQUE,
-    Align, BoxSize, Flex, FlexItem, Justify, Pt,
+    Align, BoxSize, Edges, Flex, FlexItem, FontId, Justify, LineStyle, Marker, OwnedCommand, Pt,
+    Radii, RunDecoration, TextRun, BUILT_IN, OPAQUE,
 };
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
@@ -641,9 +640,22 @@ impl Decoder {
                     auto_margin: flags >> 1,
                 };
                 cursor.done()?;
-                let style = crate::BoxStyle {margin,padding,border,background,border_color,border_style,radius,alpha};
-                if radius.is_some() && !style.uniform_border() { return Err(ProtocolError::InvalidValue("border radius with unequal borders")); }
-                self.feed(OwnedCommand::BoxStart(style,size))
+                let style = crate::BoxStyle {
+                    margin,
+                    padding,
+                    border,
+                    background,
+                    border_color,
+                    border_style,
+                    radius,
+                    alpha,
+                };
+                if radius.is_some() && !style.uniform_border() {
+                    return Err(ProtocolError::InvalidValue(
+                        "border radius with unequal borders",
+                    ));
+                }
+                self.feed(OwnedCommand::BoxStart(style, size))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
@@ -757,9 +769,12 @@ impl Decoder {
     fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = match &command {
             OwnedCommand::StackStart(_) => Frame::Stack,
-            OwnedCommand::BoxStart(_, size) => {
-                Frame::Box(self.placing() && self.furniture.is_none() && *size == BoxSize::AUTO)
-            }
+            OwnedCommand::BoxStart(style, size) => Frame::Box(
+                self.placing()
+                    && self.furniture.is_none()
+                    && *size == BoxSize::AUTO
+                    && style.radius.is_none(),
+            ),
             OwnedCommand::RowStart(_, slots) => Frame::Row {
                 cells: slots
                     .iter()
@@ -781,9 +796,10 @@ impl Decoder {
             | OwnedCommand::RowEnd
             | OwnedCommand::FlexEnd
             | OwnedCommand::TableEnd => return self.close(command),
-            OwnedCommand::Paragraph(..) | OwnedCommand::Spacer(_) | OwnedCommand::Image(..) | OwnedCommand::Anchor(_) => {
-                return self.layout_command(command)
-            }
+            OwnedCommand::Paragraph(..)
+            | OwnedCommand::Spacer(_)
+            | OwnedCommand::Image(..)
+            | OwnedCommand::Anchor(_) => return self.layout_command(command),
         };
         self.open(frame, command)?;
         self.stream_table()
@@ -798,7 +814,9 @@ impl Decoder {
         self.body_started = self.furniture.is_none();
         let anchor = matches!(command, OwnedCommand::Anchor(_));
         self.push_command(command)?;
-        if !anchor { self.complete_child()?; }
+        if !anchor {
+            self.complete_child()?;
+        }
         if self.placing() {
             return self.flush_block(crate::Renderer::push_owned);
         }
@@ -856,7 +874,7 @@ impl Decoder {
             }
             _ => return Err(ProtocolError::InvalidNesting),
         }
-        self.feed(command)
+        self.layout_command(command)
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {

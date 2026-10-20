@@ -370,7 +370,9 @@ impl Renderer {
     fn render_element(&mut self, element: &Element<'_>) -> Result<(), RenderError> {
         match element {
             Element::Table(table) => return self.render_table(table),
-            Element::Box(node) if node.size == crate::BoxSize::AUTO => {
+            Element::Box(node)
+                if node.size == crate::BoxSize::AUTO && node.style.radius.is_none() =>
+            {
                 self.open_box(node.style)?;
                 for child in &node.children {
                     self.render_element(child)?;
@@ -408,8 +410,7 @@ impl Renderer {
             return Err(RenderError::InvalidLayout);
         }
         let top = style.margin.top + style.border.top + style.padding.top;
-        self.page
-            .validate_block(top + style.padding.bottom + style.border.bottom)?;
+        self.validate_block(top + style.padding.bottom + style.border.bottom)?;
         self.boxes.push((column, style));
         self.column = column
             .translated(style.margin.left + inset, Pt::ZERO)
@@ -568,8 +569,9 @@ impl Renderer {
     /// Breaks before the held content, the page's last allowed break point,
     /// unless that is the page top or the content would not fit an empty page.
     fn rewind(&mut self, need: Pt, table: Option<&Rc<TableEdges>>) -> Result<bool, RenderError> {
-        let moves = !self.cursor.at_top(self.page)
-            && self.ahead(true, table) + need <= self.page.content_height();
+        let moves = (!self.cursor.at_top(self.page)
+            || self.later.content_height() > self.page.content_height())
+            && self.ahead(true, table) + need <= self.later.content_height();
         if moves {
             self.start_page()?;
         }
@@ -581,8 +583,8 @@ impl Renderer {
     fn room(&mut self, need: Pt, table: Option<&Rc<TableEdges>>) -> Result<(), RenderError> {
         if !self.fits(need, table) && !self.rewind(need, table)? {
             self.commit(self.held.len())?;
-            if !self.fits(need, table) {
-                self.rewind(need, table)?;
+            if !self.fits(need, table) && !self.rewind(need, table)? {
+                return Err(RenderError::PageOverflow);
             }
         }
         Ok(())
@@ -596,7 +598,7 @@ impl Renderer {
         for slot in &mut self.open {
             let fragment = &mut self.fragments[*slot];
             let mut continued = *fragment;
-            continued.origin.y = Pt::ZERO - self.page.top();
+            continued.origin.y = Pt::ZERO - self.later.top();
             continued.style.border.top = Pt::ZERO;
             fragment.height = Pt::ZERO - fragment.origin.y - self.page.bottom();
             fragment.style.border.bottom = Pt::ZERO;
@@ -749,7 +751,7 @@ impl Renderer {
         let layout = std::mem::take(&mut self.layout);
         self.mark_used(&layout);
         let reserved = edges.header_height + edges.footer_height;
-        if self.page.validate_block(height + reserved).is_err() {
+        if self.validate_block(height + reserved).is_err() {
             return Err(RenderError::TableRowOverflow(index));
         }
         self.room(height + edges.footer_height, Some(&edges))?;
@@ -1039,3 +1041,6 @@ fn widest_digit(font: &Font) -> Result<char, RenderError> {
     }
     Ok(widest.0)
 }
+
+#[cfg(test)]
+mod tests;
