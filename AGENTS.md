@@ -15,7 +15,7 @@ task explicitly changes it.
 
 ## Development
 
-Requirements: Node 22.12+, pnpm, Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x and qpdf are optional.
+Requirements: Node 22.18+ in the 22.x line or Node 24.11+, pnpm, Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x and qpdf are optional.
 
 ```bash
 pnpm install --frozen-lockfile
