@@ -116,7 +116,7 @@
 - `ul`, `ol`, and `li` no longer reject as unsupported elements, and `vertical-align` works on inline elements. It still rejects on blocks and table cells.
 - A font without a U+00A0 glyph shows its space glyph for it, where it rejected the character. `pre` relies on this.
 - `line-height: normal` for the built-in fonts matches browsers. It was the AFM ascender plus descender (Helvetica 0.925em, Times 0.900em, Courier 0.786em), tighter than the metric-compatible Arial, Times New Roman, and Courier New a browser uses. It is now their hhea ascent, descent, and line gap: 1.150em for Helvetica and Times, 1.133em for Courier, with the gap split above and below the text. Every document that uses a built-in font spaces its lines more widely, and header, footer, and link-box heights follow. Embedded fonts keep their own metrics, and an explicit `line-height` keeps its height, with the text about 0.1em lower inside it, where a browser puts it.
-- The internal binary protocol is version 20. JavaScript and WASM ship together; adapters must use the matching pair.
+- The internal binary protocol is version 21. JavaScript and WASM ship together; adapters must use the matching pair.
 
 ### Fixed
 

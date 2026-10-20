@@ -38,7 +38,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 30;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 20;
+const VERSION: u16 = 21;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
