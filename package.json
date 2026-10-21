@@ -16,26 +16,26 @@
 		"playground:build": "pnpm --filter flashpdf-playground build"
 	},
 	"devDependencies": {
-		"@babel/core": "8.0.6",
+		"@babel/core": "8.0.7",
 		"@react-pdf/renderer": "4.9.0",
 		"@stylexjs/babel-plugin": "0.19.1",
 		"@tailwindcss/cli": "4.3.3",
 		"@types/node": "26.6.5",
 		"@types/react": "19.3.0",
 		"binaryen": "132.0.0",
-		"oxfmt": "0.73.0",
-		"oxlint": "1.88.0",
+		"oxfmt": "0.74.0",
+		"oxlint": "1.89.0",
 		"pdfkit": "0.20.2",
-		"playwright": "1.64.0",
-		"react": "19.3.0",
-		"react-dom": "19.3.0",
+		"playwright": "1.64.1",
+		"react": "19.3.1",
+		"react-dom": "19.3.1",
 		"styled-components": "6.6.0",
 		"tailwindcss": "4.3.3",
-		"takumi-pdf": "0.16.2",
+		"takumi-pdf": "0.18.0",
 		"typescript": "7.0.2",
 		"vite": "8.3.4",
-		"vitest": "5.0.4",
-		"wrangler": "4.150.0"
+		"vitest": "5.0.5",
+		"wrangler": "4.151.2"
 	},
 	"engines": {
 		"node": "^22.18.0 || >=24.11.0"
