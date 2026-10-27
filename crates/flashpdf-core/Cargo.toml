@@ -8,6 +8,7 @@ publish = false
 itoa = "=1.0.18"
 miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
 pdf-writer = "=0.15.0"
+unicode-linebreak = "=0.1.5"
 
 [dev-dependencies]
 lopdf = { version = "0.45", default-features = false }

@@ -323,6 +323,41 @@ fn given_a_word_wider_than_the_column_when_wrapping_then_breaks_it_at_the_last_f
     );
 }
 
+// "W" is 9.44pt, "-" 3.33pt and "!" 2.78pt in a 100pt column, so twelve "W"s never share a line.
+#[test]
+fn given_a_hyphenated_word_when_wrapping_then_breaks_after_the_hyphen() {
+    let pdf = parsed(&[text("WWWWWW-WWWWWW")]);
+    assert_eq!(page_text(&pdf, 1), "WWWWWW-\nWWWWWW");
+}
+
+#[test]
+fn given_a_word_ending_in_an_exclamation_mark_when_wrapping_then_keeps_the_mark_with_the_word() {
+    // "WWWWWW-WWWW" fits alone; with its "!" it does not.
+    let pdf = parsed(&[text("WWWWWW-WWWW!")]);
+    assert_eq!(page_text(&pdf, 1), "WWWWWW-\nWWWW!");
+}
+
+#[test]
+fn given_a_url_when_wrapping_then_breaks_after_a_slash() {
+    let pdf = parsed(&[text("x.io/WWWWWWWWWW")]);
+    assert_eq!(page_text(&pdf, 1), "x.io/\nWWWWWWWWWW");
+}
+
+#[test]
+fn given_soft_hyphens_when_wrapping_then_shows_a_hyphen_only_where_the_line_breaks() {
+    let pdf = parsed(&[text("WWWWWW\u{ad}WWWWWW WW\u{ad}W")]);
+    assert_eq!(page_text(&pdf, 1), "WWWWWW-\nWWWWWW WWW");
+}
+
+#[test]
+fn given_a_zero_width_space_and_a_word_joiner_when_wrapping_then_only_the_space_breaks_and_neither_paints(
+) {
+    let pdf = parsed(&[text("WWWWWW\u{200b}WWWWWW")]);
+    assert_eq!(page_text(&pdf, 1), "WWWWWW\nWWWWWW");
+    let pdf = parsed(&[text("WWWWWW-\u{2060}WWWWWW")]);
+    assert_eq!(page_text(&pdf, 1), "WWWWWW-WWWW\nWW");
+}
+
 fn run(len: usize, bold: bool, size: f32, hard_break: bool) -> TextRun {
     TextRun {
         len,

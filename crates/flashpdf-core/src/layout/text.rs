@@ -60,17 +60,19 @@ struct Piece {
     lead: Pt,
 }
 
-/// The collapsed space before the pending word: its run, encoded bytes and width.
+/// The collapsed space before the pending word, or the hyphen a soft hyphen
+/// shows at a line end: its run, encoded bytes and width.
 struct Space {
     run: usize,
     text: Range<usize>,
     width: Pt,
 }
 
-/// Greedy word wrap over runs. Words are ASCII-whitespace delimited and may
-/// span runs; whitespace collapses to one space owned by the run it first
-/// appears in, and lines trim it at both ends. CJK characters are words of
-/// their own, so unspaced ideographic text breaks between any two of them.
+/// Greedy word wrap over runs. Words end at ASCII whitespace and at the UAX #14
+/// break opportunities of the paragraph's text, and may span runs; whitespace
+/// collapses to one space owned by the run it first appears in, and lines trim
+/// it at both ends.
+/// ponytail: a space always breaks, so `a !` may wrap before `!`, which UAX #14 forbids.
 pub(crate) struct ParagraphLayouter<'a> {
     runs: Vec<RunMetrics<'a>>,
     align: TextAlign,
@@ -88,6 +90,10 @@ pub(crate) struct ParagraphLayouter<'a> {
     /// The pending word's last glyph: its run and code, for kerning.
     previous: Option<(usize, Range<usize>)>,
     space: Option<Space>,
+    /// The hyphen of a soft hyphen that ends the pending word.
+    soft_hyphen: Option<Space>,
+    /// The hyphen after the line's last word, shown only if the line wraps there.
+    hyphen: Option<Space>,
     /// The list marker's segment, slot width, and whether it sits inside the line, until the first line takes it.
     marker: Option<(usize, Pt, bool)>,
     /// The widest word so far: the paragraph's min-content width.
@@ -146,9 +152,14 @@ impl<'a> ParagraphLayouter<'a> {
             gaps: Vec::new(),
             previous: None,
             space: None,
+            soft_hyphen: None,
+            hyphen: None,
             marker: None,
             widest: Pt::ZERO,
         };
+        let mut breaks = unicode_linebreak::linebreaks(paragraph.text)
+            .map(|(at, _)| at)
+            .peekable();
         let mut rest = paragraph.text;
         for (index, run) in paragraph.runs.iter().enumerate() {
             let (text, remaining) = rest
@@ -162,7 +173,8 @@ impl<'a> ParagraphLayouter<'a> {
                 state.marker(text, output)?;
                 continue;
             }
-            state.run(index, text, output)?;
+            let base = paragraph.text.len() - rest.len() - text.len();
+            state.run(index, base, text, &mut breaks, output)?;
             if run.hard_break {
                 state.word(output)?;
                 state.hard_break(index, output);
@@ -221,14 +233,18 @@ impl<'a> ParagraphLayouter<'a> {
     fn run(
         &mut self,
         index: usize,
+        base: usize,
         text: &str,
+        breaks: &mut std::iter::Peekable<impl Iterator<Item = usize>>,
         output: &mut LayoutBuffer,
     ) -> Result<(), LayoutError> {
+        let nowrap = self.runs[index].typography.nowrap;
         let mut piece: Option<Piece> = None;
-        for character in text.chars() {
+        for (offset, character) in text.char_indices() {
             if character.is_ascii_whitespace() {
                 self.pieces.extend(piece.take());
                 self.word(output)?;
+                self.hyphen = None;
                 if self.has_word && self.space.is_none() {
                     let start = output.text.len();
                     let metrics = &self.runs[index];
@@ -241,10 +257,28 @@ impl<'a> ParagraphLayouter<'a> {
                 }
                 continue;
             }
-            let ideograph = ideograph(character);
-            if ideograph {
+            while breaks.next_if(|at| *at < base + offset).is_some() {}
+            if !nowrap && breaks.next_if_eq(&(base + offset)).is_some() {
                 self.pieces.extend(piece.take());
                 self.word(output)?;
+            }
+            match character {
+                // A soft hyphen shows as a hyphen at a line end and never otherwise.
+                '\u{ad}' if !nowrap => {
+                    self.pieces.extend(piece.take());
+                    let start = output.text.len();
+                    let width = self.runs[index].encode('-', &mut output.text)?;
+                    self.soft_hyphen = Some(Space {
+                        run: index,
+                        text: start..output.text.len(),
+                        width,
+                    });
+                    self.word(output)?;
+                    continue;
+                }
+                // Zero-width break controls: UAX #14 reads them, no glyph shows.
+                '\u{ad}' | '\u{200b}' | '\u{2060}' => continue,
+                _ => {}
             }
             let start = output.text.len();
             let mut width = self.runs[index].encode(character, &mut output.text)?;
@@ -273,17 +307,13 @@ impl<'a> ParagraphLayouter<'a> {
             }
             slot.end = output.text.len();
             slot.width += width;
-            if ideograph {
-                self.pieces.extend(piece.take());
-                self.word(output)?;
-            }
         }
         self.pieces.extend(piece);
         Ok(())
     }
 
     /// The kerning before the glyph at `code`, after the word's previous glyph
-    /// in the same font and size. A space, a CJK character, or a hard break
+    /// in the same font and size. A space, a break opportunity, or a hard break
     /// ends the word, so a line break never falls inside a kerned pair.
     fn kern(&mut self, run: usize, code: Range<usize>, output: &LayoutBuffer) -> Pt {
         let Some((last, previous)) = self.previous.replace((run, code.clone())) else {
@@ -318,6 +348,7 @@ impl<'a> ParagraphLayouter<'a> {
     /// line, else glyph by glyph when it is wider than the column.
     fn word(&mut self, output: &mut LayoutBuffer) -> Result<(), LayoutError> {
         self.previous = None;
+        let ending = self.soft_hyphen.take();
         if self.pieces.is_empty() {
             return Ok(());
         }
@@ -327,12 +358,15 @@ impl<'a> ParagraphLayouter<'a> {
             .iter()
             .fold(Pt::ZERO, |total, piece| total + piece.lead + piece.width);
         let space = self.space.take();
-        if width > self.widest {
-            self.widest = width;
+        // A word before a soft hyphen keeps room for the hyphen, so a line wrapping there fits.
+        // ponytail: it may wrap one word early, when the next word would have fit on this line.
+        let reserve = ending.as_ref().map_or(Pt::ZERO, |hyphen| hyphen.width);
+        if width + reserve > self.widest {
+            self.widest = width + reserve;
         }
         let gap = space.as_ref().map_or(Pt::ZERO, |space| space.width);
         let started = self.has_word || self.used > Pt::ZERO;
-        let overflow = self.used + gap + width > self.area.width;
+        let overflow = self.used + gap + width + reserve > self.area.width;
         // A word after a space may still move to the next line; a word that never could, may not.
         if pieces
             .iter()
@@ -388,6 +422,7 @@ impl<'a> ParagraphLayouter<'a> {
         self.gaps = pending;
         self.gaps.clear();
         self.has_word = true;
+        self.hyphen = ending;
         Ok(())
     }
 
@@ -409,7 +444,9 @@ impl<'a> ParagraphLayouter<'a> {
         } = metrics.typography;
         match output.segments.last_mut() {
             Some(last)
+                // An unshown soft hyphen's bytes split the text, so the segment ends there.
                 if on_line
+                    && last.text.end == text.start
                     && last.font == metrics.id
                     && last.size == metrics.size
                     && last.color == metrics.color
@@ -471,6 +508,9 @@ impl<'a> ParagraphLayouter<'a> {
 
     /// A `wrapped` line is justified; the last line and one ending in a hard break are not.
     fn push_line(&mut self, output: &mut LayoutBuffer, wrapped: bool) {
+        if let Some(hyphen) = self.hyphen.take().filter(|_| wrapped) {
+            self.append(hyphen.run, hyphen.text, hyphen.width, output);
+        }
         if wrapped && self.align == TextAlign::Justify {
             self.justify(output);
         }
@@ -517,23 +557,6 @@ impl<'a> ParagraphLayouter<'a> {
     }
 }
 
-/// A line may break before and after these: CJK scripts do not separate words
-/// with spaces. Covers the ideographic space and CJK punctuation, kana, Hangul,
-/// the unified ideographs with their extensions, and the full-width forms.
-/// ponytail: no kinsoku, so a line may start with a closing bracket or full stop.
-fn ideograph(character: char) -> bool {
-    matches!(
-        character as u32,
-        0x3000..=0x30ff
-            | 0x3400..=0x4dbf
-            | 0x4e00..=0x9fff
-            | 0xac00..=0xd7af
-            | 0xf900..=0xfaff
-            | 0xff00..=0xffef
-            | 0x20000..=0x3134f
-    )
-}
-
 fn text_error(error: RenderError) -> LayoutError {
     match error {
         RenderError::UnsupportedCharacter(character) => {
@@ -541,21 +564,5 @@ fn text_error(error: RenderError) -> LayoutError {
         }
         RenderError::MissingGlyph(character) => LayoutError::MissingGlyph(character),
         _ => unreachable!("text primitives return only character and glyph errors"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ideograph;
-
-    #[test]
-    fn given_cjk_and_latin_code_points_when_asked_for_break_opportunities_then_only_cjk_break_anywhere(
-    ) {
-        for character in ['中', 'あ', 'カ', '한', '\u{3000}', '。', '\u{20000}'] {
-            assert!(ideograph(character), "{character:?}");
-        }
-        for character in ['a', 'Æ', 'α', 'Д', '\u{a0}', '-', '\u{2013}'] {
-            assert!(!ideograph(character), "{character:?}");
-        }
     }
 }
