@@ -66,6 +66,18 @@ fn user_agent(tag: &str) -> &'static [(Prop, &'static str)] {
     }
 }
 
+/// The nesting-dependent user-agent margin and list-style-type of `node`, as a cache key.
+pub fn list_key(tree: &Tree, node: u32) -> String {
+    let styles = list_styles(tree, node);
+    let value = |prop: Prop| {
+        styles
+            .iter()
+            .find(|(own, _)| *own == prop)
+            .map_or("", |(_, value)| value)
+    };
+    format!("{},{}", value(MARGIN), value(LIST_STYLE_TYPE))
+}
+
 /// The user-agent rules that depend on nesting: a list inside a list has no vertical margin, and
 /// an unordered one cycles through disc, circle, and square as it goes deeper.
 fn list_styles(tree: &Tree, node: u32) -> Vec<(Prop, &'static str)> {
@@ -232,24 +244,40 @@ impl Resolver {
         parent_font_size: Option<f64>,
         single_line: bool,
     ) -> Result<Cascaded, String> {
-        self.cascaded(tree, node, inline, parent, parent_font_size, single_line)
-            .map_err(|message| format!("{message} on {}", tree.path(node)))
+        let matched = self.matched(tree, node);
+        self.cascaded(
+            tree,
+            node,
+            &matched,
+            inline,
+            parent,
+            parent_font_size,
+            single_line,
+        )
+        .map_err(|message| format!("{message} on {}", tree.path(node)))
     }
 
-    fn cascaded(
+    /// The rules that match `node`, as indices in cascade order: with the parent's result,
+    /// the inline style, and `list_key`, they determine the cascade, so callers cache on them.
+    pub fn matched(&self, tree: &mut Tree, node: u32) -> Vec<usize> {
+        (0..self.rules.len())
+            .filter(|&index| tree.matches(&self.rules[index].selector, node))
+            .collect()
+    }
+
+    /// `cascade` with the rules `matched` returned, and errors not yet located.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cascaded(
         &self,
-        tree: &mut Tree,
+        tree: &Tree,
         node: u32,
+        matched: &[usize],
         inline: &Inline,
         parent: &Cascaded,
         parent_font_size: Option<f64>,
         single_line: bool,
     ) -> Result<Cascaded, String> {
-        let matched: Vec<&Rule> = self
-            .rules
-            .iter()
-            .filter(|rule| tree.matches(&rule.selector, node))
-            .collect();
+        let matched: Vec<&Rule> = matched.iter().map(|&index| &self.rules[index]).collect();
         let mut result = Cascaded::default();
         for (key, value) in &parent.0 {
             let inherits = match key {

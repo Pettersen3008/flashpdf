@@ -16,11 +16,12 @@ mod properties;
 mod selector;
 pub mod style;
 
+pub use cascade::{list_key, Inline, Resolver};
 pub use math::evaluate_math;
 use page::css_page;
 pub use parser::{parse, Stylesheet};
 pub use properties::{property, Prop};
-pub use selector::Tree;
+pub use selector::{ElemInput, Tree};
 use style::{box_style, color, style, Style};
 
 use std::rc::Rc;
