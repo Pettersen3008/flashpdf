@@ -11,6 +11,7 @@
 ### Internal
 
 - The Rust core gains a port of the CSS parser, selector matcher, cascade, `var()`, and `calc()`, with the TypeScript tests for them ported to Rust. Rendering does not use it yet; a later change moves the cascade and compile out of TypeScript.
+- `pdf-writer` builds with `opt-level = "z"`, which cuts the WASM by about 23 KB with no measured change in warm render time. `build.sh` prints the brotli size when `brotli` is on PATH.
 
 ## 0.5.0 - 2026-10-27
 
