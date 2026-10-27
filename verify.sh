@@ -8,6 +8,7 @@ cargo test --locked --workspace
 pnpm fmt:check
 pnpm lint
 sh build.sh
+sh build-native.sh
 pnpm typecheck
 pnpm --filter @pettersen3008/flashpdf examples:css
 pnpm exec vitest run

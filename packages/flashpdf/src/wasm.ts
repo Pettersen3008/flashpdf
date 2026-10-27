@@ -1,4 +1,5 @@
-import init from "../wasm/flashpdf_wasm.js";
+import init, { PdfRenderer } from "../wasm/flashpdf_wasm.js";
+import type { Backend } from "./binary.js";
 
 type FsPromises = typeof import("node:fs/promises");
 
@@ -12,11 +13,14 @@ async function readFile(url: URL): Promise<Uint8Array> {
 	return fs.readFile(url);
 }
 
-let initialization: ReturnType<typeof init> | undefined;
-export function loadWasm(): ReturnType<typeof init> {
+let initialization: Promise<Backend> | undefined;
+export function loadBackend(): Promise<Backend> {
 	return (initialization ??= (async () => {
 		const url = new URL("../wasm/flashpdf_wasm_bg.wasm", import.meta.url);
-		return init({ module_or_path: url.protocol === "file:" ? await readFile(url) : url });
+		const { memory } = await init({
+			module_or_path: url.protocol === "file:" ? await readFile(url) : url,
+		});
+		return { memory, create: () => new PdfRenderer() };
 	})().catch((error: unknown) => {
 		// A failed load must not poison every later render.
 		initialization = undefined;

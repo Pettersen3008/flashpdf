@@ -132,7 +132,8 @@ impl EmbeddedFont {
             line_gap: line_gap.max(0.0),
             cap_height,
             // ponytail: PDF has no true stem width without outlines; this is the common weight-class heuristic.
-            stem_v: (50.0 + (f32::from(weight) / 65.0).powi(2)).round(),
+            // A product, not `powi`, which may lower to a platform routine and differ from wasm.
+            stem_v: (50.0 + (f32::from(weight) / 65.0) * (f32::from(weight) / 65.0)).round(),
             underline,
             strikeout,
             kerning,

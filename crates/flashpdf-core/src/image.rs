@@ -328,7 +328,11 @@ fn split_alpha(
         color.extend_from_slice(&pixel[..color_len]);
         mask.push(alpha(pixel));
     }
-    Ok((deflate(&color), deflate(&mask)))
+    Ok(crate::pdf::join(
+        color.len(),
+        || deflate(&color),
+        || deflate(&mask),
+    ))
 }
 
 /// Reverses the five PNG scanline filters; each row starts with its filter type.

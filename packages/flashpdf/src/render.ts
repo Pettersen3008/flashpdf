@@ -1,6 +1,5 @@
-import { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { props } from "./assert.js";
-import { asError, Binary } from "./binary.js";
+import { asError, type Backend, Binary, type Engine } from "./binary.js";
 import { compile, compileBody } from "./compile.js";
 import { styleResolver } from "./css.js";
 import type { Edges, Element, Length } from "./element.js";
@@ -75,9 +74,7 @@ const FURNITURE = [
 	["firstPageFooter", "footer", true],
 ] as const;
 
-type LoadWasm = () => Promise<{ memory: { buffer: ArrayBufferLike } }>;
-
-export function createRenderer(loadWasm: LoadWasm) {
+export function createRenderer(loadBackend: () => Promise<Backend>) {
 	return async function render(
 		document: Element | Iterable<Element>,
 		options?: RenderOptions,
@@ -137,15 +134,15 @@ export function createRenderer(loadWasm: LoadWasm) {
 				throw new Error(`${option} expects elements; wrap its text in one`);
 			repeating.push([position, first, option, nodes]);
 		}
-		const wasm = await loadWasm();
+		const backend = await loadBackend();
 		const styles = styleResolver(
 			p.stylesheets as readonly string[] | undefined,
 			page.width - page.margin[1]! - page.margin[3]!,
 		);
 		// The second pass pushes the record the engine rejected alone, so the element that wrote it reports.
 		const emit = (replayAt?: number): Uint8Array<ArrayBuffer> => {
-			const renderer = new PdfRenderer();
-			const binary = new Binary(renderer, wasm.memory, replayAt);
+			const renderer = backend.create();
+			const binary = new Binary(renderer, backend.memory, replayAt);
 			let consumed = false;
 			try {
 				const fonts = registerFonts(renderer, p.fonts);
@@ -172,7 +169,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 				writer.end();
 				consumed = true;
 				try {
-					// wasm-bindgen copies the PDF out of WASM memory into a fresh ArrayBuffer.
+					// Both backends hand back a fresh ArrayBuffer the engine no longer owns.
 					return renderer.finish() as Uint8Array<ArrayBuffer>;
 				} catch (error) {
 					throw asError(error);
@@ -191,7 +188,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 
 /** Writes the PDF/A and attachment records before the body; the core repeats each check. */
 function attach(
-	renderer: PdfRenderer,
+	renderer: Engine,
 	writer: ProtocolWriter,
 	pdfa: unknown,
 	attachments: unknown,

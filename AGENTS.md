@@ -7,7 +7,8 @@ task explicitly changes it.
 ## Repository map
 
 - `crates/flashpdf-core` contains the Rust layout and PDF engine.
-- `crates/flashpdf-wasm` exposes the engine to browsers and JavaScript.
+- `crates/flashpdf-wasm` exposes the engine to browsers and Workers.
+- `crates/flashpdf-napi` exposes the same engine to Node, Bun, and Deno; `build-native.sh` builds it.
 - `packages/flashpdf/src` contains the TypeScript JSX, CSS, and binary adapters.
 - `packages/flashpdf/test` contains package and backend tests.
 - `tests` contains clean-install, WASM, and golden-output checks.
@@ -16,7 +17,7 @@ task explicitly changes it.
 
 ## Development
 
-Requirements: Node 22.18+ in the 22.x line or Node 24.11+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, qpdf, and mupdf-tools are optional locally, and CI requires them.
+Requirements: Node 22.18+ in the 22.x line or Node 24.11+, pnpm 12.4.2 (pinned in `packageManager`), Rust 1.94 (pinned in `rust-toolchain.toml`), and `wasm-pack`. Bun 1.x, Deno 2, qpdf, and mupdf-tools are optional locally, and CI requires them.
 
 pnpm 10 cannot switch itself to pnpm 12, and Corepack 0.34 cannot launch it, so install the pinned version directly.
 
