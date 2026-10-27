@@ -22,6 +22,7 @@ use crate::css::style::{
 use crate::css::{
     js_space, list_key, Cascaded, ElemInput, Inline, Key, Prop, Resolver, Tree, Value,
 };
+use crate::Direction;
 use text::{blank, engine_error, glyph_error, preserve, transform_text};
 pub use writer::{Column, Drawing, Flex, FlexItem, Paint, Record, Run, Shape, Sink, Slot, Writer};
 
@@ -74,6 +75,8 @@ pub struct Element {
     pub bookmark: Bookmark,
     pub start: Option<i64>,
     pub reversed: bool,
+    /// The `dir` attribute.
+    pub dir: Option<Direction>,
     pub value: Option<i64>,
     pub col_span: Option<u16>,
     pub row_span: Option<u16>,
@@ -368,8 +371,10 @@ fn inline_key(value: &InlineStyle, key: &mut String) {
 #[derive(Clone)]
 struct Ctx {
     size: f64,
-    /// 0 left, 1 center, 2 right, 3 justify.
+    /// 0 left, 1 center, 2 right, 3 justify, 4 start, 5 end.
     align: u8,
+    /// CSS `direction`, or `Auto` from `dir="auto"`.
+    direction: Direction,
     color: Rgb,
     family: FontSlots,
     bold: bool,
@@ -423,7 +428,8 @@ struct CellPaint {
 
 const ROOT: Ctx = Ctx {
     size: 12.0,
-    align: 0,
+    align: 4,
+    direction: Direction::Ltr,
     color: [0, 0, 0],
     family: HELVETICA,
     bold: false,
@@ -610,7 +616,23 @@ fn vertical_box_align(value: &Value) -> bool {
     value.is("top") || value.is("middle") || value.is("bottom")
 }
 
-fn inherit(s: &Style, current: &Ctx, fonts: &Fonts) -> Result<Ctx> {
+/// `start` and `end` as left or right where the direction is known; under `dir="auto"`
+/// the engine resolves them once it has found the first strong character.
+fn physical(align: u8, direction: Direction) -> u8 {
+    match (align, direction) {
+        (4, Direction::Ltr) | (5, Direction::Rtl) => 0,
+        (4, Direction::Rtl) | (5, Direction::Ltr) => 2,
+        _ => align,
+    }
+}
+
+/// `dir` is the element's attribute, which its own CSS `direction` overrides.
+fn inherit(s: &Style, current: &Ctx, fonts: &Fonts, dir: Option<Direction>) -> Result<Ctx> {
+    let direction = match s.get(p!("direction")).and_then(Value::text) {
+        Some("rtl") => Direction::Rtl,
+        Some(_) => Direction::Ltr,
+        None => dir.unwrap_or(current.direction),
+    };
     let selected = font(s, current.family, current.bold, current.italic, fonts)?;
     let (underline, line_through) = match s.get(p!("textDecoration")) {
         None => (current.underline, current.line_through),
@@ -625,7 +647,7 @@ fn inherit(s: &Style, current: &Ctx, fonts: &Fonts) -> Result<Ctx> {
     };
     let align = match s.get(p!("textAlign")).and_then(Value::text) {
         None => current.align,
-        Some(align) => ["left", "center", "right", "justify"]
+        Some(align) => ["left", "center", "right", "justify", "start", "end"]
             .iter()
             .position(|own| *own == align)
             .map_or(255, |index| index as u8),
@@ -633,6 +655,7 @@ fn inherit(s: &Style, current: &Ctx, fonts: &Fonts) -> Result<Ctx> {
     Ok(Ctx {
         size,
         align,
+        direction,
         color: s.get(p!("color")).map_or(Ok(current.color), color)?,
         family: selected.family,
         bold: selected.weight,
@@ -1146,7 +1169,7 @@ impl<S: Sink> Compiler<S> {
             {
                 return Ok(None);
             }
-            let mut next = inherit(s, context, &self.fonts)?;
+            let mut next = inherit(s, context, &self.fonts, node.el.dir)?;
             if let Some(background) = paint
                 .filter(|_| highlight)
                 .and_then(|paint| paint.background)
@@ -1211,8 +1234,12 @@ impl<S: Sink> Compiler<S> {
         {
             shown.insert(0, marker);
         }
-        self.writer
-            .paragraph(shown, state.align, state.orphans, state.widows)
+        self.writer.paragraph(
+            shown,
+            physical(state.align, state.direction) | (state.direction as u8) << 3,
+            state.orphans,
+            state.widows,
+        )
     }
 
     /// Inside a flex row or a kept-together group every break is avoided already, so the engine ignores `avoid` there.
@@ -1529,7 +1556,7 @@ impl<S: Sink> Compiler<S> {
             "hr" => {
                 row_only(s, context.in_row)?;
                 self.page_break(s, false, depth)?;
-                let size = inherit(s, context, &self.fonts)?.size;
+                let size = inherit(s, context, &self.fonts, node.el.dir)?.size;
                 let paint = Self::layout_box(s, size, context)?;
                 self.boxed(paint, collapses(context), false, |_| Ok(()))?;
                 self.page_break(s, true, depth)
@@ -1550,7 +1577,7 @@ impl<S: Sink> Compiler<S> {
         }
         row_only(s, context.in_row)?;
         self.page_break(s, false, depth)?;
-        let mut next = inherit(s, context, &self.fonts)?;
+        let mut next = inherit(s, context, &self.fonts, node.el.dir)?;
         Self::list_state(node, &mut next, context)?;
         let owed = if tag == "li" {
             next.marker.clone()
@@ -1710,7 +1737,7 @@ impl<S: Sink> Compiler<S> {
         let tag = node.el.tag.as_str();
         row_only(s, context.in_row)?;
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, &self.fonts)?;
+        let next = inherit(s, context, &self.fonts, node.el.dir)?;
         let mut inner = next.clone();
         if let Some(href) = &node.el.href {
             inner.link = Some(href.as_str().into());
@@ -1773,7 +1800,7 @@ impl<S: Sink> Compiler<S> {
             }
         }
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, &self.fonts)?;
+        let next = inherit(s, context, &self.fonts, node.el.dir)?;
         let length = |prop: Prop| {
             get(s, prop)
                 .map(|value| dimension(value, prop.name(), false))

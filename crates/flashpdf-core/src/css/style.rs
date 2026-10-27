@@ -274,9 +274,12 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
     }
     if !absent_or(
         result.get(prop!("textAlign")),
-        &["left", "center", "right", "justify"],
+        &["left", "center", "right", "justify", "start", "end"],
     ) {
         return Err("invalid text alignment".into());
+    }
+    if !absent_or(result.get(prop!("direction")), &["ltr", "rtl"]) {
+        return Err("invalid direction (use ltr or rtl)".into());
     }
     for prop in [
         prop!("breakBefore"),

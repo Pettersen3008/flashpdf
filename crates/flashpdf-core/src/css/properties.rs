@@ -105,6 +105,7 @@ static PROPERTIES: &[Definition] = &[
     inherited("fontStyle", "font-style"),
     inherited("fontKerning", "font-kerning"),
     inherited("textAlign", "text-align"),
+    inherited("direction", "direction"),
     inherited("textTransform", "text-transform"),
     // CSS propagates decoration to descendants rather than inheriting it; the effect is the same here.
     inherited("textDecoration", "text-decoration"),

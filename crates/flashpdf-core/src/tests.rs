@@ -383,7 +383,7 @@ fn line(text: &str, style: TextStyle) -> Vec<crate::OwnedCommand> {
         ..run(text.len(), false, style.size.get(), false)
     };
     vec![crate::OwnedCommand::Paragraph(
-        style.align,
+        (style.align, crate::Direction::Ltr),
         [2, 2],
         text.into(),
         vec![run],
@@ -446,6 +446,7 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
     let pdf = parsed(&[Command::Paragraph {
         links: &[],
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         orphans: 2,
         widows: 2,
         text: "WWWWW WWWWWW",
@@ -480,6 +481,7 @@ fn given_a_hard_break_when_laying_out_then_starts_a_new_line_without_a_space() {
     let pdf = parsed(&[Command::Paragraph {
         links: &[],
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         orphans: 2,
         widows: 2,
         text: "a b",
@@ -513,6 +515,7 @@ fn given_the_built_in_fonts_when_laying_out_two_lines_then_normal_line_height_is
             widows: 2,
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             text: "ab",
             runs: &runs,
         }]);
@@ -531,6 +534,7 @@ fn given_mixed_sizes_on_one_line_when_laying_out_then_the_line_takes_the_larger_
         Command::Paragraph {
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             orphans: 2,
             widows: 2,
             text: "ab",
@@ -552,6 +556,7 @@ fn given_runs_that_do_not_cover_the_text_when_laying_out_then_rejects() {
             &[Command::Paragraph {
                 links: &[],
                 align: TextAlign::Left,
+                direction: crate::Direction::Ltr,
                 orphans: 2,
                 widows: 2,
                 text: "ab",
@@ -699,6 +704,7 @@ fn given_a_box_whose_bottom_edge_does_not_fit_below_its_last_line_when_closed_th
 fn four_lines(runs: &[TextRun; 1], keep: u16) -> Command<'_> {
     Command::Paragraph {
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         orphans: keep,
         widows: keep,
         text: FOUR_WORDS,
@@ -1393,6 +1399,7 @@ fn given_a_15pt_line_height_on_three_lines_when_rendered_then_the_third_line_mov
     let pdf = parsed(&[Command::Paragraph {
         links: &[],
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         orphans: 2,
         widows: 2,
         text: "abc",
@@ -1454,6 +1461,7 @@ fn given_a_header_and_a_line_taller_than_the_page_when_rendered_then_rejects_wit
         let _ = sender.send(renderer.push(&[Command::Paragraph {
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             orphans: 2,
             widows: 2,
             text: "a",
@@ -1514,6 +1522,7 @@ fn given_two_sizes_with_the_same_line_height_on_one_line_when_wrapping_then_the_
         Command::Paragraph {
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             orphans: 2,
             widows: 2,
             text: "ab",
@@ -1679,6 +1688,7 @@ fn given_a_translucent_box_and_text_when_rendered_then_each_sets_its_alpha_and_t
             widows: 2,
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             text: "x",
             runs: &[run],
         },
@@ -1769,6 +1779,7 @@ fn given_justified_text_that_wraps_when_rendered_then_only_the_wrapped_line_stre
         widows: 2,
         links: &[],
         align: TextAlign::Justify,
+        direction: crate::Direction::Ltr,
         text: "aaaa aaaa aaaa aaaa aaaa",
         runs: &runs,
     }]);
@@ -1877,6 +1888,7 @@ fn given_an_underlined_struck_run_with_a_decoration_colour_when_painted_then_str
         widows: 2,
         links: &[],
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         text: "x",
         runs: &runs,
     }]);
@@ -1985,6 +1997,7 @@ fn given_a_list_marker_when_its_first_line_moves_to_the_next_page_then_the_marke
             widows: 2,
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             text: "1.item",
             runs: &runs,
         },
@@ -2007,6 +2020,7 @@ fn given_an_inside_marker_when_laid_out_then_the_first_line_starts_after_it() {
         widows: 2,
         links: &[],
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         text: "1.item",
         runs: &runs,
     }]);
@@ -2027,8 +2041,13 @@ fn given_a_two_line_first_page_header_and_a_numbered_header_when_rendering_then_
         .set_furniture(false, false, line("Later \u{1e}", plain))
         .unwrap();
     let runs = vec![run(5, false, 8.0, true), run(4, false, 8.0, false)];
-    let first =
-        crate::OwnedCommand::Paragraph(TextAlign::Left, [2, 2], "Firstpage".into(), runs, vec![]);
+    let first = crate::OwnedCommand::Paragraph(
+        (TextAlign::Left, crate::Direction::Ltr),
+        [2, 2],
+        "Firstpage".into(),
+        runs,
+        vec![],
+    );
     renderer.set_furniture(false, true, vec![first]).unwrap();
     renderer
         .push(&["a", "b", "c", "d", "e"].map(fixed_line))
@@ -2061,8 +2080,13 @@ fn given_a_page_number_whose_real_width_pulls_a_larger_word_up_a_line_when_finis
     // In 90pt, five 20pt digits push the first 40pt "M" to a second line; "1" lets it
     // stay and pushes the second one down, so two 46pt lines replace 23pt and 46pt.
     let runs = vec![run(1, false, 20.0, false), run(4, false, 40.0, false)];
-    let footer =
-        crate::OwnedCommand::Paragraph(TextAlign::Left, [2, 2], "\u{1e} M M".into(), runs, vec![]);
+    let footer = crate::OwnedCommand::Paragraph(
+        (TextAlign::Left, crate::Direction::Ltr),
+        [2, 2],
+        "\u{1e} M M".into(),
+        runs,
+        vec![],
+    );
     renderer.set_furniture(true, false, vec![footer]).unwrap();
     renderer.push(&[text("body")]).unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::PageOverflow));
@@ -2201,6 +2225,7 @@ fn given_disc_circle_and_square_markers_when_painted_then_draw_shapes_instead_of
             widows: 2,
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             text,
             runs: runs.as_slice(),
         })
@@ -2235,6 +2260,7 @@ fn given_a_nowrap_word_wider_than_its_line_when_laid_out_then_rejects_where_a_no
                 widows: 2,
                 links: &[],
                 align: TextAlign::Left,
+                direction: crate::Direction::Ltr,
                 text: "WWWWWWWWWWWW",
                 runs: &runs,
             }],
@@ -2262,6 +2288,7 @@ fn given_a_raised_run_when_painted_then_it_moves_up_by_the_rise_and_grows_the_li
             widows: 2,
             links: &[],
             align: TextAlign::Left,
+            direction: crate::Direction::Ltr,
             text: "xy",
             runs: &runs,
         }])
@@ -2291,6 +2318,7 @@ fn given_a_run_background_when_painted_then_fills_its_text_extent_before_the_tex
         widows: 2,
         links: &[],
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         text: "ab",
         runs: &runs,
     }]);
@@ -2324,6 +2352,7 @@ fn given_a_word_split_across_two_colours_when_laid_out_then_its_pair_still_kerns
         widows: 2,
         links: &[],
         align: TextAlign::Left,
+        direction: crate::Direction::Ltr,
         text: "AV",
         runs: &runs,
     }]);
@@ -2695,13 +2724,56 @@ fn given_brackets_in_right_to_left_text_when_shaped_then_they_mirror() {
     );
 }
 
+/// Abel text in one paragraph with a base direction and alignment.
+fn directed(text: &str, direction: crate::Direction, align: TextAlign) -> lopdf::Document {
+    let font = super::EmbeddedFont::parse(ABEL.to_vec()).unwrap();
+    let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
+    let runs = [TextRun {
+        font: super::FontId::new(12),
+        ..run(text.len(), false, 12.0, false)
+    }];
+    renderer
+        .push(&[Command::Paragraph {
+            align,
+            direction,
+            orphans: 2,
+            widows: 2,
+            text,
+            runs: &runs,
+            links: &[],
+        }])
+        .unwrap();
+    lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap()
+}
+
 #[test]
-fn given_a_paragraph_whose_first_strong_character_is_right_to_left_when_laid_out_then_trailing_punctuation_moves_to_the_left(
+fn given_dir_auto_and_a_right_to_left_first_strong_character_when_laid_out_then_trailing_punctuation_moves_to_the_left(
 ) {
+    let pdf = directed("\u{200f}ab cd!", crate::Direction::Auto, TextAlign::Left);
     assert_eq!(
-        visual_glyphs("\u{200f}ab cd!"),
+        shown_glyphs(&pdf),
         ['!', 'a', 'b', ' ', 'c', 'd'].map(abel_glyph)
     );
+    // Left to right by default, as CSS `direction` starts.
+    let pdf = directed("\u{200f}ab cd!", crate::Direction::Ltr, TextAlign::Left);
+    assert_eq!(
+        shown_glyphs(&pdf),
+        ['a', 'b', ' ', 'c', 'd', '!'].map(abel_glyph)
+    );
+}
+
+#[test]
+fn given_a_right_to_left_paragraph_when_aligned_to_start_then_it_sits_on_the_right_and_end_on_the_left(
+) {
+    let first_x = |align| operands(&directed("ab cd!", crate::Direction::Rtl, align), "Td")[0][0];
+    let pdf = directed("ab cd!", crate::Direction::Rtl, TextAlign::Start);
+    assert_eq!(
+        shown_glyphs(&pdf),
+        ['!', 'a', 'b', ' ', 'c', 'd'].map(abel_glyph)
+    );
+    assert!(first_x(TextAlign::Start) > 400.0);
+    assert_eq!(first_x(TextAlign::End), first_x(TextAlign::Left));
+    assert_eq!(first_x(TextAlign::Start), first_x(TextAlign::Right));
 }
 
 #[test]

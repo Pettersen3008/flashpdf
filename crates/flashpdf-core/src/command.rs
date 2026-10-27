@@ -5,8 +5,8 @@ use crate::document::{
     Table,
 };
 use crate::{
-    BoxSize, BoxStyle, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign, TextRun,
-    TextStyle, VerticalAlign,
+    BoxSize, BoxStyle, Direction, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign,
+    TextRun, TextStyle, VerticalAlign,
 };
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
@@ -22,6 +22,7 @@ pub enum Command<'a> {
     /// `runs` slice `text` consecutively and must cover it exactly on char boundaries.
     Paragraph {
         align: TextAlign,
+        direction: Direction,
         orphans: u16,
         widows: u16,
         text: &'a str,
@@ -101,7 +102,13 @@ pub enum Slot {
 /// The protocol's decoded form owns data across input chunks.
 #[derive(Clone)]
 pub(crate) enum OwnedCommand {
-    Paragraph(TextAlign, [u16; 2], String, Vec<TextRun>, Vec<String>),
+    Paragraph(
+        (TextAlign, Direction),
+        [u16; 2],
+        String,
+        Vec<TextRun>,
+        Vec<String>,
+    ),
     BoxStart(BoxStyle, BoxSize),
     BoxEnd,
     Spacer(Pt),
@@ -129,14 +136,17 @@ pub(crate) enum OwnedCommand {
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Paragraph(align, [orphans, widows], text, runs, links) => Command::Paragraph {
-                align: *align,
-                orphans: *orphans,
-                widows: *widows,
-                text,
-                runs,
-                links,
-            },
+            Self::Paragraph((align, direction), [orphans, widows], text, runs, links) => {
+                Command::Paragraph {
+                    align: *align,
+                    direction: *direction,
+                    orphans: *orphans,
+                    widows: *widows,
+                    text,
+                    runs,
+                    links,
+                }
+            }
             Self::BoxStart(style, size) => Command::BoxStart {
                 style: *style,
                 size: *size,
@@ -250,6 +260,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
         match self.next()? {
             Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
                 align: style.align,
+                direction: Direction::Ltr,
                 orphans: 2,
                 widows: 2,
                 text,
@@ -267,6 +278,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             })),
             Command::Paragraph {
                 align,
+                direction,
                 orphans,
                 widows,
                 text,
@@ -274,6 +286,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 links,
             } => Ok(Element::Paragraph(Paragraph {
                 align,
+                direction,
                 orphans,
                 widows,
                 text,

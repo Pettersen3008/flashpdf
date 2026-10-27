@@ -107,6 +107,15 @@ test("given 200,000 nested arrays, when resolving, then rejects at the nesting l
 	await assert.rejects(resolveTree(jsx("main", { children })), /nesting exceeds 64/);
 });
 
+test("given a dir attribute, when resolving, then keeps ltr, rtl, or auto and rejects anything else", async () => {
+	const [node] = await resolveTree(jsx("p", { dir: "rtl", children: "x" }));
+	assert.equal(node.dir, "rtl");
+	await assert.rejects(
+		resolveTree(jsx("p", { dir: "up", children: "x" })),
+		/dir must be "ltr", "rtl", or "auto" on <p>/,
+	);
+});
+
 test("given children inside an hr or br, when resolving, then rejects them", async () => {
 	for (const tag of ["hr", "br"])
 		await assert.rejects(
