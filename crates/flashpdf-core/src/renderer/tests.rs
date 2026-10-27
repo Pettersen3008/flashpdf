@@ -216,3 +216,32 @@ fn given_a_smaller_later_body_when_an_atomic_block_fits_neither_remaining_nor_la
         Err(crate::RenderError::PageOverflow)
     );
 }
+
+#[test]
+fn given_tagged_pdfa_output_when_loading_then_struct_elements_resolve_from_the_object_stream() {
+    let mut renderer = Renderer::new(Page::new(Pt(100.0), Pt(60.0), Edges::all(Pt(10.0))).unwrap());
+    renderer.set_metadata(crate::pdf::Metadata {
+        language: "en".into(),
+        tagged: true,
+        pdfa: true,
+        ..Default::default()
+    });
+    renderer
+        .push(&[Command::Text {
+            text: "body",
+            style: TextStyle::plain(Pt(10.0)),
+        }])
+        .unwrap();
+    let bytes = renderer.finish().unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    assert!(pdf.trailer.get(b"ID").is_ok());
+    let root = pdf.catalog().unwrap().get(b"StructTreeRoot").unwrap();
+    let root = pdf.get_dictionary(root.as_reference().unwrap()).unwrap();
+    let document = root.get(b"K").unwrap().as_reference().unwrap();
+    let kids = pdf.get_dictionary(document).unwrap().get(b"K").unwrap();
+    let paragraph = kids.as_array().unwrap()[0].as_reference().unwrap();
+    let paragraph = pdf.get_dictionary(paragraph).unwrap();
+    assert_eq!(paragraph.get(b"S").unwrap().as_name().unwrap(), b"P");
+    assert_eq!(paragraph.get(b"K").unwrap().as_i64().unwrap(), 0);
+    assert!(!bytes.windows(10).any(|window| window == b"StructElem"));
+}

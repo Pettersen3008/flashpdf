@@ -3,7 +3,7 @@ use pdf_writer::types::{
     StructRole,
 };
 use pdf_writer::writers::{ExtGraphicsState, Resources, StructTreeRoot};
-use pdf_writer::{Filter, Finish, Name, Null, Pdf, Rect, Ref, Str, TextStr};
+use pdf_writer::{Chunk, Filter, Finish, Name, Null, Pdf, Rect, Ref, Settings, Str, TextStr};
 
 use crate::font::{base_font, font_name, write_embedded, EmbeddedRefs, Font};
 use crate::image::{ColorSpace, Encoding, Image};
@@ -138,6 +138,7 @@ pub(crate) fn finish_pdf(
     .any(|value| !value.is_empty())
     .then(&mut allocate);
     let structure = metadata.tagged.then(|| (allocate(), allocate()));
+    let object_stream = metadata.tagged.then(&mut allocate);
     let parent_arrays: Vec<Ref> = if metadata.tagged {
         tags.iter().map(|_| allocate()).collect()
     } else {
@@ -254,8 +255,13 @@ pub(crate) fn finish_pdf(
             .count(bookmarks.len() as i32);
     }
 
-    if let Some((root, document)) = structure {
-        let mut tree = pdf.indirect(root).start::<StructTreeRoot>();
+    // The structure tree is hundreds of small dictionaries, so it goes compact into one
+    // object stream. `packed[i]` spans `starts[i]..starts[i + 1]` of `chunk`.
+    let mut packed = Vec::new();
+    if let (Some((root, document)), Some(stream)) = (structure, object_stream) {
+        let mut chunk = Chunk::with_settings(Settings { pretty: false });
+        let mut starts = vec![0];
+        let mut tree = chunk.indirect(root).start::<StructTreeRoot>();
         tree.child(document).parent_tree_next_key(count as i32);
         let mut parents = tree.parent_tree();
         let mut nums = parents.nums();
@@ -265,16 +271,22 @@ pub(crate) fn finish_pdf(
         drop(nums);
         drop(parents);
         drop(tree);
-        let mut doc = pdf.struct_element(document);
+        starts.push(chunk.len());
+        let mut doc = chunk.struct_element(document);
         doc.kind(StructRole::Document).parent(root);
         doc.children().items(tag_refs.iter().flatten().copied());
         drop(doc);
+        starts.push(chunk.len());
+        packed.extend([root, document]);
         for (page_index, page_tags) in tags.iter().enumerate() {
-            pdf.indirect(parent_arrays[page_index])
+            chunk
+                .indirect(parent_arrays[page_index])
                 .array()
                 .items(tag_refs[page_index].iter().copied());
+            starts.push(chunk.len());
+            packed.push(parent_arrays[page_index]);
             for (mcid, tag) in page_tags.iter().enumerate() {
-                let mut item = pdf.struct_element(tag_refs[page_index][mcid]);
+                let mut item = chunk.struct_element(tag_refs[page_index][mcid]);
                 item.kind(match tag {
                     PageTag::Paragraph => StructRole::P,
                     PageTag::Figure(_) => StructRole::Figure,
@@ -284,9 +296,19 @@ pub(crate) fn finish_pdf(
                 if let PageTag::Figure(alt) = tag {
                     item.alt(TextStr(alt));
                 }
-                item.marked_content_child().marked_content_id(mcid as i32);
+                // An integer child is a marked-content sequence on the element's /Pg.
+                item.pair(Name(b"K"), mcid as i32);
+                drop(item);
+                starts.push(chunk.len());
+                packed.push(tag_refs[page_index][mcid]);
             }
         }
+        let (data, first) = pack_objects(chunk.as_bytes(), &packed, &starts);
+        pdf.stream(stream, &deflate(&data))
+            .filter(Filter::FlateDecode)
+            .pair(Name(b"Type"), Name(b"ObjStm"))
+            .pair(Name(b"N"), packed.len() as i32)
+            .pair(Name(b"First"), first as i32);
     }
 
     for refs in &font_refs {
@@ -403,19 +425,127 @@ pub(crate) fn finish_pdf(
         }
     }
 
-    if metadata.pdfa {
-        // FNV-1a over every object written: deterministic, and distinct per document.
-        let id = pdf
-            .as_bytes()
+    // FNV-1a over every object written: deterministic, and distinct per document.
+    let id = metadata.pdfa.then(|| {
+        pdf.as_bytes()
             .iter()
             .fold(0x6c62272e07bb014262b821756295c58d_u128, |hash, byte| {
                 (hash ^ u128::from(*byte)).wrapping_mul(0x0000000001000000000000000000013b)
             })
             .to_be_bytes()
-            .to_vec();
-        pdf.set_file_id((id.clone(), id));
+    });
+    if let Some(stream) = object_stream {
+        return finish_with_xref_stream(pdf, stream, &packed, catalog, info, id);
+    }
+    if let Some(id) = id {
+        pdf.set_file_id((id.to_vec(), id.to_vec()));
     }
     pdf.finish()
+}
+
+/// Object stream data for `packed`, written compact into `chunk` with `packed[i]` spanning
+/// `starts[i]..starts[i + 1]`. Returns the data and its `/First` offset.
+fn pack_objects(chunk: &[u8], packed: &[Ref], starts: &[usize]) -> (Vec<u8>, usize) {
+    let mut header = Vec::new();
+    let mut body = Vec::with_capacity(chunk.len());
+    for (reference, span) in packed.iter().zip(starts.windows(2)) {
+        let mut id = itoa::Buffer::new();
+        let id = id.format(reference.get());
+        // Strip the `<id> 0 obj\n` and `\nendobj\n` that compact settings write.
+        let object = &chunk[span[0] + id.len() + b" 0 obj\n".len()..span[1] - b"\nendobj\n".len()];
+        header.extend_from_slice(id.as_bytes());
+        header.push(b' ');
+        header.extend_from_slice(itoa::Buffer::new().format(body.len()).as_bytes());
+        header.push(b' ');
+        body.extend_from_slice(object);
+        body.push(b'\n');
+    }
+    let first = header.len();
+    header.extend(body);
+    (header, first)
+}
+
+/// Finishes `pdf` with a cross-reference stream (PDF 1.5) in place of the classic table, so
+/// the `packed` objects can live in object stream `stream`, at their index in `packed`.
+fn finish_with_xref_stream(
+    pdf: Pdf,
+    stream: Ref,
+    packed: &[Ref],
+    root: Ref,
+    info: Option<Ref>,
+    id: Option<[u8; 16]>,
+) -> Vec<u8> {
+    let mut bytes = pdf.finish();
+    // pdf-writer keeps object offsets private, so read them back from the table it ends
+    // with: `xref\n0 <size>\n`, one 20-byte entry per object, the trailer, then
+    // `startxref\n<offset>\n%%EOF`.
+    let number = |digits: &[u8]| {
+        digits
+            .iter()
+            .fold(0, |value, digit| value * 10 + usize::from(digit - b'0'))
+    };
+    let end = bytes.len() - b"\n%%EOF".len();
+    let mark = bytes[..end]
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .unwrap();
+    let table = number(&bytes[mark + 1..end]);
+    let start = table + b"xref\n0 ".len();
+    let line = bytes[start..]
+        .iter()
+        .position(|byte| *byte == b'\n')
+        .unwrap();
+    let size = number(&bytes[start..start + line]);
+    let entries = start + line + 1;
+    let mut offsets: Vec<Option<usize>> = (0..size)
+        .map(|index| {
+            let entry = &bytes[entries + index * 20..][..20];
+            (entry[17] == b'n').then(|| number(&entry[..10]))
+        })
+        .collect();
+    bytes.truncate(table);
+    // The xref stream itself is the last object, where the table was.
+    offsets.push(Some(table));
+    let mut slots = vec![None; offsets.len()];
+    for (index, reference) in packed.iter().enumerate() {
+        slots[reference.get() as usize] = Some(index);
+    }
+    let width = |value: usize| (usize::BITS - value.leading_zeros()).div_ceil(8) as usize;
+    let middle = width(table.max(stream.get() as usize));
+    let last = width(packed.len().max(0xffff));
+    let mut data = Vec::with_capacity(offsets.len() * (1 + middle + last));
+    for (number, (offset, slot)) in offsets.iter().zip(&slots).enumerate() {
+        let (kind, field, index) = match (offset, slot) {
+            (Some(offset), _) => (1, *offset, 0),
+            (None, Some(index)) => (2, stream.get() as usize, *index),
+            (None, None) => (0, 0, if number == 0 { 0xffff } else { 0 }),
+        };
+        data.push(kind);
+        data.extend_from_slice(&field.to_be_bytes()[size_of::<usize>() - middle..]);
+        data.extend_from_slice(&index.to_be_bytes()[size_of::<usize>() - last..]);
+    }
+    let data = deflate(&data);
+    let mut chunk = Chunk::new();
+    let mut xref = chunk.stream(Ref::new(size as i32), &data);
+    xref.filter(Filter::FlateDecode)
+        .pair(Name(b"Type"), Name(b"XRef"))
+        .pair(Name(b"Size"), offsets.len() as i32)
+        .pair(Name(b"Root"), root);
+    if let Some(info) = info {
+        xref.pair(Name(b"Info"), info);
+    }
+    if let Some(id) = &id {
+        xref.insert(Name(b"ID")).array().items([Str(id), Str(id)]);
+    }
+    xref.insert(Name(b"W"))
+        .array()
+        .items([1, middle as i32, last as i32]);
+    drop(xref);
+    bytes.extend_from_slice(chunk.as_bytes());
+    bytes.extend_from_slice(b"startxref\n");
+    bytes.extend_from_slice(itoa::Buffer::new().format(table).as_bytes());
+    bytes.extend_from_slice(b"\n%%EOF");
+    bytes
 }
 
 /// An outline item: its object, its destination object, and its anchor.

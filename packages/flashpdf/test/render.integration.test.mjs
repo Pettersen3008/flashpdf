@@ -634,8 +634,8 @@ test("given a repeating header and tagged metadata, when rendering two pages, th
 		"/ParentTree",
 		"/StructParents",
 		"/MCID 0",
-		"/S /Figure",
-		"/Alt (Company logo)",
+		"/S/Figure",
+		"/Alt(Company logo)",
 		"/Lang (en-US)",
 		"/Title (Invoice)",
 		"/Author (Acme)",
@@ -1286,7 +1286,7 @@ test("given an svg with a viewBox, when rendering, then paints a tagged form fit
 		/q\n0\.05 0 0 -0\.05 0 0\.75 cm\n1 0 0 rg\n\/G80FF gs\n0 0 m\n20 0 l\n20 10 l\n0 10 l\nh\nf\nQ/,
 	);
 	assert.match(text, /\/Figure <<\s*\/MCID 0\s*>> BDC\nq\n60 0 0 60 36 746 cm\n\/Im1 Do/);
-	assert.match(text, /\/Alt \(Acme\)/);
+	assert.match(text, /\/Alt\(Acme\)/);
 	const file = new TextEncoder().encode(
 		'<svg viewBox="0 0 20 10" preserveAspectRatio="xMinYMid meet" aria-label="Acme"><rect width="20" height="10" fill="currentColor" fill-opacity="0.5"/></svg>',
 	);
@@ -1322,7 +1322,7 @@ test("given a QRCode and a Barcode, when rendering, then each draws its merged m
 	assert.equal(text.match(/\/Subtype \/Form/g).length, 2);
 	// The first row, 1111111 0 11 0000 1111111, is three runs offset by the 4-module quiet zone.
 	assert.match(text, /4 4 m\n11 4 l\n11 5 l\n4 5 l\nh\n12 4 m\n14 4 l\n14 5 l\n12 5 l\nh\n18 4 m/);
-	assert.match(text, /\/Alt \(Pay invoice 42\)/);
+	assert.match(text, /\/Alt\(Pay invoice 42\)/);
 	assert.match(text, /\(0123456789\) Tj/);
 	for (const [element, message] of [
 		[jsx(QRCode, { value: "" }), /QRCode value must be a non-empty string/],
