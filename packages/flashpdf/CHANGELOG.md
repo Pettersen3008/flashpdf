@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-10-27
+
 ### Added
 
 - `max-width` and `max-height` on `img` and `svg`. With `width` and `height` both auto the image scales into both caps and keeps its aspect ratio, as CSS 2.1 §10.4 says, so a scan of unknown size fits the page instead of rejecting. A cap never enlarges an image, and a percent `max-height` rejects like a percent `height`. The layout protocol moves to version 22.
