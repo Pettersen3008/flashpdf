@@ -202,14 +202,35 @@ impl<'a> LayoutEngine<'a> {
             ImageSize::Fixed(width) => Some(width.get()),
             ImageSize::Percent(percent) => Some(available * percent.get() / 100.0),
         };
+        let max_width = match node.max_width {
+            ImageSize::Auto => f32::INFINITY,
+            ImageSize::Fixed(width) => width.get(),
+            ImageSize::Percent(percent) => available * percent.get() / 100.0,
+        };
+        let max_height = node.max_height.map_or(f32::INFINITY, Pt::get);
+        // CSS 2.1 §10.4 and §10.7: a max clamps its own axis; only an auto axis follows the ratio.
         let (width, height) = match (requested, node.height) {
             (None, None) => {
-                let width = natural_width.min(available);
-                (width, width * natural_height / natural_width)
+                let scale = (available.min(max_width) / natural_width)
+                    .min(max_height / natural_height)
+                    .min(1.0);
+                (natural_width * scale, natural_height * scale)
             }
-            (None, Some(height)) => (height.get() * natural_width / natural_height, height.get()),
-            (Some(width), None) => (width, width * natural_height / natural_width),
-            (Some(width), Some(height)) => (width, height.get()),
+            (None, Some(height)) => {
+                let height = height.get().min(max_height);
+                (
+                    (height * natural_width / natural_height).min(max_width),
+                    height,
+                )
+            }
+            (Some(width), None) => {
+                let width = width.min(max_width);
+                (
+                    width,
+                    (width * natural_height / natural_width).min(max_height),
+                )
+            }
+            (Some(width), Some(height)) => (width.min(max_width), height.get().min(max_height)),
         };
         if width > available * (1.0 + f32::EPSILON * 4.0) {
             return Err(LayoutError::ImageTooWide);

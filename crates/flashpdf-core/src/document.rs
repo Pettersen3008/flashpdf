@@ -40,6 +40,8 @@ pub(crate) struct ImageNode<'a> {
     pub(crate) slot: u16,
     pub(crate) width: ImageSize,
     pub(crate) height: Option<Pt>,
+    pub(crate) max_width: ImageSize,
+    pub(crate) max_height: Option<Pt>,
     pub(crate) link: Option<&'a str>,
     pub(crate) alt: &'a str,
     pub(crate) alpha: u8,

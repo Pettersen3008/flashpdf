@@ -214,8 +214,12 @@ export class ProtocolWriter {
 
 	image(
 		src: Uint8Array,
-		width: Dimension | undefined,
-		height: number | undefined,
+		size: {
+			width: Dimension | undefined;
+			height: number | undefined;
+			maxWidth: Dimension | undefined;
+			maxHeight: number | undefined;
+		},
 		alt: string,
 		link: string | undefined,
 		opacity: number,
@@ -236,14 +240,18 @@ export class ProtocolWriter {
 		}
 		this.binary.record(opcode.image, () => {
 			this.binary.u16(slot);
-			if (width) {
-				this.binary.u8(width.kind);
-				this.binary.f32(width.value);
-			} else this.binary.u8(0);
-			if (height === undefined) this.binary.u8(0);
-			else {
-				this.binary.u8(1);
-				this.binary.f32(height);
+			for (const width of [size.width, size.maxWidth]) {
+				if (width) {
+					this.binary.u8(width.kind);
+					this.binary.f32(width.value);
+				} else this.binary.u8(0);
+			}
+			for (const height of [size.height, size.maxHeight]) {
+				if (height === undefined) this.binary.u8(0);
+				else {
+					this.binary.u8(1);
+					this.binary.f32(height);
+				}
 			}
 			if (link === undefined) this.binary.u8(0);
 			else {

@@ -68,9 +68,24 @@ test("given the same Uint8Array used for two images, when writing them, then reg
 	};
 	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
 	const logo = new Uint8Array([1, 2, 3]);
-	writer.image(logo, undefined, undefined, "", undefined);
-	writer.image(logo, { kind: 1, value: 40 }, 20, "Logo", "https://example.com/");
-	writer.image(new Uint8Array([1, 2, 3]), undefined, undefined, "", undefined);
+	writer.image(
+		logo,
+		{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
+		"",
+		undefined,
+	);
+	writer.image(
+		logo,
+		{ width: { kind: 1, value: 40 }, height: 20, maxWidth: undefined, maxHeight: undefined },
+		"Logo",
+		"https://example.com/",
+	);
+	writer.image(
+		new Uint8Array([1, 2, 3]),
+		{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
+		"",
+		undefined,
+	);
 	assert.equal(registered.length, 2);
 	assert.equal(registered[0], logo);
 });
@@ -87,9 +102,20 @@ test("given images totalling over 64 MiB, when writing them, then rejects the la
 	};
 	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
 	const half = new Uint8Array(32 * 1024 * 1024 + 1);
-	writer.image(half, undefined, undefined, "", undefined);
+	writer.image(
+		half,
+		{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
+		"",
+		undefined,
+	);
 	assert.throws(
-		() => writer.image(half.slice(), undefined, undefined, "", undefined),
+		() =>
+			writer.image(
+				half.slice(),
+				{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
+				"",
+				undefined,
+			),
 		/^Error: images exceed 64 MiB per render$/,
 	);
 	assert.deepEqual(copied, [half.byteLength]);
