@@ -17,6 +17,7 @@ gzip -9 -n -c $wasm/flashpdf_wasm_bg.wasm > target/flashpdf_wasm_bg.wasm.gz
 compressed=$(wc -c < target/flashpdf_wasm_bg.wasm.gz)
 wc -c target/flashpdf_wasm_bg.raw.wasm $wasm/flashpdf_wasm_bg.wasm \
   target/flashpdf_wasm_bg.wasm.gz $wasm/flashpdf_wasm.js
+! command -v brotli >/dev/null || echo "brotli: $(brotli -c $wasm/flashpdf_wasm_bg.wasm | wc -c)"
 if [ "$raw" -gt 1000000 ] || [ "$compressed" -gt 400000 ]; then
   cargo tree --locked -p flashpdf-wasm --target wasm32-unknown-unknown -e normal
   echo "Size gate failed; stop before adding features." >&2

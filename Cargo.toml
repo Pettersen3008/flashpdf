@@ -8,3 +8,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Cold crate: size over speed, measured no slower warm render.
+[profile.release.package.pdf-writer]
+opt-level = "z"
