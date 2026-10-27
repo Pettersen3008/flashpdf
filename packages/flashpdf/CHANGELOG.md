@@ -9,6 +9,9 @@
 ### Fixed
 
 - The README and CSS.md each described images twice, and the older copy left out SVG and `#id` links.
+- `render` resolves to `Uint8Array<ArrayBuffer>`, so `new Blob([pdf])` type-checks without a cast. The type needs TypeScript 5.7 or later.
+- `typesVersions` maps `jsx-runtime` and `jsx-dev-runtime`, so TypeScript with `moduleResolution: "node"` finds the JSX types without a `paths` entry.
+- The README states that the built-in fonts cover WinAnsi only, and that text from users needs an embedded font.
 
 ## 0.4.0 - 2026-10-20
 

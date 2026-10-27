@@ -81,7 +81,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 	return async function render(
 		document: Element | Iterable<Element>,
 		options?: RenderOptions,
-	): Promise<Uint8Array> {
+	): Promise<Uint8Array<ArrayBuffer>> {
 		const p = props(options ?? {}, [
 			"pageFormat",
 			"orientation",
@@ -143,7 +143,7 @@ export function createRenderer(loadWasm: LoadWasm) {
 			page.width - page.margin[1]! - page.margin[3]!,
 		);
 		// The second pass pushes the record the engine rejected alone, so the element that wrote it reports.
-		const emit = (replayAt?: number): Uint8Array => {
+		const emit = (replayAt?: number): Uint8Array<ArrayBuffer> => {
 			const renderer = new PdfRenderer();
 			const binary = new Binary(renderer, wasm.memory, replayAt);
 			let consumed = false;
@@ -172,7 +172,8 @@ export function createRenderer(loadWasm: LoadWasm) {
 				writer.end();
 				consumed = true;
 				try {
-					return renderer.finish();
+					// wasm-bindgen copies the PDF out of WASM memory into a fresh ArrayBuffer.
+					return renderer.finish() as Uint8Array<ArrayBuffer>;
 				} catch (error) {
 					throw asError(error);
 				}

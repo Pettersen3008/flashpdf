@@ -173,7 +173,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 
 | Export       | Signature                                                                                 | Notes                                                                                                                              |
 | ------------ | ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `render`     | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process.                              |
+| `render`     | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array<ArrayBuffer>>` | The root component must resolve to one or more host elements. Loads the WASM module once per process.                              |
 | `stylesheet` | `(source: string) => string`                                                              | Validates CSS and returns it unchanged. Accepts a string or a tagged template literal, so authoring errors surface at module load. |
 | `PageNumber` | `() => Element`                                                                           | Resolves to the current page number inside a header or footer.                                                                     |
 | `TotalPages` | `() => Element`                                                                           | Resolves to the final page count inside a header or footer.                                                                        |
@@ -214,6 +214,8 @@ const pdf = await render(<Invoice />, {
 The host provides full TTF bytes for each family. `fontFamily` accepts a fallback list and selects the first entry that is a registered family or a built-in name; `fontWeight: 'bold'` selects its optional bold file and `fontStyle: 'italic'` its optional italic or bold italic file. A family without the italic file for a weight slants the upright face instead, as browsers do.
 
 Three built-in families need no files, each in regular, bold, italic or oblique, and bold italic: Helvetica for `Helvetica`, `Arial`, and `sans-serif`; Times for `Times`, `Times New Roman`, and `serif`; and Courier for `Courier`, `Courier New`, and `monospace`. Helvetica is the default. A name that is neither registered nor built in, such as `Georgia`, is skipped for the next entry, and a list where nothing matches rejects naming it. CSS.md lists every name.
+
+The built-in families cover WinAnsi (Latin-1 plus `€`, `Š`, `Ž`, and a few more), and text with any other character rejects. Text from users or bank data needs an embedded font: one `Ł` in a supplier name fails the whole document with Helvetica.
 
 ```ts
 const regular = new Uint8Array(await (await fetch('/fonts/invoice-regular.ttf')).arrayBuffer());
