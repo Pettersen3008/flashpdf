@@ -160,7 +160,7 @@ impl Decoder {
                     return Err(ProtocolError::NestingTooDeep);
                 }
                 count(elements, payload.len())?;
-                let staged = self.commands_staged();
+                let staged = self.commands().staged.len();
                 let element = open(payload, staged)?;
                 let elements = &mut self.elements;
                 if let Some(parent) = elements.open.last() {
@@ -225,10 +225,6 @@ impl Decoder {
             }
             _ => Err(ProtocolError::InvalidNesting),
         }
-    }
-
-    fn commands_staged(&mut self) -> usize {
-        self.commands().staged.len()
     }
 
     /// Folds the render options into `@page`, then sets up the page, the cascade, and the compiler.

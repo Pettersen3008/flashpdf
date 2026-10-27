@@ -12,11 +12,15 @@
 
 - Lines break at the Unicode UAX #14 break opportunities instead of only at ASCII whitespace and between CJK characters: after a hyphen or `/`, never before closing punctuation, so a long URL or hyphenated word wraps at a natural point instead of mid-glyph. U+00AD shows as `-` only where a line breaks there, U+200B breaks invisibly, and U+2060 keeps text together. FlashPDF depends on the `unicode-linebreak` crate for this, which adds about 23 KB to the WASM.
 - The WASM size gate is 1,000,000 B raw and 400,000 B gzipped, up from 400 KB and 200 KB, to leave room for Unicode line breaking, shaping, and bidi.
+- The cascade, style normalisation, and element compile run in the Rust core instead of TypeScript. JavaScript resolves the JSX tree and sends it to the core as element records; the PDF bytes do not change. On the 80-line benchmark invoice a warm render takes about 4 ms instead of 6 to 7 ms in Bun with the native addon, and 4.6 ms instead of 6.8 ms in Node through the WASM. The core parses each stylesheet once per process and reuses it while the text stays the same, and tests each element only against the rules whose last compound names its id, a class, or its tag. The WASM grows from 397 KB to 853 KB raw, 171 KB to 363 KB gzipped.
+- The core checks fonts, page options, `@page`, metadata, PDF/A, and attachments before user components run. Engine errors name the element that caused them without rendering twice.
+- A style object value for a supported property must be a string or a number; anything else fails with `style <name> must be a string or number, not <type>` and the element path.
 - Tagged output is about a third of its old size: the structure tree goes compact into one Flate object stream, each element names its marked content as `/K <mcid>`, and a cross-reference stream replaces the xref table. The 80-line invoice drops from 52.3 KB to 17.2 KB. Untagged output is unchanged.
 
 ### Internal
 
-- The Rust core gains a port of the CSS parser, selector matcher, cascade, `var()`, and `calc()`, with the TypeScript tests for them ported to Rust. Rendering does not use it yet; a later change moves the cascade and compile out of TypeScript.
+- The Rust core gains a port of the CSS parser, selector matcher, cascade, `var()`, `calc()`, style normalisation, and the element compiler, with the TypeScript tests for them ported to Rust. `compile.ts`, the TypeScript page setup, and the TypeScript drawing encoder are gone; `stylesheet()` still validates in TypeScript until the next change.
+- The record protocol is version 23. The header is the magic and version; a Page record carries the page size for layout records, and Family, Stylesheet, Setup, Block, Open, Text, Close, and Drawing records carry the element tree. `<img>` bytes are staged with `stage_image` and register as images when first painted, so image order in the PDF stays the document order.
 - `pdf-writer` builds with `opt-level = "z"`, which cuts the WASM by about 23 KB with no measured change in warm render time. `build.sh` prints the brotli size when `brotli` is on PATH.
 
 ## 0.5.0 - 2026-10-27
