@@ -331,6 +331,7 @@ impl Resolver {
     /// The cascaded declarations of element `node`, with var(), calc(), and the font size
     /// resolved: what normalisation reads. `parent` is the parent's result and
     /// `parent_font_size` its normalised font size. Errors name the element path.
+    #[cfg(test)]
     pub fn cascade(
         &self,
         tree: &mut Tree,

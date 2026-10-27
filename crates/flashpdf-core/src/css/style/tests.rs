@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use super::super::page::{page_setup, Format, Margin, PageSetup};
 use super::super::{parse, stylesheet, Stylesheet};
+use super::boxes::{edges, Size};
+use super::font::{COURIER, TIMES};
 use super::*;
 
 fn t(text: &str) -> Value {

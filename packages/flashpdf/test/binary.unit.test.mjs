@@ -31,112 +31,44 @@ test("given a small backend window, when flushing a queued record, then streams 
 	assert.equal(capacityReads, 1);
 });
 
-test("given a rich paragraph over 64 KiB, when writing it, then rejects with a split hint", () => {
-	const memory = { buffer: new ArrayBuffer(4096) };
-	const renderer = {
-		input_ptr: () => 0,
-		input_capacity: () => 4096,
-		push: () => {},
-		finish: () => new Uint8Array(),
-	};
-	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
-	const run = (font, text) => ({
-		font,
-		size: 12,
-		color: [0, 0, 0],
-		text,
-		break: false,
-		underline: false,
-		lineThrough: false,
-		link: undefined,
-	});
-	assert.throws(
-		() => writer.paragraph([run(0, "a".repeat(40_000)), run(1, "b".repeat(40_000))], "left"),
-		/paragraph exceeds 64 KiB; split it into several paragraphs/,
-	);
+const window = (staged) => ({
+	input_ptr: () => 0,
+	input_capacity: () => 4096,
+	push: () => {},
+	finish: () => new Uint8Array(),
+	stage_image: (bytes) => staged.push(bytes) - 1,
 });
+const img = (src) => ({ kind: "element", tag: "img", classes: [], children: [], src });
 
-test("given the same Uint8Array used for two images, when writing them, then registers it once", () => {
-	const memory = { buffer: new ArrayBuffer(4096) };
-	const registered = [];
-	const renderer = {
-		input_ptr: () => 0,
-		input_capacity: () => 4096,
-		push: () => {},
-		finish: () => new Uint8Array(),
-		add_image: (bytes) => registered.push(bytes) - 1,
-	};
-	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
+test("given the same Uint8Array used for two images, when writing them, then stages it once", () => {
+	const staged = [];
+	const renderer = window(staged);
+	const writer = new ProtocolWriter(
+		new Binary(renderer, { buffer: new ArrayBuffer(4096) }),
+		renderer,
+	);
 	const logo = new Uint8Array([1, 2, 3]);
-	writer.image(
-		logo,
-		{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
-		"",
-		undefined,
-	);
-	writer.image(
-		logo,
-		{ width: { kind: 1, value: 40 }, height: 20, maxWidth: undefined, maxHeight: undefined },
-		"Logo",
-		"https://example.com/",
-	);
-	writer.image(
-		new Uint8Array([1, 2, 3]),
-		{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
-		"",
-		undefined,
-	);
-	assert.equal(registered.length, 2);
-	assert.equal(registered[0], logo);
+	writer.block(0, [img(logo), img(logo), img(new Uint8Array([1, 2, 3]))]);
+	assert.equal(staged.length, 2);
+	assert.equal(staged[0], logo);
 });
 
 test("given images totalling over 64 MiB, when writing them, then rejects the last one before copying it into WASM", () => {
-	const memory = { buffer: new ArrayBuffer(4096) };
-	const copied = [];
-	const renderer = {
-		input_ptr: () => 0,
-		input_capacity: () => 4096,
-		push: () => {},
-		finish: () => new Uint8Array(),
-		add_image: (bytes) => copied.push(bytes.byteLength) - 1,
-	};
-	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
-	const half = new Uint8Array(32 * 1024 * 1024 + 1);
-	writer.image(
-		half,
-		{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
-		"",
-		undefined,
+	const staged = [];
+	const renderer = window(staged);
+	const writer = new ProtocolWriter(
+		new Binary(renderer, { buffer: new ArrayBuffer(4096) }),
+		renderer,
 	);
+	const half = new Uint8Array(32 * 1024 * 1024 + 1);
 	assert.throws(
-		() =>
-			writer.image(
-				half.slice(),
-				{ width: undefined, height: undefined, maxWidth: undefined, maxHeight: undefined },
-				"",
-				undefined,
-			),
+		() => writer.block(0, [img(half), img(half.slice())]),
 		/^Error: images exceed 64 MiB per render$/,
 	);
-	assert.deepEqual(copied, [half.byteLength]);
-});
-
-test("given page breaks past 10000 pages, when writing them, then rejects before the core sees the extra page", () => {
-	const memory = { buffer: new ArrayBuffer(4096) };
-	let bytes = 0;
-	const renderer = {
-		input_ptr: () => 0,
-		input_capacity: () => 4096,
-		push: (length) => {
-			bytes += length;
-		},
-		finish: () => new Uint8Array(),
-	};
-	const writer = new ProtocolWriter(new Binary(renderer, memory), renderer);
-	for (let page = 1; page < 10_000; page++) writer.pageBreak();
-	assert.throws(() => writer.pageBreak(), /^Error: document exceeds 10000 pages; split it/);
-	writer.end();
-	assert.equal(bytes, 10_000 * 5);
+	assert.deepEqual(
+		staged.map((bytes) => bytes.byteLength),
+		[half.byteLength],
+	);
 });
 
 test("given a WASM fetch that fails once, when loading again, then retries instead of keeping the failure", async () => {

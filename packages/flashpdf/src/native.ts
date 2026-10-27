@@ -35,7 +35,7 @@ export function loadBackend(): Promise<Backend> {
 	return native ? Promise.resolve(native) : loadWasm();
 }
 
-/** Every engine shares one window: a render writes and pushes synchronously from create to finish. */
+/** Every engine shares one window: each flush copies a chunk in and pushes it in one synchronous call. */
 export function nativeBackend(addon: Addon): Backend {
 	const window = new Uint8Array(addon.INPUT_CAPACITY);
 	return {

@@ -1451,3 +1451,106 @@ fn given_a_rounded_box_crossing_a_page_when_decoding_then_keeps_its_children_tog
     assert!(crate::tests::page_text(&pdf, 1).is_empty());
     assert_eq!(crate::tests::page_text(&pdf, 2), "one\ntwo");
 }
+
+/// A Setup record with no page options: the page is `@page`'s, or A4 with 36pt margins.
+fn elements(sheets: &[&str]) -> Vec<u8> {
+    let mut bytes = MAGIC.to_vec();
+    bytes.extend(VERSION.to_le_bytes());
+    for sheet in sheets {
+        bytes.extend(record(27, &[&[0], sheet.as_bytes()].concat()));
+    }
+    bytes.extend(record(28, &[0, 0, 0, 0]));
+    bytes
+}
+
+/// An Open record of the tag at `tag` in `TAGS` with `flags`, no id or classes, then `rest`.
+fn open(tag: u8, flags: u16, rest: &[u8]) -> Vec<u8> {
+    let mut payload = vec![tag];
+    payload.extend(flags.to_le_bytes());
+    payload.extend(0_u16.to_le_bytes());
+    payload.extend(rest);
+    record(30, &payload)
+}
+
+fn element_text(value: &str) -> Vec<u8> {
+    record(31, &[&[0], value.as_bytes()].concat())
+}
+
+const MAIN: u8 = 0;
+const DIV: u8 = 1;
+const P: u8 = 18;
+const IMG: u8 = 51;
+
+#[test]
+fn given_element_records_with_a_stylesheet_header_and_staged_image_when_decoding_then_compiles_the_page(
+) {
+    let mut bytes = elements(&[".a { color: red }", "@page { size: A5 }"]);
+    bytes.extend(record(29, &[1]));
+    bytes.extend(open(P, 0, &[]));
+    bytes.extend(element_text("Top"));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(29, &[0]));
+    bytes.extend(open(MAIN, 0, &[]));
+    let mut styled = vec![P];
+    styled.extend(0_u16.to_le_bytes());
+    styled.extend(1_u16.to_le_bytes());
+    styled.extend(text(b"a"));
+    bytes.extend(record(30, &styled));
+    bytes.extend(element_text("Hello"));
+    bytes.extend(record(32, &[]));
+    bytes.extend(open(IMG, 1 << 10, &0_u16.to_le_bytes()));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(255, &[]));
+    let mut decoder = Decoder::default();
+    decoder.stage_image(png(1, 1, 0, 8, &[0, 128])).unwrap();
+    decoder.push(&bytes).unwrap();
+    let pdf = lopdf::Document::load_mem(&decoder.finish().unwrap()).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "Hello\nTop");
+    let page = pdf.get_pages()[&1];
+    let media = pdf.get_dictionary(page).unwrap().get(b"MediaBox").unwrap();
+    assert_eq!(media.as_array().unwrap()[2].as_float().unwrap(), 420.0);
+}
+
+#[test]
+fn given_element_records_outside_the_protocol_when_decoding_then_rejects() {
+    let body = |records: &[Vec<u8>]| {
+        let mut bytes = elements(&[]);
+        bytes.extend(record(29, &[0]));
+        bytes.extend(records.concat());
+        bytes.extend(record(255, &[]));
+        bytes
+    };
+    let close = record(32, &[]);
+    let deep: Vec<Vec<u8>> = (0..66).map(|_| open(DIV, 0, &[])).collect();
+    let mut late = elements(&[]);
+    late.extend(record(2, &0.0_f32.to_le_bytes()));
+    let mut early = MAGIC.to_vec();
+    early.extend(VERSION.to_le_bytes());
+    early.extend(open(P, 0, &[]));
+    let mut reordered = elements(&[]);
+    reordered.extend(record(29, &[0]));
+    reordered.extend(record(29, &[1]));
+    for (bytes, message) in [
+        (body(&[open(200, 0, &[]), close.clone()]), "invalid tag"),
+        (body(&[open(DIV, 1 << 2, &text(b"https://a.b/")), close.clone()]), "invalid element attributes"),
+        (body(&[open(IMG, 1 << 10, &5_u16.to_le_bytes()), close.clone()]), "unknown image"),
+        (body(&deep), "nesting exceeds 64"),
+        (body(std::slice::from_ref(&close)), "invalid nesting"),
+        (body(&[open(DIV, 0, &[])]), "invalid nesting"),
+        (body(&[record(31, &[0, 0xff])]), "invalid UTF-8"),
+        (body(&[record(31, &[0, 7])]), "unsupported control character"),
+        (late, "invalid nesting"),
+        (early, "invalid nesting"),
+        (reordered, "invalid nesting"),
+        (elements(&["@page { size: B5 }"]), "unsupported page size: B5 (use A3, A4, A5, Letter, Legal, or a width and height) in @page at 1:1"),
+        (
+            body(&[open(P, 1 << 11, &text(b"color: nope")), element_text("x"), close.clone()]),
+            "unsupported color: nope on <p>",
+        ),
+    ] {
+        let mut decoder = Decoder::default();
+        let error = decoder.push(&bytes).err().map(|error| error.to_string());
+        assert_eq!(error.as_deref(), Some(message));
+    }
+}

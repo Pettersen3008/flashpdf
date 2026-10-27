@@ -1,5 +1,5 @@
 import { props } from "./assert.js";
-import { parse, type PageDeclaration } from "./css/parser.js";
+import type { PageDeclaration } from "./css/parser.js";
 import type { Element } from "./element.js";
 import { edgeValues, point } from "./style/length.js";
 
@@ -31,27 +31,48 @@ const SIDES = ["top", "right", "bottom", "left"] as const;
 type Size = [width: number, height: number];
 const LONGHANDS = ["margin-top", "margin-right", "margin-bottom", "margin-left"];
 
-/** Margins are top, right, bottom, left. */
-export type PageSetup = { width: number; height: number; margin: number[] };
+type Option = string | number | undefined;
+/** The page render options as the core reads them: a size name or width and height, and
+ *  shorthand margins or each side, top first. */
+export type PageOptions = {
+	format: Option | [Option, Option];
+	orientation: Option;
+	margin: Option | [Option, Option, Option, Option];
+};
 
-/** Render options win over `@page`, as an inline style wins over a stylesheet. */
-export function pageSetup(
-	format: unknown,
-	orientation: unknown,
-	margin: unknown,
-	sheets: readonly string[] = [],
-): PageSetup {
-	const declarations: PageDeclaration[] = [];
-	for (const sheet of sheets) parse(sheet, declarations);
-	const css = cssPage(declarations);
-	const [width, height] = turn(
-		format === undefined ? (css.size ?? named("A4")) : optionSize(format),
-		orientation,
-	);
-	const sides = margin === undefined ? css.margin.map((side) => side ?? 36) : optionMargin(margin);
-	if (sides[1]! + sides[3]! >= width || sides[0]! + sides[2]! >= height)
-		throw new Error("invalid margin: the margins leave no room for content");
-	return { width, height, margin: sides };
+/** Checks the shape of the page options; the core folds them into `@page` and reports values. */
+export function pageOptions(format: unknown, orientation: unknown, margin: unknown): PageOptions {
+	const sides =
+		typeof margin === "object" && margin !== null && !Array.isArray(margin)
+			? props(margin, [...SIDES])
+			: undefined;
+	const size =
+		typeof format === "object" && format !== null && !Array.isArray(format)
+			? props(format, ["width", "height"])
+			: undefined;
+	return {
+		format: size
+			? [option(size.width, "invalid page width"), option(size.height, "invalid page height")]
+			: option(
+					format,
+					"unsupported page size",
+					" (use A3, A4, A5, Letter, Legal, or a width and height)",
+				),
+		orientation: option(orientation, "invalid orientation"),
+		margin: sides
+			? [
+					option(sides.top, "invalid margin top"),
+					option(sides.right, "invalid margin right"),
+					option(sides.bottom, "invalid margin bottom"),
+					option(sides.left, "invalid margin left"),
+				]
+			: option(margin, "invalid margin"),
+	};
+}
+
+function option(value: unknown, message: string, hint = ""): Option {
+	if (value === undefined || typeof value === "string" || typeof value === "number") return value;
+	throw new Error(`${message}: ${String(value)}${hint}`);
 }
 
 /** Folds `@page` declarations as the cascade does: normal ones in source order, then `!important` ones. */
@@ -86,19 +107,6 @@ function cssSize(value: string): Size {
 	const format = tokens.filter((token) => !orientation.includes(token));
 	if (orientation.length > 1 || format.length > 1) throw new Error(`invalid page size: ${value}`);
 	return turn(named(format[0] ?? "A4"), orientation[0]?.toLowerCase());
-}
-
-function optionSize(format: unknown): Size {
-	if (typeof format !== "object" || format === null || Array.isArray(format)) return named(format);
-	const { width, height } = props(format, ["width", "height"]);
-	return [side(width, "page width"), side(height, "page height")];
-}
-
-function optionMargin(value: unknown): number[] {
-	if (typeof value !== "object" || value === null || Array.isArray(value))
-		return edgeValues(value, "margin").map((side) => length(side, "margin"));
-	const sides = props(value, [...SIDES]);
-	return SIDES.map((name) => length(sides[name], `margin ${name}`));
 }
 
 function named(format: unknown): Size {

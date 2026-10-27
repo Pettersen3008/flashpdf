@@ -152,13 +152,6 @@ fn boxes(records: &[Record]) -> Vec<Box> {
         .collect()
 }
 
-fn texts(records: &[Record]) -> Vec<String> {
-    paragraphs(records)
-        .iter()
-        .map(|runs| runs.iter().map(|run| run.text.as_str()).collect())
-        .collect()
-}
-
 const TOP: Slot = Slot::Cell { align: 0, rows: 1 };
 const SHARE: Column = Column {
     kind: 1,
@@ -1521,5 +1514,25 @@ fn given_an_engine_error_while_writing_when_compiling_then_explains_it_and_names
     assert_eq!(
         engine_failure("PageOverflow", decorated),
         "PageOverflow: use document margins or split this decorated box on <div>"
+    );
+}
+
+#[test]
+fn given_a_paragraph_over_64_kib_when_compiling_then_rejects_with_a_split_hint() {
+    let long = vec![node("p", "", vec![text(&"a".repeat(70_000))])];
+    assert_eq!(
+        rejects(long),
+        "paragraph exceeds 64 KiB; split it into several paragraphs on <p>"
+    );
+}
+
+#[test]
+fn given_page_breaks_past_10000_pages_when_compiling_then_rejects_before_the_engine_sees_the_extra_page(
+) {
+    let pages = (0..10_001)
+        .map(|_| node("p", "break-before: page", vec![text("x")]))
+        .collect();
+    assert!(
+        rejects(pages).starts_with("document exceeds 10000 pages; split it across several renders")
     );
 }

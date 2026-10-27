@@ -42,10 +42,10 @@ impl PdfRenderer {
             .map_err(|value| error(value.to_string()))
     }
 
-    #[napi(js_name = "add_image")]
-    pub fn add_image(&mut self, bytes: &[u8]) -> Result<u32> {
+    #[napi(js_name = "stage_image")]
+    pub fn stage_image(&mut self, bytes: &[u8]) -> Result<u32> {
         self.decoder
-            .add_image(bytes.to_vec())
+            .stage_image(bytes.to_vec())
             .map(u32::from)
             .map_err(|value| error(value.to_string()))
     }
@@ -67,12 +67,6 @@ impl PdfRenderer {
         self.decoder
             .push(input)
             .map_err(|value| error(value.to_string()))
-    }
-
-    /// Records decoded so far; after a failed `push`, the index of the failing record.
-    #[napi]
-    pub fn records(&self) -> u32 {
-        self.decoder.records() as u32
     }
 
     #[napi]

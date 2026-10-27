@@ -49,7 +49,8 @@ function record(opcode, payload = new Uint8Array()) {
 }
 
 function protocolHeader() {
-	return join(encoder.encode("FPDF"), u16(22), f32(120), f32(60), ...[10, 10, 10, 10].map(f32));
+	const page = join(f32(120), f32(60), ...[10, 10, 10, 10].map(f32));
+	return join(encoder.encode("FPDF"), u16(23), record(1, page));
 }
 
 /** A left-aligned paragraph of one plain Helvetica run, with two orphans and two widows. */
@@ -175,50 +176,27 @@ test("given invalid protocol input, when pushed, then the release WASM reports t
 	assert.throws(() => renderProtocol(wasm, [protocolHeader()]), /truncated protocol/);
 });
 
-test("given typography and a sized translucent box, when the JavaScript writer feeds WASM, then the decoder preserves the text", () => {
+test("given an element tree, when the JavaScript writer feeds WASM, then the core compiles and keeps the text", () => {
 	const wasm = loadWasm();
 	const renderer = new PdfRenderer();
 	const writer = new ProtocolWriter(new Binary(renderer, wasm.memory), renderer);
-	writer.header(120, 60, [10, 10, 10, 10]);
-	writer.boxStart({
-		margin: [0, 0, 0, 0],
-		padding: [2, 2, 2, 2],
-		border: [1, 1, 1, 1],
-		borderColor: Array.from({ length: 4 }, () => [0, 0, 0]),
-		borderStyle: [1, 1, 1, 1],
-		background: [240, 240, 240],
-		radius: { values: Array(8).fill(2), percent: 0 },
-		opacity: 0.6,
-		size: { width: { kind: 1, value: 80 }, height: 20 },
+	const element = (tag, style, children) => ({
+		kind: "element",
+		tag,
+		classes: [],
+		style,
+		children,
 	});
-	writer.paragraph(
-		[
-			{
-				font: 0,
-				size: 10,
-				lineHeight: 12,
-				color: [0, 0, 0],
-				text: "Wire valid",
-				break: false,
-				underline: true,
-				lineThrough: true,
-				decorationColor: [20, 40, 60],
-				link: "https://example.com/",
-				opacity: 0.6,
-				oblique: true,
-				letterSpacing: 0.5,
-				wordSpacing: 1,
-				kerning: false,
-				rise: 1,
-				background: [255, 255, 0],
-				marker: 0,
-				whiteSpace: "normal",
-				transform: "none",
-			},
-		],
-		"left",
-	);
-	writer.boxEnd();
+	writer.header();
+	writer.stylesheet(".a { color: red }");
+	writer.setup(false, { format: [120, 60], orientation: undefined, margin: 10 });
+	writer.block(0, [
+		element("div", "border: 1pt solid; opacity: 0.6", [
+			element("p", { letterSpacing: "0.5pt", textDecoration: "underline" }, [
+				{ kind: "text", value: "Wire valid" },
+			]),
+		]),
+	]);
 	writer.end();
 	assert.equal(validate(renderer.finish(), "protocol-writer-wasm"), "Wire valid");
 });

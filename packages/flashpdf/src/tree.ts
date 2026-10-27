@@ -1,7 +1,7 @@
 import { object, props, text } from "./assert.js";
+import { supported } from "./css/properties.js";
 import type { Style } from "./element.js";
 import { PageToken } from "./page.js";
-import type { NormalizedStyle } from "./style.js";
 import { isMarkup, markup, vector, type Drawing } from "./svg.js";
 
 const REACT_FRAGMENT = Symbol.for("react.fragment");
@@ -117,28 +117,12 @@ export function label(node: {
 }
 
 const located = new WeakSet<Error>();
-/** The innermost element path of each bare PageOverflow, for `pageOverflow()`. */
-const overflows = new WeakMap<Error, string>();
-/** Appends the element path once; a bare PageOverflow stays bare so `box()` can still recognise it. */
+/** Appends the element path once. */
 export function locate(error: unknown, where: string): unknown {
 	if (!(error instanceof Error) || located.has(error)) return error;
-	if (error.message === "PageOverflow") {
-		if (!overflows.has(error)) overflows.set(error, where);
-		return error;
-	}
 	error.message += ` on ${where}`;
 	located.add(error);
 	return error;
-}
-
-/** Explains a PageOverflow that no `break-inside: avoid` box, image, or table claimed. */
-export function pageOverflow(error: unknown): unknown {
-	if (!(error instanceof Error) || error.message !== "PageOverflow") return error;
-	const where = overflows.get(error);
-	return new Error(
-		`PageOverflow: the content does not fit on an empty page; split it into smaller blocks${where ? ` on ${where}` : ""}`,
-		{ cause: error },
-	);
 }
 
 function displayName(type: { displayName?: unknown; name?: unknown }): string {
@@ -421,6 +405,18 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		(typeof input.style !== "object" || input.style === null || Array.isArray(input.style))
 	)
 		throw new Error(`style must be an object or string${where}`);
+	// An unknown key keeps its own message from the core, whatever its value.
+	if (typeof input.style === "object")
+		for (const [key, value] of Object.entries(input.style as object))
+			if (
+				(supported.has(key as never) || key.startsWith("--")) &&
+				value !== undefined &&
+				typeof value !== "string" &&
+				typeof value !== "number"
+			)
+				throw new Error(
+					`style ${key} must be a string or number, not ${value === null ? "null" : typeof value}${where}`,
+				);
 
 	const node: ElementNode = {
 		kind: "element",
@@ -458,13 +454,4 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
  * boundary receives only supported host elements and validated text values. */
 export async function resolveTree(value: unknown): Promise<readonly Node[]> {
 	return host(await reactTree(value));
-}
-
-/** `flex` and `align-self` size and align a flex item; anywhere else they would be
- *  silently dropped, so they are rejected instead. */
-export function rowOnly(s: NormalizedStyle, inRow: boolean) {
-	if (inRow) return;
-	if (s.flexGrow !== undefined || s.flexShrink !== undefined || s.flexBasis !== undefined)
-		throw new Error("flex applies only to a flex item");
-	if (s.alignSelf !== undefined) throw new Error("align-self applies only to a flex item");
 }
