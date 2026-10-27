@@ -20,6 +20,7 @@ pub(crate) struct PositionedLine {
 }
 
 /// One style's stretch of a line; `x` is its offset from the line start.
+#[derive(Clone)]
 pub(crate) struct Segment {
     pub(crate) text: Range<usize>,
     pub(crate) x: Pt,

@@ -273,6 +273,7 @@ dependencies = [
  "miniz_oxide",
  "pdf-writer",
  "rayon",
+ "unicode-bidi",
  "unicode-linebreak",
 ]
 

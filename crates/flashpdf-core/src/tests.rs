@@ -2671,3 +2671,99 @@ fn given_a_character_shaped_into_two_glyphs_when_tagged_then_a_span_carries_its_
     );
     assert!(!tagged(false).1.contains("ActualText"));
 }
+
+fn visual_glyphs(text: &str) -> Vec<u16> {
+    let bytes = render_with(ABEL.to_vec(), text, super::Typography::NORMAL, false);
+    shown_glyphs(&lopdf::Document::load_mem(&bytes).unwrap())
+}
+
+#[test]
+fn given_a_right_to_left_override_when_laid_out_then_its_words_and_their_letters_read_right_to_left(
+) {
+    assert_eq!(
+        visual_glyphs("ab \u{202e}cd ef\u{202c}"),
+        ['a', 'b', ' ', 'f', 'e', ' ', 'd', 'c'].map(abel_glyph)
+    );
+}
+
+#[test]
+fn given_brackets_in_right_to_left_text_when_shaped_then_they_mirror() {
+    // Reversed and mirrored, `(a)` reads `(a)` again; unmirrored it would read `)a(`.
+    assert_eq!(
+        visual_glyphs("\u{202e}(a)\u{202c}"),
+        ['(', 'a', ')'].map(abel_glyph)
+    );
+}
+
+#[test]
+fn given_a_paragraph_whose_first_strong_character_is_right_to_left_when_laid_out_then_trailing_punctuation_moves_to_the_left(
+) {
+    assert_eq!(
+        visual_glyphs("\u{200f}ab cd!"),
+        ['!', 'a', 'b', ' ', 'c', 'd'].map(abel_glyph)
+    );
+}
+
+#[test]
+fn given_right_to_left_words_that_wrap_when_laid_out_then_each_line_reverses_only_its_own_words() {
+    let words = "\u{202e}one two three four five six seven eight nine ten\u{202c}";
+    let pdf = lopdf::Document::load_mem(&render_with(
+        ABEL.to_vec(),
+        &words.repeat(8),
+        super::Typography::NORMAL,
+        false,
+    ))
+    .unwrap();
+    let text = page_text(&pdf, 1);
+    let first = text.lines().next().unwrap();
+    // The first line holds the first words, mirrored, each read backwards.
+    assert!(first.ends_with("owt eno"), "{first}");
+    assert!(text.lines().count() > 1);
+}
+
+const ARABIC: &[u8] =
+    include_bytes!("../../../packages/flashpdf/test/fixtures/NotoSansArabic-subset.ttf");
+const HEBREW: &[u8] =
+    include_bytes!("../../../packages/flashpdf/test/fixtures/NotoSansHebrew-subset.ttf");
+
+fn nominal(font: &[u8], character: char) -> u16 {
+    super::EmbeddedFont::parse(font.to_vec())
+        .unwrap()
+        .glyph(character)
+        .unwrap()
+}
+
+#[test]
+fn given_hebrew_when_laid_out_then_its_letters_show_right_to_left() {
+    let pdf = lopdf::Document::load_mem(&render_with(
+        HEBREW.to_vec(),
+        "\u{5e9}\u{5dc}\u{5d5}\u{5dd}",
+        super::Typography::NORMAL,
+        false,
+    ))
+    .unwrap();
+    let logical =
+        ['\u{5e9}', '\u{5dc}', '\u{5d5}', '\u{5dd}'].map(|letter| nominal(HEBREW, letter));
+    let mut visual = logical;
+    visual.reverse();
+    assert_eq!(shown_glyphs(&pdf), visual);
+}
+
+#[test]
+fn given_arabic_when_shaped_then_its_letters_join_read_right_to_left_and_copy_back_as_letters() {
+    let word = "\u{633}\u{644}\u{627}\u{645}";
+    let pdf = lopdf::Document::load_mem(&render_with(
+        ARABIC.to_vec(),
+        word,
+        super::Typography::NORMAL,
+        false,
+    ))
+    .unwrap();
+    let glyphs = shown_glyphs(&pdf);
+    // Left to right on the page: meem alone after alef, final alef, medial lam, initial seen.
+    assert_eq!(glyphs.len(), 4);
+    assert_eq!(glyphs[0], nominal(ARABIC, '\u{645}'));
+    assert_ne!(glyphs[2], nominal(ARABIC, '\u{644}'));
+    assert_ne!(glyphs[3], nominal(ARABIC, '\u{633}'));
+    assert_eq!(page_text(&pdf, 1).chars().rev().collect::<String>(), word);
+}
