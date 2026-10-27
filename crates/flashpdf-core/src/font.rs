@@ -190,7 +190,13 @@ pub(crate) struct EmbeddedRefs {
 
 /// Type0 over a CIDFontType2 with Identity-H, so show strings are glyph ids;
 /// `/W` lists only used glyphs and `/ToUnicode` maps them back for extraction.
-pub(crate) fn write_embedded(pdf: &mut Pdf, refs: EmbeddedRefs, font: &EmbeddedFont) {
+/// `program` is the subset's length and its deflated bytes.
+pub(crate) fn write_embedded(
+    pdf: &mut Pdf,
+    refs: EmbeddedRefs,
+    font: &EmbeddedFont,
+    (length, program): (usize, Vec<u8>),
+) {
     let name = font.subset_name();
     let name = Name(name.as_bytes());
     pdf.type0_font(refs.font)
@@ -238,10 +244,9 @@ pub(crate) fn write_embedded(pdf: &mut Pdf, refs: EmbeddedRefs, font: &EmbeddedF
         .cap_height(font.cap_height)
         .stem_v(font.stem_v)
         .font_file2(refs.file);
-    let program = font.program();
-    pdf.stream(refs.file, &deflate(&program))
+    pdf.stream(refs.file, &program)
         .filter(Filter::FlateDecode)
-        .pair(Name(b"Length1"), program.len() as i32)
+        .pair(Name(b"Length1"), length as i32)
         .finish();
 
     let mut cmap = UnicodeCmap::new(

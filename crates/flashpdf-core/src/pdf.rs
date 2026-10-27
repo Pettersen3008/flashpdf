@@ -311,6 +311,23 @@ pub(crate) fn finish_pdf(
             .pair(Name(b"First"), first as i32);
     }
 
+    // Subsetting and deflating are per font and independent, so they may run in parallel.
+    let embedded: Vec<&crate::EmbeddedFont> = font_refs
+        .iter()
+        .filter_map(|refs| match &fonts[refs.slot.index()] {
+            Font::Embedded(font) => Some(&**font),
+            Font::Standard(_) => None,
+        })
+        .collect();
+    let mut programs = map_ordered(
+        embedded,
+        |font| font.bytes.len(),
+        |font| {
+            let program = font.program();
+            (program.len(), deflate(&program))
+        },
+    )
+    .into_iter();
     for refs in &font_refs {
         match &fonts[refs.slot.index()] {
             Font::Standard(face) => {
@@ -328,6 +345,7 @@ pub(crate) fn finish_pdf(
                     to_unicode: refs.to_unicode.unwrap(),
                 },
                 font,
+                programs.next().unwrap(),
             ),
         }
     }
@@ -342,8 +360,13 @@ pub(crate) fn finish_pdf(
         pdf.metadata(xmp, xmp_packet(&metadata).as_bytes());
         pdf.icc_profile(profile, SRGB).n(3);
     }
-    for (attachment, (spec, file)) in metadata.attachments.iter().zip(&files) {
-        let data = deflate(&attachment.data);
+    let attached = map_ordered(
+        metadata.attachments.iter().collect(),
+        |attachment| attachment.data.len(),
+        |attachment| deflate(&attachment.data),
+    );
+    for ((attachment, (spec, file)), data) in metadata.attachments.iter().zip(&files).zip(attached)
+    {
         let mut stream = pdf.embedded_file(*file, &data);
         stream.subtype(Name(attachment.mime.as_bytes()));
         stream.filter(Filter::FlateDecode);
@@ -359,8 +382,9 @@ pub(crate) fn finish_pdf(
         }
     }
 
-    for (index, ((content, page_links), page_alphas)) in
-        contents.into_iter().zip(links).zip(alphas).enumerate()
+    let streams = map_ordered(contents, Vec::len, |content| deflate(&content));
+    for (index, ((stream, page_links), page_alphas)) in
+        streams.into_iter().zip(links).zip(alphas).enumerate()
     {
         let page_ref = Ref::new(first_page + index as i32 * 2);
         let stream_ref = Ref::new(first_page + 1 + index as i32 * 2);
@@ -403,8 +427,7 @@ pub(crate) fn finish_pdf(
             output_page.annotations(annotations.iter().copied());
         }
         output_page.finish();
-        pdf.stream(stream_ref, &deflate(&content))
-            .filter(Filter::FlateDecode);
+        pdf.stream(stream_ref, &stream).filter(Filter::FlateDecode);
         for (link, reference) in page_links.iter().zip(annotations) {
             let [x1, y1, x2, y2] = link.rect;
             let mut annotation = pdf.annotation(reference);
@@ -688,6 +711,45 @@ fn xmp_packet(metadata: &Metadata) -> String {
     }
     xmp.push_str("</rdf:RDF></x:xmpmeta><?xpacket end=\"w\"?>");
     xmp
+}
+
+/// Below 64 KiB of input, rayon's handoff costs more than the work it spreads. Tests always
+/// spread, so the parallel path runs on small documents too.
+#[cfg(feature = "parallel")]
+fn worth_spreading(size: usize) -> bool {
+    cfg!(test) || size >= 64 * 1024
+}
+
+/// Maps `items` in order. With the `parallel` feature and enough input, rayon spreads the
+/// calls across threads; `collect` keeps the order, so the bytes match the serial path.
+pub(crate) fn map_ordered<T: Send, R: Send>(
+    items: Vec<T>,
+    size: impl Fn(&T) -> usize,
+    work: impl Fn(T) -> R + Sync + Send,
+) -> Vec<R> {
+    #[cfg(feature = "parallel")]
+    if items.len() > 1 && worth_spreading(items.iter().map(&size).sum()) {
+        use rayon::prelude::*;
+        return items.into_par_iter().map(work).collect();
+    }
+    #[cfg(not(feature = "parallel"))]
+    let _ = size;
+    items.into_iter().map(work).collect()
+}
+
+/// Runs two independent jobs, on two threads under the same rule as `map_ordered`.
+pub(crate) fn join<A: Send, B: Send>(
+    size: usize,
+    a: impl FnOnce() -> A + Send,
+    b: impl FnOnce() -> B + Send,
+) -> (A, B) {
+    #[cfg(feature = "parallel")]
+    if worth_spreading(size) {
+        return rayon::join(a, b);
+    }
+    #[cfg(not(feature = "parallel"))]
+    let _ = size;
+    (a(), b())
 }
 
 /// Fixed level keeps the output byte-for-byte deterministic across runs.

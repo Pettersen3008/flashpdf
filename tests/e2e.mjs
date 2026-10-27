@@ -1,6 +1,14 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	cpSync,
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +17,8 @@ import { deflateSync } from "node:zlib";
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const work = mkdtempSync(join(tmpdir(), "flashpdf-e2e-"));
 const nodeOnly = process.argv.includes("--node-only");
+// Skips Workers, the type check, and the browsers, for jobs that only prove a runtime.
+const noBrowser = process.argv.includes("--no-browser");
 const run = (command, args, options = {}) =>
 	execFileSync(command, args, { cwd: work, encoding: "utf8", stdio: "pipe", ...options });
 // CI installs every optional tool, so a missing one there fails instead of skipping its check.
@@ -30,7 +40,24 @@ try {
 		join(work, "package.json"),
 		JSON.stringify({ name: "flashpdf-consumer", private: true, type: "module" }),
 	);
-	run("npm", ["install", "--silent", "--no-audit", "--no-fund", join(work, tarball)]);
+	// The addon build-native.sh made for this host, installed as its platform package.
+	const platform = `${process.platform}-${process.arch}${process.platform === "linux" ? "-gnu" : ""}`;
+	const native = join(repo, "packages/flashpdf/npm", platform);
+	const nativeBuilt = existsSync(join(native, "flashpdf.node"));
+	if (!nativeBuilt && process.env.CI) throw new Error(`run build-native.sh; ${native} is empty`);
+	if (!nativeBuilt) console.warn(`no native addon for ${platform}; WASM renders everywhere`);
+	const packages = [join(work, tarball)];
+	if (nativeBuilt)
+		packages.push(
+			join(
+				work,
+				run("npm", ["pack", native, "--pack-destination", work, "--silent"])
+					.trim()
+					.split("\n")
+					.at(-1),
+			),
+		);
+	run("npm", ["install", "--silent", "--no-audit", "--no-fund", ...packages]);
 	// Every target renders this one module and must return the bytes Node returns. It reads no
 	// file and imports no builtin, so assets travel as base64 and one source runs everywhere.
 	// A 1x1 grey PNG built by hand, so the packed package proves image XObjects end to end.
@@ -95,9 +122,19 @@ process.stdout.write(Buffer.from(pdf).toString("base64"));
 `,
 	);
 
-	const nodePdf = run(process.execPath, ["consumer.mjs"]);
+	// Counts addon loads, so a native run that silently fell back to WASM fails.
+	const dlopen =
+		"data:text/javascript,const o=process.dlopen;process.dlopen=(...a)=>{process.on('exit',()=>console.error('dlopen'));return o(...a)}";
+	const nodeRun = spawnSync(process.execPath, ["--import", dlopen, "consumer.mjs"], {
+		cwd: work,
+		encoding: "utf8",
+	});
+	if (nodeRun.status !== 0) throw new Error(nodeRun.stderr);
+	const nodePdf = nodeRun.stdout;
 	if (!nodePdf.startsWith("JVBER")) throw new Error("Node did not render a PDF");
-	console.log("node: ok");
+	if (nativeBuilt !== nodeRun.stderr.includes("dlopen"))
+		throw new Error(`Node ${nativeBuilt ? "did not load" : "loaded"} the native addon`);
+	console.log(`node (${nativeBuilt ? "native" : "wasm"}): ok`);
 
 	const pdfPath = join(work, "consumer.pdf");
 	writeFileSync(pdfPath, Buffer.from(nodePdf, "base64"));
@@ -144,7 +181,25 @@ export async function handler() {
 		console.log("bun: ok");
 	}
 
-	if (!nodeOnly) {
+	// Deno needs --allow-ffi only to load the addon; WASM needs only --allow-read.
+	const deno = !nodeOnly && installed("deno", "Deno support is unverified on this target");
+	if (deno) {
+		if (run("deno", ["run", "--allow-read", "--allow-ffi", "consumer.mjs"]) !== nodePdf)
+			throw new Error("Deno output differs from Node");
+		console.log("deno: ok");
+	}
+
+	if (nativeBuilt) {
+		// Without the platform package every runtime falls back to WASM, which must match byte for byte.
+		rmSync(join(work, "node_modules/@pettersen3008", `flashpdf-${platform}`), { recursive: true });
+		if (run(process.execPath, ["consumer.mjs"]) !== nodePdf)
+			throw new Error("Node WASM output differs from native");
+		if (deno && run("deno", ["run", "--allow-read", "consumer.mjs"]) !== nodePdf)
+			throw new Error("Deno WASM output differs from native");
+		console.log("wasm fallback matches native: ok");
+	}
+
+	if (!nodeOnly && !noBrowser) {
 		writeFileSync(
 			join(work, "worker.mjs"),
 			`import { renderInvoice } from "./invoice.mjs";

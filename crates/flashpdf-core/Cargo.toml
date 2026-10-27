@@ -9,7 +9,12 @@ itoa = "=1.0.18"
 libm = { version = "=0.2.16", default-features = false }
 miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
 pdf-writer = "=0.15.0"
+rayon = { version = "=1.12.0", optional = true }
 unicode-linebreak = "=0.1.5"
+
+[features]
+# Native builds only: spreads independent finish work over threads, same bytes.
+parallel = ["dep:rayon"]
 
 [dev-dependencies]
 lopdf = { version = "0.45", default-features = false }

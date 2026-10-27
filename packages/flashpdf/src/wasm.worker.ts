@@ -1,8 +1,10 @@
-import { initSync } from "../wasm/flashpdf_wasm.js";
+import { initSync, PdfRenderer } from "../wasm/flashpdf_wasm.js";
 // @ts-expect-error Wrangler loads .wasm imports as WebAssembly.Module.
 import module from "../wasm/flashpdf_wasm_bg.wasm";
+import type { Backend } from "./binary.js";
 
-let initialization: ReturnType<typeof initSync> | undefined;
-export function loadWasm(): Promise<ReturnType<typeof initSync>> {
-	return Promise.resolve((initialization ??= initSync({ module })));
+let initialization: Backend | undefined;
+export function loadBackend(): Promise<Backend> {
+	initialization ??= { memory: initSync({ module }).memory, create: () => new PdfRenderer() };
+	return Promise.resolve(initialization);
 }

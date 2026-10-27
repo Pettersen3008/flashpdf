@@ -45,11 +45,14 @@
 		}
 	},
 	"imports": {
-		"#wasm": {
-			"types": "./src/wasm.ts",
+		"#backend": {
+			"types": "./src/native.ts",
 			"workerd": "./dist/wasm.worker.js",
 			"edge-light": "./dist/wasm.worker.js",
 			"browser": "./dist/wasm.browser.js",
+			"bun": "./dist/native.js",
+			"deno": "./dist/native.js",
+			"node": "./dist/native.js",
 			"default": "./dist/wasm.js"
 		}
 	},

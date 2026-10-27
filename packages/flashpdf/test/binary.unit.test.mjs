@@ -148,9 +148,9 @@ test("given a WASM fetch that fails once, when loading again, then retries inste
 		return new Response(bytes, { headers: { "Content-Type": "application/wasm" } });
 	};
 	try {
-		const { loadWasm } = await import("../dist/wasm.browser.js");
-		await assert.rejects(loadWasm(), /network down/);
-		assert.ok((await loadWasm()).memory);
+		const { loadBackend } = await import("../dist/wasm.browser.js");
+		await assert.rejects(loadBackend(), /network down/);
+		assert.ok((await loadBackend()).memory);
 		assert.equal(fetches, 2);
 	} finally {
 		globalThis.fetch = original;

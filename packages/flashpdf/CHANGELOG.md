@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Node, Bun, and Deno render through a native N-API addon when a prebuilt one exists for the platform, and through the WASM otherwise. The bytes are the same either way. The addon skips WASM compilation, so on the 80-line benchmark invoice the first render in a fresh process takes roughly half as long; warm renders gain less while the TypeScript cascade and compile dominate them. The release publishes one `@pettersen3008/flashpdf-<platform>` package per platform as an optional dependency. The loader moves from the `#wasm` to the `#backend` imports map, with `bun`, `deno`, and `node` conditions.
+- The native build deflates page streams, subsets fonts, and splits PNG alpha planes on several threads once a document holds 64 KiB of such work. Output order is fixed, so the bytes match a single thread.
+- Deno 2 is a tested runtime.
+
 ### Changed
 
 - Lines break at the Unicode UAX #14 break opportunities instead of only at ASCII whitespace and between CJK characters: after a hyphen or `/`, never before closing punctuation, so a long URL or hyphenated word wraps at a natural point instead of mid-glyph. U+00AD shows as `-` only where a line breaks there, U+200B breaks invisibly, and U+2060 keeps text together. FlashPDF depends on the `unicode-linebreak` crate for this, which adds about 23 KB to the WASM.

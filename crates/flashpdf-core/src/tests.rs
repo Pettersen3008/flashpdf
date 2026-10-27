@@ -2450,3 +2450,40 @@ fn sized(size: super::BoxSize, background: Option<Rgb>) -> Command<'static> {
 }
 
 const RED: Option<Rgb> = Some(Rgb { r: 255, g: 0, b: 0 });
+
+#[cfg(feature = "parallel")]
+#[test]
+fn given_many_pages_and_two_fonts_when_finished_on_one_or_four_threads_then_the_bytes_match() {
+    let abel = include_bytes!("../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
+    let paragraph = (1..=400)
+        .map(|n| format!("Line {n} \u{20ac}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let render = || {
+        let fonts = (0..2)
+            .map(|_| super::EmbeddedFont::parse(abel.to_vec()).unwrap())
+            .collect();
+        let mut renderer = super::Renderer::with_fonts(page(), fonts);
+        for slot in [12, 13] {
+            let style = TextStyle {
+                font: super::FontId::new(slot),
+                ..TextStyle::plain(Pt(10.0))
+            };
+            renderer
+                .push(&[Command::Text {
+                    text: &paragraph,
+                    style,
+                }])
+                .unwrap();
+        }
+        renderer.finish().unwrap()
+    };
+    let on = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(render)
+    };
+    assert_eq!(on(1), on(4));
+}

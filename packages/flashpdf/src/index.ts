@@ -1,4 +1,4 @@
-import { loadWasm } from "#wasm";
+import { loadBackend } from "#backend";
 
 import { createRenderer } from "./render.js";
 
@@ -9,4 +9,4 @@ export { createElement } from "./jsx-runtime.js";
 export { PageNumber, TotalPages } from "./page.js";
 export type { Attachment, EmbeddedFont, FacturX, PdfMetadata, RenderOptions } from "./render.js";
 
-export const render = createRenderer(loadWasm);
+export const render = createRenderer(loadBackend);

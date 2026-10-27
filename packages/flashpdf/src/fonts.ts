@@ -1,12 +1,14 @@
-import type { PdfRenderer } from "../wasm/flashpdf_wasm.js";
 import { props } from "./assert.js";
-import { asError } from "./binary.js";
+import { asError, type Engine } from "./binary.js";
 import { type FontSlots, helvetica } from "./style.js";
 
 /** The core's cap, checked first because `add_font` copies the bytes into WASM memory. */
 const MAX_FONT_BYTES = 64 * 1024 * 1024;
 
-export function registerFonts(renderer: PdfRenderer, value: unknown): Map<string, FontSlots> {
+export function registerFonts(
+	renderer: Pick<Engine, "add_font">,
+	value: unknown,
+): Map<string, FontSlots> {
 	const result = new Map<string, FontSlots>([["Helvetica", helvetica]]);
 	if (value === undefined) return result;
 	if (!Array.isArray(value)) throw new Error("invalid fonts");

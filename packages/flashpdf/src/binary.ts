@@ -8,6 +8,17 @@ export interface InputWindow {
 	finish(): Uint8Array;
 }
 
+/** One render's engine; the WASM glue's `PdfRenderer` and the N-API addon both fit. */
+export interface Engine extends InputWindow {
+	add_font(bytes: Uint8Array): number;
+	add_image(bytes: Uint8Array): number;
+	add_attachment(bytes: Uint8Array): number;
+	free(): void;
+}
+
+/** What `#backend` loads: a factory for engines and the memory their input windows live in. */
+export type Backend = { memory: { buffer: ArrayBufferLike }; create(): Engine };
+
 /** The largest record: opcode, u32 length, and a 64 KiB payload. */
 const RECORD = 65541;
 
