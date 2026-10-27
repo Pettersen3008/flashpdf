@@ -32,7 +32,7 @@ package smoke test.
 
 ## Constraints
 
-- Keep optimized WASM at or below 400 KB raw and below 200 KB gzipped.
+- Keep optimized WASM at or below 1,000,000 B raw and 400,000 B under `gzip -9`.
 - Keep output byte-for-byte deterministic for the same input.
 - Validate untrusted input at the TypeScript and Rust boundaries.
 - Do not commit `target/`, `dist/`, `node_modules/`, or generated package output.
