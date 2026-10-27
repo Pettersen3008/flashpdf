@@ -7,6 +7,7 @@ use crate::layout::output::{Gap, LayoutBuffer, Lift, PositionedLine, Segment, MA
 use crate::layout::LayoutError;
 use crate::{FontId, Marker, Pt, RenderError, Rgb, TextAlign, Typography};
 
+#[derive(Clone)]
 struct RunMetrics<'a> {
     font: &'a Font,
     id: FontId,
@@ -95,6 +96,8 @@ pub(crate) struct ParagraphLayouter<'a> {
     runs: Vec<RunMetrics<'a>>,
     /// Characters of the pending piece in an embedded font, shaped when the piece ends.
     unshaped: String,
+    /// A run and fallback font, and the index in `runs` of the run drawn in that font.
+    fallbacks: Vec<(usize, FontId, usize)>,
     /// UAX #9 level per byte of the paragraph text, empty when it has no right-to-left text.
     levels: Vec<u8>,
     /// The level of the character being read.
@@ -179,6 +182,7 @@ impl<'a> ParagraphLayouter<'a> {
             fonts,
             runs,
             unshaped: String::new(),
+            fallbacks: Vec::new(),
             levels: levels(paragraph.text),
             level: 0,
             line_levels: Vec::new(),
@@ -340,7 +344,15 @@ impl<'a> ParagraphLayouter<'a> {
             }
             self.shape(index, &mut piece, output)?;
             let start = output.text.len();
-            let mut width = self.runs[index].encode(character, &mut output.text)?;
+            let mut width = match self.runs[index].encode(character, &mut output.text) {
+                Err(LayoutError::MissingGlyph(_) | LayoutError::UnsupportedCharacter(_)) => {
+                    let mut buffer = [0; 4];
+                    let cluster = character.encode_utf8(&mut buffer);
+                    self.fall_back(index, cluster, character, &mut piece, output)?;
+                    continue;
+                }
+                width => width?,
+            };
             let lead = if character.is_whitespace() {
                 self.previous = None;
                 Pt::ZERO
@@ -398,15 +410,111 @@ impl<'a> ParagraphLayouter<'a> {
         if self.unshaped.is_empty() {
             return Ok(());
         }
+        let text = std::mem::take(&mut self.unshaped);
+        let placed = match self.place(run, &text, piece, output) {
+            Ok(()) => Ok(()),
+            Err(missing) => self.fall_back(run, &text, missing, piece, output),
+        };
+        self.unshaped = text;
+        self.unshaped.clear();
+        placed
+    }
+
+    /// Draws each cluster of `text` in the run's font when it has every glyph, else in
+    /// the first registered font that does, shaping each stretch in one font together.
+    /// A cluster no font draws rejects, naming the character the run's font lacks.
+    fn fall_back(
+        &mut self,
+        run: usize,
+        text: &str,
+        missing: char,
+        piece: &mut Option<Piece>,
+        output: &mut LayoutBuffer,
+    ) -> Result<(), LayoutError> {
+        let primary = self.runs[run].id;
+        let candidates = self.fonts.fallbacks(primary);
+        let mut parts: Vec<(usize, Range<usize>)> = Vec::new();
+        for cluster in clusters(text) {
+            let source = &text[cluster.clone()];
+            let target = if self.fonts.covers(primary, source) {
+                run
+            } else {
+                let font = candidates
+                    .iter()
+                    .copied()
+                    .find(|candidate| self.fonts.covers(*candidate, source))
+                    .ok_or_else(|| {
+                        let mut buffer = [0; 4];
+                        // A built-in font names the character it cannot encode, as before fallback.
+                        let error = match self.runs[run].font {
+                            Font::Standard(_) => LayoutError::UnsupportedCharacter,
+                            Font::Embedded(_) => LayoutError::MissingGlyph,
+                        };
+                        error(
+                            source
+                                .chars()
+                                .find(|character| {
+                                    !self
+                                        .fonts
+                                        .covers(primary, character.encode_utf8(&mut buffer))
+                                })
+                                .unwrap_or(missing),
+                        )
+                    })?;
+                self.fallback_run(run, font)
+            };
+            match parts.last_mut() {
+                Some((last, range)) if *last == target => range.end = cluster.end,
+                _ => parts.push((target, cluster)),
+            }
+        }
+        for (target, range) in parts {
+            if piece.is_some_and(|piece| piece.run != target) {
+                self.pieces.extend(piece.take());
+            }
+            self.place(target, &text[range], piece, output)
+                .map_err(LayoutError::MissingGlyph)?;
+        }
+        self.pieces.extend(piece.take());
+        Ok(())
+    }
+
+    /// The index in `runs` of `run` drawn in `font`, which keeps the run's line box.
+    fn fallback_run(&mut self, run: usize, font: FontId) -> usize {
+        if let Some(&(_, _, index)) = self
+            .fallbacks
+            .iter()
+            .find(|(from, id, _)| *from == run && *id == font)
+        {
+            return index;
+        }
+        let face = self.fonts.get(font).expect("a registered fallback font");
+        let metrics = RunMetrics {
+            font: face,
+            id: font,
+            shapes: matches!(face, Font::Embedded(_)),
+            ..self.runs[run].clone()
+        };
+        self.runs.push(metrics);
+        self.fallbacks.push((run, font, self.runs.len() - 1));
+        self.runs.len() - 1
+    }
+
+    /// Shapes `text` in the run's embedded font and appends its glyphs to the piece, or
+    /// names a character the font lacks, having appended nothing.
+    fn place(
+        &mut self,
+        run: usize,
+        text: &str,
+        piece: &mut Option<Piece>,
+        output: &mut LayoutBuffer,
+    ) -> Result<(), char> {
         let metrics = &self.runs[run];
-        let shaped = self
-            .fonts
-            .shape(
-                metrics.id,
-                &self.unshaped,
-                metrics.features | if self.level % 2 == 1 { RTL } else { 0 },
-            )
-            .map_err(LayoutError::MissingGlyph)?;
+        let shaped = self.fonts.shape(
+            metrics.id,
+            text,
+            metrics.features | if self.level % 2 == 1 { RTL } else { 0 },
+        )?;
         let start = output.text.len();
         let lead = shaped.glyphs.first().map_or(0, |glyph| glyph.gap);
         let (_, lead_width) = metrics.gap(start, lead);
@@ -433,11 +541,10 @@ impl<'a> ParagraphLayouter<'a> {
             let codes = start as u32 + first * 2..start as u32 + last * 2;
             output
                 .actual
-                .push((codes, self.unshaped[from as usize..to as usize].into()));
+                .push((codes, text[from as usize..to as usize].into()));
         }
         let (_, inner) = metrics.gap(0, shaped.advance - lead);
         let width = inner + Pt(metrics.typography.letter_spacing * shaped.glyphs.len() as f32);
-        self.unshaped.clear();
         self.previous = None;
         let slot = piece.get_or_insert(Piece {
             run,
@@ -790,6 +897,26 @@ fn levels(text: &str) -> Vec<u8> {
     info.levels.iter().map(|level| level.number()).collect()
 }
 
+/// Byte ranges of `text` that keep together in one font: a character with the
+/// combining marks, joiners, and variation selectors after it.
+fn clusters(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    let joins = |character: char| {
+        matches!(character, '\u{200d}' | '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')
+            || !character.is_ascii()
+                && unicode_bidi::bidi_class(character) == unicode_bidi::BidiClass::NSM
+    };
+    let mut starts = text
+        .char_indices()
+        .filter(move |(at, character)| *at == 0 || !joins(*character))
+        .map(|(at, _)| at)
+        .chain([text.len()])
+        .peekable();
+    std::iter::from_fn(move || {
+        let start = starts.next()?;
+        Some(start..*starts.peek()?)
+    })
+}
+
 /// Adds a fixed gap, merged with one already at the same code.
 fn push_gap(gaps: &mut Vec<(Gap, Pt)>, (gap, width): (Gap, Pt)) {
     match gaps.last_mut() {
@@ -808,5 +935,16 @@ fn text_error(error: RenderError) -> LayoutError {
         }
         RenderError::MissingGlyph(character) => LayoutError::MissingGlyph(character),
         _ => unreachable!("text primitives return only character and glyph errors"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn given_a_letter_with_a_combining_mark_and_a_joiner_when_clustering_then_they_stay_with_their_base(
+    ) {
+        let text = "ae\u{301}\u{200d}b";
+        let clusters: Vec<&str> = super::clusters(text).map(|range| &text[range]).collect();
+        assert_eq!(clusters, ["a", "e\u{301}\u{200d}", "b"]);
     }
 }

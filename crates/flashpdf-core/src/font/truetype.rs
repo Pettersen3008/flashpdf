@@ -28,6 +28,9 @@ pub(crate) struct EmbeddedFont {
     pub(crate) stem_v: f32,
     pub(crate) underline: Stroke,
     pub(crate) strikeout: Stroke,
+    /// The face's style from OS/2, which orders fallback candidates.
+    pub(crate) bold: bool,
+    pub(crate) italic: bool,
     /// Text of used glyphs no code point maps to, such as ligatures, for `/ToUnicode`.
     pub(crate) names: BTreeMap<u16, Box<str>>,
     /// 1000 over units per em.
@@ -91,6 +94,7 @@ impl EmbeddedFont {
             .filter(|value| *value > 0.0)
             .unwrap_or(ascent);
         let weight = os2.and_then(|os2| be_u16(os2, 4).ok()).unwrap_or(400);
+        let selection = os2.and_then(|os2| be_u16(os2, 62).ok()).unwrap_or(0);
         // `post` gives the underline centre, as FreeType reads it; OS/2 gives the strikeout top.
         // A missing or zero-thickness value falls back to Helvetica's.
         let stroke = |table: Option<&[u8]>, position: usize, size: usize, top: bool| {
@@ -140,6 +144,8 @@ impl EmbeddedFont {
             stem_v: (50.0 + (f32::from(weight) / 65.0) * (f32::from(weight) / 65.0)).round(),
             underline,
             strikeout,
+            bold: weight >= 600 || selection & 0x20 != 0,
+            italic: selection & 1 != 0,
             names: BTreeMap::new(),
             scale,
         })
