@@ -201,6 +201,7 @@ export function invoice(total: string) {
     fonts: [font],
   });
 }
+export const download = async () => new Blob([await invoice("EUR 1")], { type: "application/pdf" });
 `,
 		);
 		writeFileSync(

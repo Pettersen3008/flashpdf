@@ -34,6 +34,16 @@
 	"sideEffects": false,
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
+	"typesVersions": {
+		"*": {
+			"jsx-runtime": [
+				"./dist/jsx-runtime.d.ts"
+			],
+			"jsx-dev-runtime": [
+				"./dist/jsx-dev-runtime.d.ts"
+			]
+		}
+	},
 	"imports": {
 		"#wasm": {
 			"types": "./src/wasm.ts",
