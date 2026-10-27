@@ -7,6 +7,7 @@
 - Node, Bun, and Deno render through a native N-API addon when a prebuilt one exists for the platform, and through the WASM otherwise. The bytes are the same either way. The addon skips WASM compilation, so on the 80-line benchmark invoice the first render in a fresh process takes roughly half as long; warm renders gain less while the TypeScript cascade and compile dominate them. The release publishes one `@pettersen3008/flashpdf-<platform>` package per platform as an optional dependency. The loader moves from the `#wasm` to the `#backend` imports map, with `bun`, `deno`, and `node` conditions.
 - The native build deflates page streams, subsets fonts, and splits PNG alpha planes on several threads once a document holds 64 KiB of such work. Output order is fixed, so the bytes match a single thread.
 - Deno 2 is a tested runtime.
+- Embedded fonts are shaped with HarfRust 0.9 and the font's default OpenType features: ligatures, contextual alternates such as Inter's raised colon between digits, positioned combining marks, and GPOS or `kern` table kerning. `/ToUnicode` maps a ligature to all its letters and a private-use alternate to its character, and tagged output marks a cluster its glyphs cannot spell with `/ActualText`. Letter spacing turns `liga` and `clig` off. A shaped word is cached per font and reused while the same font bytes stay registered, so warm renders of the 80-line Inter invoice are no slower than before. The first render in a process shapes every word: about 5 ms more natively and 13 ms more in WASM, which is also slower to compile. The built-in fonts keep their AFM widths and kerning. HarfRust adds about 489 KB raw and 193 KB gzipped to the WASM; versions after 0.9 read fonts through a model that adds about 480 KB more.
 
 ### Changed
 
@@ -19,6 +20,7 @@
 - Tagged output is about a third of its old size: the structure tree goes compact into one Flate object stream, each element names its marked content as `/K <mcid>`, and a cross-reference stream replaces the xref table. The 80-line invoice drops from 52.3 KB to 17.2 KB. Untagged output is unchanged.
 
 ### Internal
+- FlashPDF's own GPOS and `kern` table reader is gone; HarfRust kerns embedded fonts. HarfRust and `read-fonts` build with `opt-level = "z"`, about 100 KB less WASM, since the word cache keeps shaping off the warm path.
 
 - The Rust core gains a port of the CSS parser, selector matcher, cascade, `var()`, `calc()`, style normalisation, and the element compiler, with the TypeScript tests for them ported to Rust. `compile.ts`, the TypeScript page setup, and the TypeScript drawing encoder are gone. The TypeScript CSS parser, cascade, and style modules are gone too; only the SVG colour parser stays in TypeScript.
 - The record protocol is version 23. The header is the magic and version; a Page record carries the page size for layout records, and Family, Stylesheet, StrictStylesheet, Setup, Block, Open, Text, Close, and Drawing records carry the element tree. `<img>` bytes are staged with `stage_image` and register as images when first painted, so image order in the PDF stays the document order.

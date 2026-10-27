@@ -1,11 +1,16 @@
 mod cmap;
-mod kern;
+mod shape;
 mod standard;
 mod subset;
 mod truetype;
 
+pub(crate) use shape::{Shaped, NO_KERNING, NO_LIGATURES};
 pub(crate) use standard::name as base_font;
 pub(crate) use truetype::EmbeddedFont;
+
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use pdf_writer::types::{CidFontType, FontFlags, SystemInfo, UnicodeCmap};
 use pdf_writer::{Filter, Finish, Name, Pdf, Ref, Str};
@@ -30,6 +35,9 @@ pub(crate) struct Stroke {
 pub(crate) struct FontBook {
     fonts: Vec<Font>,
     used: Vec<bool>,
+    /// Per embedded font, after the built-in slots: text of the shaped glyphs no code
+    /// point spells, first use first, for `/ToUnicode`.
+    names: RefCell<Vec<BTreeMap<u16, Box<str>>>>,
 }
 
 impl FontBook {
@@ -41,7 +49,23 @@ impl FontBook {
                 .map(|font| Font::Embedded(Box::new(font))),
         );
         let used = vec![false; fonts.len()];
-        Self { fonts, used }
+        let names = RefCell::new(vec![BTreeMap::new(); fonts.len() - BUILT_IN]);
+        Self { fonts, used, names }
+    }
+
+    /// Shapes `text` in an embedded font, or names a character it has no glyph for.
+    pub(crate) fn shape(&self, id: FontId, text: &str, flags: u8) -> Result<Arc<Shaped>, char> {
+        let Some(Font::Embedded(font)) = self.get(id) else {
+            unreachable!("only embedded fonts shape");
+        };
+        let shaped = font.shaping.shape(font, text, flags)?;
+        if !shaped.names.is_empty() {
+            let names = &mut self.names.borrow_mut()[id.index() - BUILT_IN];
+            for (gid, name) in &shaped.names {
+                names.entry(*gid).or_insert_with(|| name.clone());
+            }
+        }
+        Ok(shaped)
     }
 
     pub(crate) fn get(&self, id: FontId) -> Option<&Font> {
@@ -68,7 +92,15 @@ impl FontBook {
         }
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<Font>, Vec<bool>) {
+    pub(crate) fn into_parts(mut self) -> (Vec<Font>, Vec<bool>) {
+        for (font, names) in self.fonts[BUILT_IN..]
+            .iter_mut()
+            .zip(self.names.into_inner())
+        {
+            if let Font::Embedded(font) = font {
+                font.names = names;
+            }
+        }
         (self.fonts, self.used)
     }
 }
@@ -100,14 +132,11 @@ impl Font {
         }
     }
 
-    /// Pair kerning in 1/1000 em between two codes from `encode_into`.
+    /// AFM pair kerning in 1/1000 em between two codes from `encode_into`; harfrust kerns embedded fonts.
     pub(crate) fn kern(&self, left: &[u8], right: &[u8]) -> i16 {
         match self {
             Self::Standard(face) => standard::kern(*face, left[0], right[0]),
-            Self::Embedded(font) => font.kern(
-                u16::from_be_bytes([left[0], left[1]]),
-                u16::from_be_bytes([right[0], right[1]]),
-            ),
+            Self::Embedded(_) => 0,
         }
     }
 
@@ -257,8 +286,9 @@ pub(crate) fn write_embedded(
             supplement: 0,
         },
     );
-    for (gid, character) in font.unicode() {
-        cmap.pair(gid, character);
+    // A ligature maps to all the characters it shows.
+    for (gid, text) in font.unicode() {
+        cmap.pair_with_multiple(gid, text.chars());
     }
     pdf.stream(refs.to_unicode, &deflate(&cmap.finish()))
         .filter(Filter::FlateDecode);

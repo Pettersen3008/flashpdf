@@ -7,7 +7,8 @@ use std::collections::BTreeMap;
 
 use output::Marks;
 pub(crate) use output::{
-    Decoration, Gap, LayoutBuffer, PositionedBox, PositionedImage, Segment, MARKER_SHAPE,
+    Actual, Decoration, Gap, LayoutBuffer, Lift, PositionedBox, PositionedImage, Segment,
+    MARKER_SHAPE,
 };
 pub(crate) use row::table_width;
 

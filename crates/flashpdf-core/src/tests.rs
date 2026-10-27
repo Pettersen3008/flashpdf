@@ -2487,3 +2487,187 @@ fn given_many_pages_and_two_fonts_when_finished_on_one_or_four_threads_then_the_
     };
     assert_eq!(on(1), on(4));
 }
+
+/// Abel with one more table appended, its record sorted into a directory grown by one.
+fn abel_with(tag: &[u8; 4], table: &[u16]) -> Vec<u8> {
+    let count = usize::from(u16::from_be_bytes([ABEL[4], ABEL[5]]));
+    let data: Vec<u8> = table.iter().flat_map(|word| word.to_be_bytes()).collect();
+    let mut records: Vec<Vec<u8>> = ABEL[12..12 + count * 16]
+        .chunks(16)
+        .map(|record| {
+            let offset = u32::from_be_bytes(record[8..12].try_into().unwrap()) + 16;
+            [&record[..8], &offset.to_be_bytes(), &record[12..]].concat()
+        })
+        .collect();
+    let at = (ABEL.len() as u32 + 16).to_be_bytes();
+    records.push([&tag[..], &[0; 4], &at, &(data.len() as u32).to_be_bytes()].concat());
+    records.sort();
+    let mut font = ABEL[..12].to_vec();
+    font[4..6].copy_from_slice(&(count as u16 + 1).to_be_bytes());
+    font.extend(records.concat());
+    font.extend(&ABEL[12 + count * 16..]);
+    font.extend(data);
+    font
+}
+
+/// A GSUB or GPOS table whose DFLT script turns `feature` on, with one lookup of `kind`.
+fn layout_table(feature: &[u8; 4], kind: u16, subtable: &[u16]) -> Vec<u16> {
+    let half = |at: usize| u16::from_be_bytes([feature[at], feature[at + 1]]);
+    let mut words = vec![1, 0, 10, 30, 44];
+    words.extend([1, u16::from_be_bytes(*b"DF"), u16::from_be_bytes(*b"LT")]);
+    words.extend([8, 4, 0, 0, 0xffff, 1, 0]);
+    words.extend([1, half(0), half(2), 8, 0, 1, 0]);
+    words.extend([1, 4, kind, 0, 1, 8]);
+    words.extend(subtable);
+    words
+}
+
+fn abel_glyph(character: char) -> u16 {
+    super::EmbeddedFont::parse(ABEL.to_vec())
+        .unwrap()
+        .glyph(character)
+        .unwrap()
+}
+
+/// Abel whose `liga` turns f i into the glyph Abel draws for Æ.
+fn ligating_abel() -> Vec<u8> {
+    let [f, i, ae] = ['f', 'i', '\u{c6}'].map(abel_glyph);
+    abel_with(
+        b"GSUB",
+        &layout_table(b"liga", 4, &[1, 8, 1, 14, 1, 1, f, 1, 4, ae, 2, i]),
+    )
+}
+
+fn render_with(font: Vec<u8>, text: &str, typography: super::Typography, tagged: bool) -> Vec<u8> {
+    let font = super::EmbeddedFont::parse(font).unwrap();
+    let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
+    renderer.set_metadata(crate::pdf::Metadata {
+        language: "en".into(),
+        tagged,
+        ..Default::default()
+    });
+    renderer
+        .push(&[Command::Text {
+            text,
+            style: TextStyle {
+                font: super::FontId::new(12),
+                typography,
+                ..TextStyle::plain(Pt(12.0))
+            },
+        }])
+        .unwrap();
+    renderer.finish().unwrap()
+}
+
+/// The show strings of the first page as glyph ids.
+fn shown_glyphs(pdf: &lopdf::Document) -> Vec<u16> {
+    operations(pdf)
+        .iter()
+        .filter(|operation| matches!(operation.operator.as_str(), "Tj" | "TJ"))
+        .flat_map(|operation| match &operation.operands[0] {
+            lopdf::Object::Array(items) => items.clone(),
+            other => vec![other.clone()],
+        })
+        .filter_map(|item| item.as_str().ok().map(<[u8]>::to_vec))
+        .flat_map(|bytes| {
+            bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_font_whose_liga_joins_f_and_i_when_rendered_then_shows_the_ligature_maps_it_to_both_letters_and_embeds_its_outline(
+) {
+    let bytes = render_with(ligating_abel(), "fit", super::Typography::NORMAL, false);
+    assert_eq!(
+        bytes,
+        render_with(ligating_abel(), "fit", super::Typography::NORMAL, false)
+    );
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let [t, ae] = ['t', '\u{c6}'].map(abel_glyph);
+    assert_eq!(shown_glyphs(&pdf), [ae, t]);
+    assert_eq!(page_text(&pdf, 1), "fit");
+    // The program keeps the ligature's outline: the subset of Æ and t alone is as large.
+    let plain = lopdf::Document::load_mem(&abel_text("\u{c6}t").unwrap()).unwrap();
+    let program = |pdf: &lopdf::Document| {
+        pdf.objects
+            .values()
+            .filter_map(|object| object.as_stream().ok())
+            .find(|stream| stream.dict.get(b"Length1").is_ok())
+            .unwrap()
+            .decompressed_content()
+            .unwrap()
+            .len()
+    };
+    assert_eq!(program(&pdf), program(&plain));
+}
+
+#[test]
+fn given_letter_spacing_when_shaping_then_skips_the_optional_ligature() {
+    let spaced = super::Typography {
+        letter_spacing: 1.0,
+        ..super::Typography::NORMAL
+    };
+    let pdf =
+        lopdf::Document::load_mem(&render_with(ligating_abel(), "fi", spaced, false)).unwrap();
+    assert_eq!(shown_glyphs(&pdf), ['f', 'i'].map(abel_glyph));
+}
+
+#[test]
+fn given_abels_kern_table_when_shaped_then_harfrust_kerns_av_unless_kerning_is_off() {
+    let kerned = |kerning| {
+        let typography = super::Typography {
+            kerning,
+            ..super::Typography::NORMAL
+        };
+        let pdf = lopdf::Document::load_mem(&render_with(ABEL.to_vec(), "AVA", typography, false))
+            .unwrap();
+        operands(&pdf, "TJ")
+    };
+    // -41 of 2048 units is -20 thousandths, a TJ adjustment of 20 before each glyph after A V.
+    assert_eq!(kerned(true), [[20.0, 20.0]]);
+    assert!(kerned(false).is_empty());
+}
+
+#[test]
+fn given_a_gpos_placement_that_raises_a_glyph_when_rendered_then_lifts_only_that_glyph_with_a_text_rise(
+) {
+    let i = abel_glyph('i');
+    // 205 of 2048 units up is 100 thousandths, 1.2pt at 12pt.
+    let font = abel_with(b"GPOS", &layout_table(b"mark", 1, &[1, 8, 2, 205, 1, 1, i]));
+    let pdf =
+        lopdf::Document::load_mem(&render_with(font, "xix", super::Typography::NORMAL, false))
+            .unwrap();
+    assert_eq!(operands(&pdf, "Ts"), [[1.2], [0.0]]);
+    assert_eq!(shown_glyphs(&pdf), ['x', 'i', 'x'].map(abel_glyph));
+    assert_eq!(page_text(&pdf, 1), "xix");
+}
+
+#[test]
+fn given_a_character_shaped_into_two_glyphs_when_tagged_then_a_span_carries_its_actual_text() {
+    let [x, a, b] = ['x', 'a', 'b'].map(abel_glyph);
+    let font = abel_with(
+        b"GSUB",
+        &layout_table(b"ccmp", 2, &[1, 8, 1, 14, 1, 1, x, 2, a, b]),
+    );
+    let tagged = |tagged| {
+        let pdf = lopdf::Document::load_mem(&render_with(
+            font.clone(),
+            "axb",
+            super::Typography::NORMAL,
+            tagged,
+        ))
+        .unwrap();
+        (shown_glyphs(&pdf), content(&pdf))
+    };
+    let (glyphs, shown) = tagged(true);
+    assert_eq!(glyphs, [a, a, b, b]);
+    assert!(
+        shown.contains("/Span <<\n  /ActualText (x)\n>> BDC"),
+        "{shown}"
+    );
+    assert!(!tagged(false).1.contains("ActualText"));
+}
