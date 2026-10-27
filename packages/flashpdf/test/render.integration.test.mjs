@@ -303,6 +303,23 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 	);
 });
 
+test("given a string and a tagged template, when calling stylesheet, then returns the joined source", () => {
+	assert.equal(stylesheet(".a { color: red }"), ".a { color: red }");
+	assert.equal(stylesheet`.a { color: ${"red"} }`, ".a { color: red }");
+});
+
+test("given a declared stylesheet with an invalid rule no element matches, when rendering, then rejects every time while the same text undeclared renders", async () => {
+	const source = ".unused { color: notacolor }";
+	const document = jsx("p", { children: "x" });
+	assert.ok(await render(document, { stylesheets: [source] }));
+	const css = stylesheet(source);
+	for (let attempt = 0; attempt < 2; attempt++)
+		await assert.rejects(
+			render(document, { stylesheets: [css] }),
+			/^Error: unsupported color: notacolor in selector "\.unused" at 1:1$/,
+		);
+});
+
 test("given CSS cascade variables and a box, when rendering, then emits painted native content", async () => {
 	const css = stylesheet(
 		`main.invoice { --ink: #123; color: var(--ink); } .card { padding: 4pt; background: #fff; border: 1pt solid #456; } .amount { color: #456; font-weight: bold; text-align: right; }`,

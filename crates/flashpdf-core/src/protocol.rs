@@ -197,6 +197,7 @@ impl Decoder {
         match code {
             Opcode::Family
             | Opcode::Stylesheet
+            | Opcode::StrictStylesheet
             | Opcode::Setup
             | Opcode::Block
             | Opcode::Open
@@ -340,6 +341,7 @@ impl Commands {
             }
             Opcode::Family
             | Opcode::Stylesheet
+            | Opcode::StrictStylesheet
             | Opcode::Setup
             | Opcode::Block
             | Opcode::Open

@@ -1,5 +1,6 @@
 import { props } from "./assert.js";
 import { asError, type Backend, Binary, type Engine } from "./binary.js";
+import { strict } from "./css.js";
 import type { Edges, Element, Length } from "./element.js";
 import { registerFonts } from "./fonts.js";
 import { pageOptions } from "./page.js";
@@ -121,11 +122,12 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 			const writer = new ProtocolWriter(new Binary(renderer, backend.memory), renderer);
 			writer.header();
 			writer.families(fonts);
-			for (const sheet of stylesheets) writer.stylesheet(sheet);
+			for (const sheet of stylesheets) writer.stylesheet(sheet, strict.get(sheet) === false);
 			writer.setup(p.outline === true, page);
 			writer.metadata(metadata, p.tagged === true);
 			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 			writer.flush();
+			for (const sheet of stylesheets) if (strict.has(sheet)) strict.set(sheet, true);
 			const tree = await resolveTree(document);
 			if (tree.some((node) => node.kind !== "element"))
 				throw new Error("expected element or props");

@@ -1,5 +1,5 @@
 import { object } from "./assert.js";
-import { color } from "./style.js";
+import { color } from "./color.js";
 
 type Rgb = readonly [number, number, number];
 type Matrix = readonly [number, number, number, number, number, number];

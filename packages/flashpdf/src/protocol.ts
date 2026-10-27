@@ -1,6 +1,6 @@
 import { asError, Binary } from "./binary.js";
+import type { FontSlots } from "./fonts.js";
 import type { PageOptions } from "./page.js";
-import type { FontSlots } from "./style.js";
 import type { Drawing, Paint } from "./svg.js";
 import { tags, type ElementNode, type Node } from "./tree.js";
 
@@ -16,6 +16,7 @@ const opcode = {
 	text: 31,
 	close: 32,
 	drawing: 33,
+	strictStylesheet: 34,
 	end: 255,
 } as const;
 /** Open record flags: which attributes follow the classes. */
@@ -69,8 +70,9 @@ export class ProtocolWriter {
 		}
 	}
 
-	stylesheet(source: string) {
-		this.long(opcode.stylesheet, source);
+	/** A strict sheet gets the core's full check, as `stylesheet()` promises. */
+	stylesheet(source: string, strict: boolean) {
+		this.long(strict ? opcode.strictStylesheet : opcode.stylesheet, source);
 	}
 
 	setup(outline: boolean, page: PageOptions) {

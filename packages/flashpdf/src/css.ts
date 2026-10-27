@@ -1,31 +1,11 @@
-import { parse, type PageDeclaration } from "./css/parser.js";
-import { cssPage } from "./page.js";
-import { boxStyle, color, style } from "./style.js";
+/** Sources `stylesheet()` declared, true once a render's full check passed. */
+// ponytail: grows with every distinct declared source; bound it if apps build sheets per request.
+export const strict = new Map<string, boolean>();
 
-export { resolveStyles } from "./css/cascade.js";
-export type { StyledNode } from "./css/cascade.js";
-
-/** Validates every declaration of every supported rule up front; `render` only validates rules that match. */
+/** Marks the sheet for a full check: the first `render` that uses it validates every declaration of
+ *  every supported rule, where it otherwise validates only rules that match. */
 export function stylesheet(source: string | TemplateStringsArray, ...values: unknown[]): string {
 	const css = typeof source === "string" ? source : String.raw(source, ...values);
-	const pages: PageDeclaration[] = [];
-	for (const rule of parse(css, { pages }))
-		for (const declarations of rule.blocked ? [] : Object.values(rule.declarations())) {
-			// Custom properties and var() resolve only in an element's cascade, and Tailwind puts
-			// calc() and color-mix() in most utilities, so render checks those where a rule applies.
-			const known = Object.entries(declarations).filter(
-				([key, value]) =>
-					!key.startsWith("--") && !/\b(?:var|calc|min|max|clamp|color-mix)\(/i.test(String(value)),
-			);
-			try {
-				const resolved = style(Object.fromEntries(known));
-				boxStyle(resolved, 12);
-				if (resolved.color !== undefined) color(resolved.color);
-			} catch (error) {
-				if (error instanceof Error) error.message += rule.where;
-				throw error;
-			}
-		}
-	cssPage(pages);
+	if (!strict.has(css)) strict.set(css, false);
 	return css;
 }

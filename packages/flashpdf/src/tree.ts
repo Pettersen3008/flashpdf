@@ -1,8 +1,26 @@
 import { object, props, text } from "./assert.js";
-import { supported } from "./css/properties.js";
 import type { Style } from "./element.js";
 import { PageToken } from "./page.js";
 import { isMarkup, markup, vector, type Drawing } from "./svg.js";
+
+/** The style keys the core supports (css/properties.rs); it rejects any other key by name. */
+const supported = new Set(
+	`
+	display flexDirection flexWrap justifyContent alignItems alignSelf flex flexGrow flexShrink
+	flexBasis width minWidth maxWidth height minHeight maxHeight boxSizing margin marginTop
+	marginRight marginBottom marginLeft padding paddingTop paddingRight paddingBottom paddingLeft
+	border borderWidth borderColor borderTop borderRight borderBottom borderLeft borderStyle
+	borderTopWidth borderRightWidth borderBottomWidth borderLeftWidth borderTopColor
+	borderRightColor borderBottomColor borderLeftColor borderTopStyle borderRightStyle
+	borderBottomStyle borderLeftStyle borderRadius borderTopLeftRadius borderTopRightRadius
+	borderBottomRightRadius borderBottomLeftRadius opacity marginInline marginBlock paddingInline
+	paddingBlock background backgroundColor gap fontSize fontFamily fontWeight fontStyle
+	fontKerning textAlign textTransform textDecoration textDecorationColor whiteSpace verticalAlign
+	listStyle listStyleType listStylePosition color lineHeight letterSpacing wordSpacing
+	breakBefore breakAfter breakInside borderCollapse borderSpacing orphans widows`
+		.trim()
+		.split(/\s+/),
+);
 
 const REACT_FRAGMENT = Symbol.for("react.fragment");
 const FLASHPDF_FRAGMENT = Symbol.for("flashpdf.fragment");
@@ -409,7 +427,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 	if (typeof input.style === "object")
 		for (const [key, value] of Object.entries(input.style as object))
 			if (
-				(supported.has(key as never) || key.startsWith("--")) &&
+				(supported.has(key) || key.startsWith("--")) &&
 				value !== undefined &&
 				typeof value !== "string" &&
 				typeof value !== "number"
