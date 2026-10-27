@@ -1330,9 +1330,17 @@ fn given_pdfa_and_attachment_records_when_decoding_then_rejects_what_the_output_
         "invalid Factur-X XML"
     );
     assert_eq!(
-        error(&[b"<x/>"], &[record(20, &[7, 0, 0])]),
-        "invalid Factur-X profile"
+        error(&[b"<x/>"], &[record(20, &[9, 0, 0])]),
+        "invalid PDF/A profile"
     );
+    // PDF/A-2 rejects an attachment whichever record comes first.
+    let file = attachment(0, 0, "a.txt", "text/plain");
+    for records in [
+        [record(20, &[7]), file.clone()],
+        [file.clone(), record(20, &[8])],
+    ] {
+        assert!(error(&[b"x"], &records).starts_with("PDF/A-2 embeds only files that are PDF/A"));
+    }
     assert_eq!(
         error(
             &[b"<x/>", b"x"],

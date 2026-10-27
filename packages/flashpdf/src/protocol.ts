@@ -107,11 +107,11 @@ export class ProtocolWriter {
 		});
 	}
 
-	/** Profile 0 is plain PDF/A-3b; 1 to 6 embed the Factur-X XML registered as `xml`. */
-	pdfa(profile: number, xml: number) {
+	/** Profile 0 is plain PDF/A-3b, 7 PDF/A-2b, 8 PDF/A-2u; 1 to 6 are PDF/A-3b with the Factur-X XML registered as `xml`. */
+	pdfa(profile: number, xml?: number) {
 		this.binary.record(opcode.pdfa, () => {
 			this.binary.u8(profile);
-			if (profile) this.binary.u16(xml);
+			if (xml !== undefined) this.binary.u16(xml);
 		});
 	}
 

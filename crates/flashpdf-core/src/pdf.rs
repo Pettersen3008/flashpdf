@@ -19,7 +19,7 @@ pub(crate) struct Metadata {
     pub(crate) keywords: String,
     pub(crate) language: String,
     pub(crate) tagged: bool,
-    pub(crate) pdfa: bool,
+    pub(crate) pdfa: Option<PdfA>,
     /// Factur-X conformance level and embedded file name.
     pub(crate) facturx: Option<(&'static str, &'static str)>,
     /// Sorted by name, as the EmbeddedFiles name tree requires.
@@ -28,6 +28,15 @@ pub(crate) struct Metadata {
     pub(crate) anchors: Vec<Anchor>,
     /// Destination name and anchor slot, sorted by name as the Dests name tree requires.
     pub(crate) names: Vec<(String, u16)>,
+}
+
+/// A PDF/A part and conformance level.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PdfA {
+    A2b,
+    /// Level B plus a Unicode mapping for every glyph, which `/ToUnicode` already gives.
+    A2u,
+    A3b,
 }
 
 impl Metadata {
@@ -151,7 +160,7 @@ pub(crate) fn finish_pdf(
     } else {
         Vec::new()
     };
-    let archive = metadata.pdfa.then(|| (allocate(), allocate()));
+    let archive = metadata.pdfa.map(|_| (allocate(), allocate()));
     let files: Vec<(Ref, Ref)> = metadata
         .attachments
         .iter()
@@ -449,7 +458,7 @@ pub(crate) fn finish_pdf(
     }
 
     // FNV-1a over every object written: deterministic, and distinct per document.
-    let id = metadata.pdfa.then(|| {
+    let id = metadata.pdfa.map(|_| {
         pdf.as_bytes()
             .iter()
             .fold(0x6c62272e07bb014262b821756295c58d_u128, |hash, byte| {
@@ -614,8 +623,12 @@ fn xmp_packet(metadata: &Metadata) -> String {
         "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">",
         "<rdf:Description rdf:about=\"\" xmlns:pdfaid=\"http://www.aiim.org/pdfa/ns/id/\"",
         " xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:pdf=\"http://ns.adobe.com/pdf/1.3/\">",
-        "<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
     ));
+    xmp.push_str(match metadata.pdfa {
+        Some(PdfA::A2b) => "<pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
+        Some(PdfA::A2u) => "<pdfaid:part>2</pdfaid:part><pdfaid:conformance>U</pdfaid:conformance>",
+        _ => "<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
+    });
     for (value, open, close) in [
         (
             &metadata.title,

@@ -303,6 +303,34 @@ test("given an invoice with an embedded font and Factur-X XML, when rendering as
 	);
 });
 
+test("given pdfa 2b or 2u, when rendering, then XMP declares part 2 and attachments and Factur-X reject", async () => {
+	const document = jsx("p", { style: { fontFamily: "Abel" }, children: "Total" });
+	const fonts = [{ family: "Abel", regular: font }];
+	for (const [pdfa, level] of [
+		["2b", "B"],
+		["2u", "U"],
+	]) {
+		const text = string(await render(document, { fonts, pdfa }));
+		assert.ok(
+			text.includes(
+				`<pdfaid:part>2</pdfaid:part><pdfaid:conformance>${level}</pdfaid:conformance>`,
+			),
+		);
+		assert.match(text, /\/ToUnicode \d+ 0 R/);
+		const data = new TextEncoder().encode("<x/>");
+		await assert.rejects(
+			render(document, { fonts, pdfa, facturx: { xml: data, profile: "MINIMUM" } }),
+			/^Error: Factur-X embeds its XML, which PDF\/A-2 forbids; use pdfa "3b"$/,
+		);
+		const file = { name: "a.xml", data, mimeType: "text/xml", relationship: "Data" };
+		await assert.rejects(
+			render(document, { fonts, pdfa, attachments: [file] }),
+			/^Error: PDF\/A-2 embeds only files that are PDF\/A themselves; use pdfa '3b'/,
+		);
+	}
+	await assert.rejects(render(document, { fonts, pdfa: "1b" }), /use "2b", "2u", or "3b"/);
+});
+
 test("given a string and a tagged template, when calling stylesheet, then returns the joined source", () => {
 	assert.equal(stylesheet(".a { color: red }"), ".a { color: red }");
 	assert.equal(stylesheet`.a { color: ${"red"} }`, ".a { color: red }");

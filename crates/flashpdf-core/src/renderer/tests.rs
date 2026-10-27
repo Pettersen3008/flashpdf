@@ -223,7 +223,7 @@ fn given_tagged_pdfa_output_when_loading_then_struct_elements_resolve_from_the_o
     renderer.set_metadata(crate::pdf::Metadata {
         language: "en".into(),
         tagged: true,
-        pdfa: true,
+        pdfa: Some(crate::pdf::PdfA::A3b),
         ..Default::default()
     });
     renderer

@@ -9,6 +9,7 @@
 - The native build deflates page streams, subsets fonts, and splits PNG alpha planes on several threads once a document holds 64 KiB of such work. Output order is fixed, so the bytes match a single thread.
 - Deno 2 is a tested runtime.
 - Embedded fonts are shaped with HarfRust 0.9 and the font's default OpenType features: ligatures, contextual alternates such as Inter's raised colon between digits, positioned combining marks, and GPOS or `kern` table kerning. `/ToUnicode` maps a ligature to all its letters and a private-use alternate to its character, and tagged output marks a cluster its glyphs cannot spell with `/ActualText`. Letter spacing turns `liga` and `clig` off. A shaped word is cached per font and reused while the same font bytes stay registered, so warm renders of the 80-line Inter invoice are no slower than before. The first render in a process shapes every word: about 5 ms more natively and 13 ms more in WASM, which is also slower to compile. The built-in fonts keep their AFM widths and kerning. HarfRust adds about 489 KB raw and 193 KB gzipped to the WASM; versions after 0.9 read fonts through a model that adds about 480 KB more.
+- `pdfa` takes `'2b'` and `'2u'` as well as `'3b'`. PDF/A-2 allows only embedded files that are PDF/A themselves, so `attachments` and `facturx` reject with it and keep needing `'3b'`. veraPDF 1.30 passes the 2b, 2u, and 3b output, tagged and untagged.
 
 ### Changed
 
