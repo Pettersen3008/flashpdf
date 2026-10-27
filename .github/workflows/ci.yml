@@ -40,9 +40,26 @@ jobs:
           key: wasm-pack-${{ runner.os }}-0.15.0
       - if: steps.wasm-pack.outputs.cache-hit != 'true'
         run: cargo install wasm-pack --locked --version 0.15.0
-      # An Azure apt mirror can crawl at kB/s; fail in minutes so a rerun gets another runner.
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 qpdf mupdf-tools
-        timeout-minutes: 5
+      # The Azure apt mirror can serve packages at kB/s for hours, so the .debs come from the Actions cache.
+      - id: release
+        run: echo "codename=$(lsb_release -cs)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        id: apt
+        with:
+          path: ~/apt-debs
+          key: apt-${{ steps.release.outputs.codename }}-qpdf-mupdf-tools-1
+      - if: steps.apt.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        run: |
+          # Canonical's archive first, the Azure mirror only if it fails.
+          printf 'http://archive.ubuntu.com/ubuntu/\tpriority:1\nhttp://azure.archive.ubuntu.com/ubuntu/\tpriority:2\n' \
+            | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get update
+          sudo apt-get install -y --download-only --no-install-recommends -o Acquire::Retries=3 qpdf mupdf-tools
+          mkdir -p ~/apt-debs
+          cp /var/cache/apt/archives/*.deb ~/apt-debs/
+      - run: sudo dpkg -i ~/apt-debs/*.deb
+        timeout-minutes: 2
       - id: playwright
         run: echo "version=$(pnpm exec playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
