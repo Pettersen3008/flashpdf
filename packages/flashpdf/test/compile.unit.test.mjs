@@ -188,7 +188,14 @@ test("given a link around an image, when compiling, then emits the image record 
 		}),
 	);
 	assert.deepEqual(calls, [
-		["image", src, { kind: 2, value: 50 }, 12, "Logo", "mailto:billing@example.com", 1],
+		[
+			"image",
+			src,
+			{ width: { kind: 2, value: 50 }, height: 12, maxWidth: undefined, maxHeight: undefined },
+			"Logo",
+			"mailto:billing@example.com",
+			1,
+		],
 	]);
 });
 

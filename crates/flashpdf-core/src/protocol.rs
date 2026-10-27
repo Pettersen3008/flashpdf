@@ -38,7 +38,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 30;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 21;
+const VERSION: u16 = 22;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -552,11 +552,16 @@ impl Decoder {
                     return Err(ProtocolError::UnknownImage);
                 }
                 let width = cursor.image_size()?;
-                let height = match cursor.take(1)?[0] {
-                    0 => None,
-                    1 => Some(pt(cursor.positive_f32("image height")?)?),
-                    _ => return Err(ProtocolError::InvalidValue("image height kind")),
-                };
+                let max_width = cursor.size("image max width")?;
+                let mut heights = [None; 2];
+                for (height, name) in heights.iter_mut().zip(["image height", "image max height"]) {
+                    *height = match cursor.take(1)?[0] {
+                        0 => None,
+                        1 => Some(pt(cursor.positive_f32(name)?)?),
+                        _ => return Err(ProtocolError::InvalidValue(name)),
+                    };
+                }
+                let [height, max_height] = heights;
                 let link = match cursor.take(1)?[0] {
                     0 => None,
                     1 => Some(cursor.uri()?.to_owned()),
@@ -565,7 +570,9 @@ impl Decoder {
                 let alt = cursor.alt()?.to_owned();
                 let alpha = cursor.take(1)?[0];
                 cursor.done()?;
-                self.feed(OwnedCommand::Image(slot, width, height, link, alt, alpha))
+                self.feed(OwnedCommand::Image(
+                    slot, width, height, max_width, max_height, link, alt, alpha,
+                ))
             }
             Opcode::BoxStart => {
                 let margin = Edges {
@@ -752,7 +759,7 @@ impl Decoder {
                     + slots.len() * size_of::<crate::Slot>()
             }
             OwnedCommand::FlexStart(_, items) => items.len() * size_of::<FlexItem>(),
-            OwnedCommand::Image(_, _, _, link, alt, _) => {
+            OwnedCommand::Image(_, _, _, _, _, link, alt, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
             _ => 0,

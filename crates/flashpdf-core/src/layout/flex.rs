@@ -401,9 +401,17 @@ impl LayoutEngine<'_> {
                     .images
                     .get(usize::from(node.slot))
                     .ok_or(LayoutError::UnknownImage)?;
+                let ratio = image.width as f32 / image.height as f32;
                 let natural = match node.height {
-                    Some(height) => height.get() * image.width as f32 / image.height as f32,
+                    Some(height) => height.get() * ratio,
                     None => image.width as f32 * super::PT_PER_PX,
+                };
+                let natural = node
+                    .max_height
+                    .map_or(natural, |max| natural.min(max.get() * ratio));
+                let natural = match node.max_width {
+                    ImageSize::Fixed(max) => natural.min(max.get()),
+                    _ => natural,
                 };
                 match node.width {
                     ImageSize::Fixed(width) => (width.get(), width.get()),

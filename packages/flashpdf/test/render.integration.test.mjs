@@ -1234,6 +1234,31 @@ test("given an invoice with a PNG logo on every row and a link, when rendering, 
 	);
 });
 
+test("given images larger than their box, when max-width and max-height bound them, then each scales with its aspect ratio", async () => {
+	const grey = (width, height) =>
+		png(
+			width,
+			height,
+			0,
+			Array.from({ length: (width + 1) * height }, () => 0),
+		);
+	const tall = grey(10, 200);
+	const sizes = async (style, src = tall) =>
+		string(await render(jsx("main", { children: jsx("img", { src, alt: "", style }) })))
+			.match(/[\d.]+ 0 0 [\d.]+ [\d.]+ [\d.]+ cm/g)
+			.map((matrix) => matrix.split(" ").slice(0, 4).map(Number).filter(Boolean).map(Math.round));
+	// 10 by 200 px is 7.5 by 150 pt at 96 px per inch.
+	assert.deepEqual(await sizes({ maxHeight: "60pt" }), [[3, 60]]);
+	assert.deepEqual(await sizes({ maxHeight: "60pt", maxWidth: "1.5pt" }), [[2, 30]]);
+	// A4 with 36pt margins leaves 523pt: half of it, and the ratio, decide the wide image.
+	assert.deepEqual(await sizes({ maxWidth: "50%" }, grey(2000, 100)), [[262, 13]]);
+	assert.deepEqual(await sizes({ width: 900, maxWidth: "100%" }, grey(200, 10)), [[523, 26]]);
+	await assert.rejects(
+		sizes({ maxHeight: "50%" }),
+		/percent maxHeight has no container height; use pt or px, or set width on <img> in <main>/,
+	);
+});
+
 test("given an svg with a viewBox, when rendering, then paints a tagged form fitted to its box, as the same file in an img does", async () => {
 	const options = { tagged: true, metadata: { language: "en" } };
 	const box = { width: 60, height: 60 };

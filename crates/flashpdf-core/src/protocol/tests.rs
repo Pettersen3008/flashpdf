@@ -699,7 +699,8 @@ fn image_record(
     link: Option<&[u8]>,
 ) -> Vec<u8> {
     let mut payload = slot.to_le_bytes().to_vec();
-    for value in [width, height] {
+    // Width, max width, height, max height; the max sizes stay `none`.
+    for value in [width, None, height, None] {
         match value {
             Some(value) => {
                 payload.push(1);

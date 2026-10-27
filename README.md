@@ -71,8 +71,7 @@ Vertical margins collapse as in a browser. Tagged mode writes list items as para
 
 ## Images and links
 
-`img` takes the PNG, JPEG, or SVG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
-`img` takes the PNG or JPEG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element in the document with that `id`. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration.
+`img` takes the PNG, JPEG, or SVG bytes as a `Uint8Array`, like fonts, and `a` takes an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element in the document with that `id`. In tagged mode, a nonempty `alt` becomes the figure description; an empty `alt` marks the image as decoration. `max-width` and `max-height` scale an image of unknown size, such as a scanned receipt, into its box and keep its aspect ratio.
 
 ```tsx
 const logo = new Uint8Array(await readFile('logo.png'));

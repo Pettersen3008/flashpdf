@@ -67,6 +67,9 @@ pub enum Command<'a> {
         slot: u16,
         width: ImageSize,
         height: Option<Pt>,
+        /// CSS 2.1 §10.4: with `width` and `height` both auto, the image scales uniformly into these.
+        max_width: ImageSize,
+        max_height: Option<Pt>,
         link: Option<&'a str>,
         alt: &'a str,
         alpha: u8,
@@ -110,7 +113,16 @@ pub(crate) enum OwnedCommand {
     FlexEnd,
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
-    Image(u16, ImageSize, Option<Pt>, Option<String>, String, u8),
+    Image(
+        u16,
+        ImageSize,
+        Option<Pt>,
+        ImageSize,
+        Option<Pt>,
+        Option<String>,
+        String,
+        u8,
+    ),
     Anchor(u16),
 }
 
@@ -146,14 +158,18 @@ impl OwnedCommand {
                 width: *width,
             },
             Self::TableEnd => Command::TableEnd,
-            Self::Image(slot, width, height, link, alt, alpha) => Command::Image {
-                slot: *slot,
-                width: *width,
-                height: *height,
-                link: link.as_deref(),
-                alt,
-                alpha: *alpha,
-            },
+            Self::Image(slot, width, height, max_width, max_height, link, alt, alpha) => {
+                Command::Image {
+                    slot: *slot,
+                    width: *width,
+                    height: *height,
+                    max_width: *max_width,
+                    max_height: *max_height,
+                    link: link.as_deref(),
+                    alt,
+                    alpha: *alpha,
+                }
+            }
             Self::Anchor(slot) => Command::Anchor(*slot),
         }
     }
@@ -268,6 +284,8 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 slot,
                 width,
                 height,
+                max_width,
+                max_height,
                 link,
                 alt,
                 alpha,
@@ -275,6 +293,8 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 slot,
                 width,
                 height,
+                max_width,
+                max_height,
                 link,
                 alt,
                 alpha,

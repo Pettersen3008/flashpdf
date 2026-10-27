@@ -978,9 +978,12 @@ function element(
 		case "img":
 		case "svg": {
 			rowOnly(style, context.inRow);
-			sizeless(style, node.tag, ["width", "height"]);
-			if (typeof style.height === "string" && style.height.endsWith("%"))
-				throw new Error("percent height has no container height; use pt or px, or set width");
+			sizeless(style, node.tag, ["width", "height", "maxWidth", "maxHeight"]);
+			for (const key of ["height", "maxHeight"] as const) {
+				const value = style[key];
+				if (typeof value === "string" && value.endsWith("%"))
+					throw new Error(`percent ${key} has no container height; use pt or px, or set width`);
+			}
 			pageBreak(writer, style, "breakBefore", depth);
 			const next = inherit(style, context, fonts);
 			const width = style.width === undefined ? undefined : dimension(style.width, "width");
@@ -990,6 +993,14 @@ function element(
 				);
 			const height =
 				style.height === undefined ? undefined : dimension(style.height, "height").value;
+			const maxWidth =
+				style.maxWidth === undefined ? undefined : dimension(style.maxWidth, "maxWidth");
+			if (context.item && maxWidth?.kind === 2)
+				throw new Error(
+					"an image flex item takes a maxWidth in pt or px; wrap it to size it by percent",
+				);
+			const maxHeight =
+				style.maxHeight === undefined ? undefined : dimension(style.maxHeight, "maxHeight").value;
 			if (radiusOf(style, next.size))
 				throw new Error(
 					`border-radius does not clip <${node.tag}>: the picture stays rectangular, so remove the radius`,
@@ -1004,8 +1015,7 @@ function element(
 					// A drawing carries its opacity in its shapes, where an image takes it from the page.
 					writer.image(
 						source,
-						width,
-						height,
+						{ width, height, maxWidth, maxHeight },
 						node.alt ?? "",
 						context.link,
 						node.drawing ? 1 : next.opacity,
