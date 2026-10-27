@@ -129,14 +129,8 @@ fn matched(selector: &str, tree: &[N]) -> String {
     ids.join(" ")
 }
 
-/// What `stylesheet()` checks before normalisation: parsing and every unblocked rule's declarations.
 fn validate(css: &str) -> Result<(), String> {
-    let mut sheet = Stylesheet::default();
-    parse(css, None, &mut sheet)?;
-    for rule in sheet.rules.iter().filter(|rule| rule.blocked.is_none()) {
-        rule.declarations()?;
-    }
-    Ok(())
+    stylesheet(css)
 }
 fn rejects(css: &str, parts: &[&str]) {
     let message = validate(css).expect_err(css);
@@ -916,4 +910,27 @@ fn given_numbers_in_css_syntax_when_converting_then_matches_javascript() {
     assert_eq!(js_number(1e-7), "1e-7");
     assert_eq!(js_number(-0.0), "0");
     assert_eq!(json_string("a\"b\\\n"), r#""a\"b\\\n""#);
+}
+
+#[test]
+fn given_an_invalid_value_without_var_when_validating_a_stylesheet_then_rejects_naming_the_rule() {
+    rejects(
+        ".a { color: notacolor }",
+        &["unsupported color: notacolor in selector \".a\" at 1:1"],
+    );
+    rejects(
+        "\n.b { margin: banana }",
+        &["invalid length: banana", "\".b\" at 2:1"],
+    );
+    validate(".c { color: var(--brand) }").unwrap();
+}
+
+#[test]
+fn given_calc_color_mix_custom_properties_and_css_wide_keywords_when_validating_a_stylesheet_then_accepts_them(
+) {
+    validate(
+        ".a { --brand: notacolor; margin: calc(0.25rem * 2); background-color: color-mix(in oklab, #000 50%, transparent) }",
+    )
+    .unwrap();
+    validate(".t { color: currentcolor; background-color: inherit; margin: initial }").unwrap();
 }
