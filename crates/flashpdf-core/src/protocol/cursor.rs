@@ -101,6 +101,15 @@ impl<'a> Cursor<'a> {
         Ok(text)
     }
 
+    pub(super) fn f64(&mut self) -> Result<f64, ProtocolError> {
+        Ok(f64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
+    /// Any UTF-8 text; the caller checks its content.
+    pub(super) fn utf8(&mut self) -> Result<&'a str, ProtocolError> {
+        self.utf8_text()
+    }
+
     fn utf8_text(&mut self) -> Result<&'a str, ProtocolError> {
         let length =
             usize::try_from(self.u32()?).map_err(|_| ProtocolError::InvalidStringLength)?;

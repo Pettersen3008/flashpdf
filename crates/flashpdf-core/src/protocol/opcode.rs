@@ -3,6 +3,7 @@ use super::ProtocolError;
 #[derive(Clone, Copy)]
 #[repr(u8)]
 pub(super) enum Opcode {
+    Page = 1,
     Spacer = 2,
     StackStart = 3,
     StackEnd = 4,
@@ -24,6 +25,14 @@ pub(super) enum Opcode {
     Avoid = 23,
     FlexStart = 24,
     FlexEnd = 25,
+    Family = 26,
+    Stylesheet = 27,
+    Setup = 28,
+    Block = 29,
+    Open = 30,
+    Text = 31,
+    Close = 32,
+    Drawing = 33,
     End = 255,
 }
 
@@ -32,6 +41,7 @@ impl TryFrom<u8> for Opcode {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         Ok(match value {
+            1 => Self::Page,
             2 => Self::Spacer,
             3 => Self::StackStart,
             4 => Self::StackEnd,
@@ -53,6 +63,14 @@ impl TryFrom<u8> for Opcode {
             23 => Self::Avoid,
             24 => Self::FlexStart,
             25 => Self::FlexEnd,
+            26 => Self::Family,
+            27 => Self::Stylesheet,
+            28 => Self::Setup,
+            29 => Self::Block,
+            30 => Self::Open,
+            31 => Self::Text,
+            32 => Self::Close,
+            33 => Self::Drawing,
             255 => Self::End,
             _ => return Err(ProtocolError::UnknownOpcode),
         })

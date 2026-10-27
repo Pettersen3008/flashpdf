@@ -16,11 +16,12 @@ mod properties;
 mod selector;
 pub mod style;
 
+pub use cascade::{list_key, pages, resolver, Inline, Resolver};
 pub use math::evaluate_math;
 use page::css_page;
 pub use parser::{parse, Stylesheet};
 pub use properties::{property, Prop};
-pub use selector::Tree;
+pub use selector::{ElemInput, Tree, TAGS};
 use style::{box_style, color, style, Style};
 
 use std::rc::Rc;
@@ -87,6 +88,14 @@ impl std::fmt::Display for Value {
 /// `String(value)` of a value that may be `undefined`.
 pub(crate) fn show(value: Option<&Value>) -> String {
     value.map_or_else(|| "undefined".into(), Value::to_string)
+}
+
+/// The key a style object's `name` sets; normalisation rejects an unknown one.
+pub fn property_key(name: &str) -> Key {
+    if name.starts_with("--") {
+        return Key::Custom(name.into());
+    }
+    Prop::named(name).map_or_else(|| Key::Other(name.into()), Key::Prop)
 }
 
 /// Declarations in cascade order. Setting a key moves it last, because normalisation applies
@@ -320,6 +329,8 @@ pub fn point(value: &str, parent: f64, positive: bool) -> Result<f64, String> {
 
 /// `stylesheet()`: every declaration of every rule that can match, validated up front where
 /// `render` validates only the rules that match. The source is returned by the caller.
+// ponytail: css.ts `stylesheet()` still validates in TypeScript; the next change calls this instead.
+#[allow(dead_code)]
 pub fn stylesheet(source: &str) -> Result<(), String> {
     let mut sheet = Stylesheet::default();
     parse(source, None, &mut sheet)?;
@@ -348,6 +359,7 @@ pub fn stylesheet(source: &str) -> Result<(), String> {
 }
 
 /// `/\b(?:var|calc|min|max|clamp|color-mix)\(/i`.
+#[allow(dead_code)]
 fn deferred(value: &Value) -> bool {
     let text = value.to_string().to_ascii_lowercase();
     let bytes = text.as_bytes();

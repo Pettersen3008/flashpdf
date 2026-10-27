@@ -2,7 +2,7 @@ import { parse, type PageDeclaration } from "./css/parser.js";
 import { cssPage } from "./page.js";
 import { boxStyle, color, style } from "./style.js";
 
-export { resolveStyles, styleResolver } from "./css/cascade.js";
+export { resolveStyles } from "./css/cascade.js";
 export type { StyledNode } from "./css/cascade.js";
 
 /** Validates every declaration of every supported rule up front; `render` only validates rules that match. */

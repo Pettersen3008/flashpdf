@@ -4,6 +4,7 @@
 //! a domain type, so the WASM and N-API bindings cannot diverge.
 
 mod cursor;
+mod elements;
 mod error;
 mod opcode;
 
@@ -36,9 +37,9 @@ pub const MAX_BLOCK_BYTES: usize = 16 * 1024 * 1024;
 const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 /// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
 const MAX_PAGE_SIDE: f32 = 14_400.0;
-const HEADER_LEN: usize = 30;
+const HEADER_LEN: usize = 6;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 22;
+const VERSION: u16 = 23;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -52,10 +53,20 @@ const FACTURX: [(&str, &str, AssociationKind); 6] = [
     ("XRECHNUNG", "xrechnung.xml", AssociationKind::Alternative),
 ];
 
+/// Reads the record stream: element records compile into layout commands, which `Commands`
+/// validates and lays out like the layout records a host may send directly.
 #[derive(Default)]
 pub struct Decoder {
     pending: Vec<u8>,
-    records: usize,
+    header: bool,
+    /// Holds the layout state until a Setup record moves it into the compiler's sink.
+    commands: Commands,
+    elements: elements::Elements,
+}
+
+/// Layout records to renderer calls.
+#[derive(Default)]
+struct Commands {
     page: Option<crate::Page>,
     renderer: Option<crate::Renderer>,
     block: Vec<OwnedCommand>,
@@ -67,6 +78,9 @@ pub struct Decoder {
     /// Images registered before the renderer exists; later ones go straight to it.
     images: Vec<crate::Image>,
     image_bytes: usize,
+    /// Raster bytes the host staged, until the compiler registers them in paint order.
+    staged: Vec<Option<Vec<u8>>>,
+    staged_bytes: usize,
     /// Attachment bytes until an Attachment or PdfA record claims them.
     attachments: Vec<Option<Vec<u8>>>,
     attachment_bytes: usize,
@@ -93,6 +107,120 @@ impl Decoder {
     /// Font files bypass the bounded document window because a whole TTF must
     /// remain available until the PDF's font stream is written.
     pub fn add_font(&mut self, bytes: Vec<u8>) -> Result<u8, ProtocolError> {
+        self.commands().add_font(bytes)
+    }
+
+    /// Images register at any point before the record that paints them, and are
+    /// held whole until the PDF's XObject streams are written.
+    pub fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+        self.commands().add_image(bytes)
+    }
+
+    /// An `<img>`'s raster for element records, which name it by the returned handle.
+    /// It registers as an image when first painted, so slots follow document order.
+    pub fn stage_image(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+        self.commands().stage_image(bytes)
+    }
+
+    /// Attachment bytes bypass the document window like images, and wait for
+    /// the record that names them.
+    pub fn add_attachment(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+        self.commands().add_attachment(bytes)
+    }
+
+    pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
+        if self.commands().ended && !bytes.is_empty() {
+            return Err(ProtocolError::DataAfterEnd);
+        }
+        self.pending.extend_from_slice(bytes);
+        let mut pending = std::mem::take(&mut self.pending);
+        let mut consumed = 0;
+        let result = (|| {
+            if !self.header {
+                if pending.len() < HEADER_LEN {
+                    return Ok(());
+                }
+                if &pending[..4] != MAGIC {
+                    return Err(ProtocolError::InvalidMagic);
+                }
+                if u16::from_le_bytes(pending[4..6].try_into().unwrap()) != VERSION {
+                    return Err(ProtocolError::UnknownVersion);
+                }
+                self.header = true;
+                consumed = HEADER_LEN;
+            }
+            loop {
+                let remaining = &pending[consumed..];
+                if remaining.len() < 5 {
+                    return Ok(());
+                }
+                let length = u32::from_le_bytes(remaining[1..5].try_into().unwrap()) as usize;
+                if length > MAX_RECORD {
+                    return Err(ProtocolError::RecordTooLarge);
+                }
+                let total = 5 + length;
+                if remaining.len() < total {
+                    return Ok(());
+                }
+                let start = consumed;
+                consumed += total;
+                self.read_record(pending[start], &pending[start + 5..consumed])?;
+            }
+        })();
+        if consumed > 0 {
+            let remaining = pending.len() - consumed;
+            pending.copy_within(consumed.., 0);
+            pending.truncate(remaining);
+        }
+        self.pending = pending;
+        result
+    }
+
+    pub fn finish(mut self) -> Result<Vec<u8>, ProtocolError> {
+        if !self.pending.is_empty() {
+            return Err(ProtocolError::TruncatedProtocol);
+        }
+        let compiled = self.elements.compiling();
+        let commands = std::mem::take(self.commands());
+        commands.finish().map_err(|error| match error {
+            // As the compiler explains a PageOverflow no element claimed.
+            ProtocolError::Render(crate::RenderError::PageOverflow) if compiled => {
+                ProtocolError::Message(crate::compile::Error::new("PageOverflow").into_message())
+            }
+            error => error,
+        })
+    }
+
+    fn read_record(&mut self, opcode: u8, payload: &[u8]) -> Result<(), ProtocolError> {
+        let code = Opcode::try_from(opcode)?;
+        let compiling = self.elements.compiling();
+        match code {
+            Opcode::Family
+            | Opcode::Stylesheet
+            | Opcode::Setup
+            | Opcode::Block
+            | Opcode::Open
+            | Opcode::Text
+            | Opcode::Close
+            | Opcode::Drawing => self.element_record(code, payload),
+            Opcode::End if compiling => self.element_record(code, payload),
+            // A host that sends element records leaves layout to the compiler.
+            Opcode::Metadata | Opcode::PdfA | Opcode::Attachment => {
+                self.commands().read_record(opcode, payload)
+            }
+            _ if compiling || self.elements.started() => Err(ProtocolError::InvalidNesting),
+            _ => self.commands.read_record(opcode, payload),
+        }
+    }
+
+    /// Where layout records go: the compiler's sink once element records set up the page.
+    fn commands(&mut self) -> &mut Commands {
+        self.elements.sink().unwrap_or(&mut self.commands)
+    }
+}
+
+impl Commands {
+    fn add_font(&mut self, bytes: Vec<u8>) -> Result<u8, ProtocolError> {
         if self.page.is_some() {
             return Err(ProtocolError::FontsAfterDocument);
         }
@@ -110,9 +238,7 @@ impl Decoder {
         Ok((self.fonts.len() + BUILT_IN - 1) as u8)
     }
 
-    /// Images register at any point before the record that paints them, and are
-    /// held whole until the PDF's XObject streams are written.
-    pub fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+    fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
         if self.ended {
             return Err(ProtocolError::DataAfterEnd);
         }
@@ -138,9 +264,7 @@ impl Decoder {
         })
     }
 
-    /// Attachment bytes bypass the document window like images, and wait for
-    /// the record that names them.
-    pub fn add_attachment(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+    fn add_attachment(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
         if self.ended {
             return Err(ProtocolError::DataAfterEnd);
         }
@@ -156,63 +280,33 @@ impl Decoder {
         Ok((self.attachments.len() - 1) as u16)
     }
 
-    pub fn push(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
-        if self.ended && !bytes.is_empty() {
+    /// Raster bytes for an element record's `<img>`, held until the compiler first paints it.
+    fn stage_image(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {
+        if self.ended {
             return Err(ProtocolError::DataAfterEnd);
         }
-        self.pending.extend_from_slice(bytes);
-        let mut pending = std::mem::take(&mut self.pending);
-        let mut consumed = 0;
-        let result = (|| {
-            if self.page.is_none() {
-                if pending.len() < HEADER_LEN {
-                    return Ok(());
-                }
-                self.read_header(&pending[..HEADER_LEN])?;
-                consumed = HEADER_LEN;
-            }
-            loop {
-                let remaining = &pending[consumed..];
-                if remaining.len() < 5 {
-                    return Ok(());
-                }
-                let length = u32::from_le_bytes(remaining[1..5].try_into().unwrap()) as usize;
-                if length > MAX_RECORD {
-                    return Err(ProtocolError::RecordTooLarge);
-                }
-                let total = 5 + length;
-                if remaining.len() < total {
-                    return Ok(());
-                }
-                let start = consumed;
-                consumed += total;
-                self.read_record(pending[start], &pending[start + 5..consumed])?;
-                self.records += 1;
-            }
-        })();
-        if consumed > 0 {
-            let remaining = pending.len() - consumed;
-            pending.copy_within(consumed.., 0);
-            pending.truncate(remaining);
+        self.staged_bytes = self
+            .staged_bytes
+            .checked_add(bytes.len())
+            .filter(|total| *total <= MAX_IMAGE_BYTES)
+            .ok_or(ProtocolError::ImagesTooLarge)?;
+        if self.staged.len() >= usize::from(u16::MAX) {
+            return Err(ProtocolError::TooManyImages);
         }
-        self.pending = pending;
-        result
+        self.staged.push(Some(bytes));
+        Ok((self.staged.len() - 1) as u16)
     }
 
-    /// Records decoded so far. After a failed `push` it is the index of the failing
-    /// record, so an adapter that batches records can tell which call wrote it.
-    pub fn records(&self) -> usize {
-        self.records
-    }
-
-    fn read_header(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
-        if &bytes[..4] != MAGIC {
-            return Err(ProtocolError::InvalidMagic);
+    /// The page size and margins in points, as a Page record or a Setup record sets them.
+    fn set_page(&mut self, size: [f32; 2], margin: [f32; 4]) -> Result<(), ProtocolError> {
+        if self.page.is_some() {
+            return Err(ProtocolError::InvalidNesting);
         }
-        if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != VERSION {
-            return Err(ProtocolError::UnknownVersion);
+        let mut bytes = Vec::with_capacity(24);
+        for value in size.into_iter().chain(margin) {
+            bytes.extend(value.to_le_bytes());
         }
-        let mut cursor = Cursor::new(&bytes[6..]);
+        let mut cursor = Cursor::new(&bytes);
         let width = cursor.positive_f32("page width")?;
         let height = cursor.positive_f32("page height")?;
         if width > MAX_PAGE_SIDE || height > MAX_PAGE_SIDE {
@@ -235,6 +329,23 @@ impl Decoder {
         let mut cursor = Cursor::new(payload);
         let opcode = Opcode::try_from(opcode)?;
         match opcode {
+            Opcode::Page => {
+                let mut value = || -> Result<f32, ProtocolError> {
+                    Ok(f32::from_le_bytes(cursor.take(4)?.try_into().unwrap()))
+                };
+                let size = [value()?, value()?];
+                let margin = [value()?, value()?, value()?, value()?];
+                cursor.done()?;
+                self.set_page(size, margin)
+            }
+            Opcode::Family
+            | Opcode::Stylesheet
+            | Opcode::Setup
+            | Opcode::Block
+            | Opcode::Open
+            | Opcode::Text
+            | Opcode::Close
+            | Opcode::Drawing => Err(ProtocolError::InvalidNesting),
             Opcode::Spacer => {
                 let space = pt(cursor.nonnegative_f32("spacer")?)?;
                 cursor.done()?;
@@ -915,8 +1026,8 @@ impl Decoder {
         result
     }
 
-    pub fn finish(self) -> Result<Vec<u8>, ProtocolError> {
-        if self.page.is_none() || !self.ended || !self.pending.is_empty() {
+    fn finish(self) -> Result<Vec<u8>, ProtocolError> {
+        if self.page.is_none() || !self.ended {
             return Err(ProtocolError::TruncatedProtocol);
         }
         Ok(self

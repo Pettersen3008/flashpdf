@@ -1,11 +1,10 @@
 import { object } from "./assert.js";
-import type { Dimension } from "./protocol.js";
 import { color } from "./style.js";
 
 type Rgb = readonly [number, number, number];
 type Matrix = readonly [number, number, number, number, number, number];
 /** `null` paints nothing. */
-type Paint = Rgb | "currentColor" | null;
+export type Paint = Rgb | "currentColor" | null;
 
 type State = {
 	matrix: Matrix;
@@ -24,7 +23,7 @@ type State = {
 	opacity: number;
 };
 /** 0 move, 1 line, 2 cubic, 3 close; `points` holds their coordinates in order. */
-type Shape = State & { readonly ops: readonly number[]; readonly points: readonly number[] };
+export type Shape = State & { readonly ops: readonly number[]; readonly points: readonly number[] };
 
 export type Drawing = {
 	/** Intrinsic size in points. */
@@ -713,97 +712,6 @@ export function vector(
 }
 
 /** The box the viewBox is fitted into; only its aspect ratio reaches the engine. */
-export function frame(
-	drawing: Drawing,
-	width: Dimension | undefined,
-	height: number | undefined,
-): readonly [number, number] {
-	if (width?.kind === 1 && height !== undefined) return [width.value, height];
-	if (width && height !== undefined && drawing.align)
-		throw new Error(
-			'a percent width with a height leaves the aspect ratio open; use a pt or px width, or preserveAspectRatio="none"',
-		);
-	return [drawing.width, drawing.height];
-}
-
-/** The engine's vector format: the drawing fitted to the unit square, y up, as an image fills it.
- *  `opacity` is the element's CSS opacity, folded into each shape because a shape's own alpha
- *  replaces the page's inside a form XObject. */
-export function encode(
-	drawing: Drawing,
-	box: readonly [number, number],
-	current: Rgb,
-	opacity = 1,
-): Uint8Array {
-	const [width, height] = box;
-	const [vx, vy, vw, vh] = drawing.viewBox;
-	let [sx, sy] = [width / vw, height / vh];
-	if (drawing.align) sx = sy = drawing.slice ? Math.max(sx, sy) : Math.min(sx, sy);
-	const [ax, ay] = drawing.align ?? [0, 0];
-	const fit: Matrix = [
-		sx / width,
-		0,
-		0,
-		-sy / height,
-		((width - vw * sx) * ax - vx * sx) / width,
-		1 - ((height - vh * sy) * ay - vy * sy) / height,
-	];
-	let total = 12;
-	for (const shape of drawing.shapes)
-		total +=
-			29 +
-			(shape.fill ? 4 : 0) +
-			(shape.stroke ? 17 + 4 * shape.dashes.length : 0) +
-			shape.ops.length +
-			4 * shape.points.length;
-	const bytes = new Uint8Array(total);
-	const view = new DataView(bytes.buffer);
-	let offset = 0;
-	const u8 = (value: number) => view.setUint8(offset++, value);
-	const f32 = (value: number) => {
-		if (!Number.isFinite(Math.fround(value)))
-			throw new Error("the drawing's coordinates are too large");
-		view.setFloat32(offset, value, true);
-		offset += 4;
-	};
-	const rgba = (value: Paint, alpha: number) => {
-		for (const channel of value === "currentColor" ? current : value!) u8(channel);
-		u8(Math.round(alpha * 255));
-	};
-	bytes.set([70, 80, 68, 86]);
-	offset = 4;
-	f32(width);
-	f32(height);
-	for (const shape of drawing.shapes) {
-		u8(
-			(shape.fill ? 1 : 0) |
-				(shape.evenOdd ? 2 : 0) |
-				(shape.stroke ? 4 : 0) |
-				(shape.cap << 3) |
-				(shape.join << 5),
-		);
-		for (const value of multiply(fit, shape.matrix)) f32(value);
-		if (shape.fill) rgba(shape.fill, shape.fillOpacity * shape.opacity * opacity);
-		if (shape.stroke) {
-			rgba(shape.stroke, shape.strokeOpacity * shape.opacity * opacity);
-			f32(shape.strokeWidth);
-			f32(shape.miter);
-			u8(shape.dashes.length);
-			for (const dash of shape.dashes) f32(dash);
-			const cycle = shape.dashes.reduce((sum, dash) => sum + dash, 0);
-			f32(cycle ? ((shape.dashOffset % cycle) + cycle) % cycle : 0);
-		}
-		view.setUint32(offset, shape.ops.length, true);
-		offset += 4;
-		let point = 0;
-		for (const op of shape.ops) {
-			u8(op);
-			for (let index = [2, 2, 6, 0][op]!; index > 0; index--) f32(shape.points[point++]!);
-		}
-	}
-	return bytes;
-}
-
 /** True for bytes that start like XML text, which PNG and JPEG never do. */
 export function isMarkup(bytes: Uint8Array): boolean {
 	return /^﻿?\s*</.test(new TextDecoder().decode(bytes.subarray(0, 64)));

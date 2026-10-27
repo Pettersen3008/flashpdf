@@ -1,6 +1,9 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use super::parser::{declarations, Registration, Rule};
+use super::parser::{declarations, PageDeclaration, Registration, Rule};
+use super::selector::Bucket;
 use super::{evaluate_math, js_number, parse, point, Cascaded, Key, Prop, Stylesheet, Tree, Value};
 
 /// An element's own style: none, a `style` string, or a style object's entries in order.
@@ -64,6 +67,18 @@ fn user_agent(tag: &str) -> &'static [(Prop, &'static str)] {
         "h6" => &[(FONT_SIZE, "0.67em"), BOLD, AVOID, (MARGIN, "2.33em 0")],
         _ => &[],
     }
+}
+
+/// The nesting-dependent user-agent margin and list-style-type of `node`, as a cache key.
+pub fn list_key(tree: &Tree, node: u32) -> String {
+    let styles = list_styles(tree, node);
+    let value = |prop: Prop| {
+        styles
+            .iter()
+            .find(|(own, _)| *own == prop)
+            .map_or("", |(_, value)| value)
+    };
+    format!("{},{}", value(MARGIN), value(LIST_STYLE_TYPE))
 }
 
 /// The user-agent rules that depend on nesting: a list inside a list has no vertical margin, and
@@ -200,6 +215,81 @@ pub struct Resolver {
     /// By specificity, then source order.
     rules: Vec<Rule>,
     properties: Vec<(Rc<str>, Registration)>,
+    /// Rule indices by the rightmost compound's id, class, or tag, so an element only tests
+    /// the rules it could match; `any` holds the rest.
+    ids: HashMap<Box<str>, Vec<usize>>,
+    classes: HashMap<Box<str>, Vec<usize>>,
+    tags: HashMap<u8, Vec<usize>>,
+    any: Vec<usize>,
+}
+
+/// Sheets parsed for earlier renders: the `@page` declarations, and a resolver per content width.
+struct Parsed {
+    sheets: Vec<String>,
+    pages: Rc<[PageDeclaration]>,
+    resolvers: Vec<(u64, Rc<Resolver>)>,
+}
+
+// ponytail: four entries, most recent first; a keyed LRU if callers rotate many stylesheet sets.
+const CACHED: usize = 4;
+thread_local! {
+    static PARSED: RefCell<Vec<Parsed>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The cache entry for `sheets`, parsing their `@page` declarations on a miss, moved to the front.
+fn cached<T>(
+    sheets: &[String],
+    read: impl FnOnce(&mut Parsed) -> Result<T, String>,
+) -> Result<T, String> {
+    PARSED.with_borrow_mut(|cache| {
+        match cache.iter().position(|entry| entry.sheets == sheets) {
+            Some(index) => {
+                let entry = cache.remove(index);
+                cache.insert(0, entry);
+            }
+            None => {
+                let mut sheet = Stylesheet::default();
+                for source in sheets {
+                    parse(source, None, &mut sheet)?;
+                }
+                cache.insert(
+                    0,
+                    Parsed {
+                        sheets: sheets.to_vec(),
+                        pages: sheet.pages.into(),
+                        resolvers: Vec::new(),
+                    },
+                );
+                cache.truncate(CACHED);
+            }
+        }
+        read(&mut cache[0])
+    })
+}
+
+/// The `@page` declarations of `sheets`, which decide the content width `@media` compares.
+pub fn pages(sheets: &[String]) -> Result<Rc<[PageDeclaration]>, String> {
+    cached(sheets, |entry| Ok(entry.pages.clone()))
+}
+
+/// A resolver for `sheets` at content width `width`, shared with earlier renders of the same input.
+pub fn resolver(sheets: &[String], width: f64) -> Result<Rc<Resolver>, String> {
+    cached(sheets, |entry| {
+        if let Some((_, resolver)) = entry
+            .resolvers
+            .iter()
+            .find(|(own, _)| *own == width.to_bits())
+        {
+            return Ok(resolver.clone());
+        }
+        let sources: Vec<&str> = sheets.iter().map(String::as_str).collect();
+        let resolver = Rc::new(Resolver::new(&sources, width)?);
+        entry
+            .resolvers
+            .insert(0, (width.to_bits(), resolver.clone()));
+        entry.resolvers.truncate(CACHED);
+        Ok(resolver)
+    })
 }
 
 impl Resolver {
@@ -214,15 +304,34 @@ impl Resolver {
                 .cmp(&b.specificity)
                 .then(a.order.cmp(&b.order))
         });
-        Ok(Self {
-            rules: sheet.rules,
+        let mut resolver = Self {
+            rules: Vec::new(),
             properties: sheet.properties,
-        })
+            ids: HashMap::new(),
+            classes: HashMap::new(),
+            tags: HashMap::new(),
+            any: Vec::new(),
+        };
+        for (index, rule) in sheet.rules.iter().enumerate() {
+            match rule.selector.bucket() {
+                Bucket::Id(id) => resolver.ids.entry(id.into()).or_default().push(index),
+                Bucket::Class(class) => resolver
+                    .classes
+                    .entry(class.into())
+                    .or_default()
+                    .push(index),
+                Bucket::Tag(tag) => resolver.tags.entry(tag).or_default().push(index),
+                Bucket::Any => resolver.any.push(index),
+            }
+        }
+        resolver.rules = sheet.rules;
+        Ok(resolver)
     }
 
     /// The cascaded declarations of element `node`, with var(), calc(), and the font size
     /// resolved: what normalisation reads. `parent` is the parent's result and
     /// `parent_font_size` its normalised font size. Errors name the element path.
+    #[cfg(test)]
     pub fn cascade(
         &self,
         tree: &mut Tree,
@@ -232,24 +341,52 @@ impl Resolver {
         parent_font_size: Option<f64>,
         single_line: bool,
     ) -> Result<Cascaded, String> {
-        self.cascaded(tree, node, inline, parent, parent_font_size, single_line)
-            .map_err(|message| format!("{message} on {}", tree.path(node)))
+        let matched = self.matched(tree, node);
+        self.cascaded(
+            tree,
+            node,
+            &matched,
+            inline,
+            parent,
+            parent_font_size,
+            single_line,
+        )
+        .map_err(|message| format!("{message} on {}", tree.path(node)))
     }
 
-    fn cascaded(
+    /// The rules that match `node`, as indices in cascade order: with the parent's result,
+    /// the inline style, and `list_key`, they determine the cascade, so callers cache on them.
+    pub fn matched(&self, tree: &mut Tree, node: u32) -> Vec<usize> {
+        let elem = &tree.elems[node as usize];
+        let mut candidates = self.any.clone();
+        let mut add = |list: Option<&Vec<usize>>| candidates.extend(list.into_iter().flatten());
+        if let Some(id) = &elem.id {
+            add(self.ids.get(id));
+        }
+        for class in &elem.classes {
+            add(self.classes.get(class));
+        }
+        add(self.tags.get(&elem.tag));
+        // Indices are cascade order; an element with a repeated class meets a rule twice.
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates.retain(|&index| tree.matches(&self.rules[index].selector, node));
+        candidates
+    }
+
+    /// `cascade` with the rules `matched` returned, and errors not yet located.
+    #[allow(clippy::too_many_arguments)]
+    pub fn cascaded(
         &self,
-        tree: &mut Tree,
+        tree: &Tree,
         node: u32,
+        matched: &[usize],
         inline: &Inline,
         parent: &Cascaded,
         parent_font_size: Option<f64>,
         single_line: bool,
     ) -> Result<Cascaded, String> {
-        let matched: Vec<&Rule> = self
-            .rules
-            .iter()
-            .filter(|rule| tree.matches(&rule.selector, node))
-            .collect();
+        let matched: Vec<&Rule> = matched.iter().map(|&index| &self.rules[index]).collect();
         let mut result = Cascaded::default();
         for (key, value) in &parent.0 {
             let inherits = match key {

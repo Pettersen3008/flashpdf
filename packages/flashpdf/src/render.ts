@@ -1,12 +1,10 @@
 import { props } from "./assert.js";
 import { asError, type Backend, Binary, type Engine } from "./binary.js";
-import { compile, compileBody } from "./compile.js";
-import { styleResolver } from "./css.js";
 import type { Edges, Element, Length } from "./element.js";
 import { registerFonts } from "./fonts.js";
-import { pageSetup } from "./page.js";
+import { pageOptions } from "./page.js";
 import { ProtocolWriter } from "./protocol.js";
-import { pageOverflow, resolveTree, type Node } from "./tree.js";
+import { resolveTree, type Node } from "./tree.js";
 
 /** A family without an italic face for a weight slants its upright face instead. */
 export type EmbeddedFont = {
@@ -66,13 +64,8 @@ export type FacturX = { xml: Uint8Array; profile: (typeof PROFILES)[number] };
 
 const RELATIONSHIPS = ["Source", "Data", "Alternative", "Supplement", "Unspecified"] as const;
 const PROFILES = ["MINIMUM", "BASIC WL", "BASIC", "EN 16931", "EXTENDED", "XRECHNUNG"] as const;
-/** Option, the block it fills, and whether that block replaces the other on the first page. */
-const FURNITURE = [
-	["header", "header", false],
-	["footer", "footer", false],
-	["firstPageHeader", "header", true],
-	["firstPageFooter", "footer", true],
-] as const;
+/** The header and footer options in the order the core takes them, its block kinds 1 to 4. */
+const FURNITURE = ["header", "footer", "firstPageHeader", "firstPageFooter"] as const;
 
 export function createRenderer(loadBackend: () => Promise<Backend>) {
 	return async function render(
@@ -85,7 +78,7 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 			"margin",
 			"stylesheets",
 			"fonts",
-			...FURNITURE.map(([option]) => option),
+			...FURNITURE,
 			"metadata",
 			"tagged",
 			"outline",
@@ -98,12 +91,8 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 			(!Array.isArray(p.stylesheets) || p.stylesheets.some((sheet) => typeof sheet !== "string"))
 		)
 			throw new Error("invalid stylesheets");
-		const page = pageSetup(
-			p.pageFormat,
-			p.orientation,
-			p.margin,
-			p.stylesheets as readonly string[] | undefined,
-		);
+		const stylesheets = (p.stylesheets ?? []) as readonly string[];
+		const page = pageOptions(p.pageFormat, p.orientation, p.margin);
 		const metadata =
 			p.metadata === undefined
 				? {}
@@ -123,66 +112,42 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 		if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
 		if (p.outline !== undefined && typeof p.outline !== "boolean")
 			throw new Error("invalid outline option");
-		// Options are checked before user components run; fonts need the engine to parse.
-		const tree = await resolveTree(document);
-		if (tree.some((node) => node.kind !== "element")) throw new Error("expected element or props");
-		const repeating: ["header" | "footer", boolean, string, readonly Node[]][] = [];
-		for (const [option, position, first] of FURNITURE) {
-			if (p[option] === undefined) continue;
-			const nodes = await resolveTree(p[option]);
-			if (nodes.some((node) => node.kind !== "element"))
-				throw new Error(`${option} expects elements; wrap its text in one`);
-			repeating.push([position, first, option, nodes]);
-		}
 		const backend = await loadBackend();
-		const styles = styleResolver(
-			p.stylesheets as readonly string[] | undefined,
-			page.width - page.margin[1]! - page.margin[3]!,
-		);
-		// The second pass pushes the record the engine rejected alone, so the element that wrote it reports.
-		const emit = (replayAt?: number): Uint8Array<ArrayBuffer> => {
-			const renderer = backend.create();
-			const binary = new Binary(renderer, backend.memory, replayAt);
-			let consumed = false;
-			try {
-				const fonts = registerFonts(renderer, p.fonts);
-				const writer = new ProtocolWriter(binary, renderer);
-				writer.header(page.width, page.height, page.margin);
-				writer.metadata(metadata, p.tagged === true);
-				attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
-				for (const [position, first, option, nodes] of repeating) {
-					try {
-						writer.repeatStart(position, first, option);
-						compile(styles(nodes, true), writer, fonts, undefined, 0, true);
-						writer.repeatEnd();
-						binary.flush();
-					} catch (error) {
-						if (error instanceof Error && error.message === "PageOverflow")
-							throw new Error(
-								`PageOverflow: with ${option}, the header and footer take more than half the page`,
-								{ cause: error },
-							);
-						throw error;
-					}
-				}
-				compileBody(styles(tree), writer, fonts, p.outline === true);
-				writer.end();
-				consumed = true;
-				try {
-					// Both backends hand back a fresh ArrayBuffer the engine no longer owns.
-					return renderer.finish() as Uint8Array<ArrayBuffer>;
-				} catch (error) {
-					throw asError(error);
-				}
-			} catch (error) {
-				const failed = consumed ? undefined : binary.failure();
-				if (failed !== undefined && replayAt === undefined) return emit(failed);
-				throw pageOverflow(error);
-			} finally {
-				if (!consumed) renderer.free();
+		const renderer = backend.create();
+		let consumed = false;
+		try {
+			// The core checks fonts, @page, and the other options before user components run.
+			const fonts = registerFonts(renderer, p.fonts);
+			const writer = new ProtocolWriter(new Binary(renderer, backend.memory), renderer);
+			writer.header();
+			writer.families(fonts);
+			for (const sheet of stylesheets) writer.stylesheet(sheet);
+			writer.setup(p.outline === true, page);
+			writer.metadata(metadata, p.tagged === true);
+			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
+			writer.flush();
+			const tree = await resolveTree(document);
+			if (tree.some((node) => node.kind !== "element"))
+				throw new Error("expected element or props");
+			const blocks: [number, readonly Node[]][] = [];
+			for (const [index, option] of FURNITURE.entries()) {
+				if (p[option] === undefined) continue;
+				const nodes = await resolveTree(p[option]);
+				if (nodes.some((node) => node.kind !== "element"))
+					throw new Error(`${option} expects elements; wrap its text in one`);
+				blocks.push([index + 1, nodes]);
 			}
-		};
-		return emit();
+			blocks.push([0, tree]);
+			for (const [kind, nodes] of blocks) writer.block(kind, nodes);
+			writer.end();
+			consumed = true;
+			// Both backends hand back a fresh ArrayBuffer the engine no longer owns.
+			return renderer.finish() as Uint8Array<ArrayBuffer>;
+		} catch (error) {
+			throw asError(error);
+		} finally {
+			if (!consumed) renderer.free();
+		}
 	};
 }
 

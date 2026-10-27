@@ -11,13 +11,13 @@ mod length;
 mod list;
 mod normalize;
 
-pub use boxes::{box_size, box_style, edges, radius_of, Box, Radius, Size};
+pub use boxes::{box_size, box_style, radius_of, Box};
 pub use color::{color, Rgb};
-pub use decoration::{decoration, decoration_color, Decoration};
-pub use font::{bold, face, families, font, italic, Font, FontSlots, COURIER, HELVETICA, TIMES};
+pub use decoration::{decoration, decoration_color};
+pub use font::{bold, face, font, italic, FontSlots, HELVETICA};
 pub use length::{
-    corner, dimension, edge_values, flex_basis, line_height, opacity, point, spacing, CornerRadius,
-    Dimension, LineHeight,
+    corner, dimension, edge_values, flex_basis, line_height, opacity, point, spacing, Dimension,
+    LineHeight,
 };
 pub use list::{counter, list_style_position, list_style_type, SHAPES};
 
