@@ -2767,3 +2767,56 @@ fn given_arabic_when_shaped_then_its_letters_join_read_right_to_left_and_copy_ba
     assert_ne!(glyphs[3], nominal(ARABIC, '\u{633}'));
     assert_eq!(page_text(&pdf, 1).chars().rev().collect::<String>(), word);
 }
+
+/// Renders `text` in `font` with Abel and the Hebrew subset registered, in that order.
+fn with_fallback(font: super::FontId, text: &str) -> Result<lopdf::Document, RenderError> {
+    let fonts = [ABEL, HEBREW].map(|bytes| super::EmbeddedFont::parse(bytes.to_vec()).unwrap());
+    let mut renderer = super::Renderer::with_fonts(Page::A4, fonts.into());
+    renderer.push(&[Command::Text {
+        text,
+        style: TextStyle {
+            font,
+            ..TextStyle::plain(Pt(12.0))
+        },
+    }])?;
+    Ok(lopdf::Document::load_mem(&renderer.finish()?).unwrap())
+}
+
+fn fonts_set(pdf: &lopdf::Document) -> Vec<String> {
+    operations(pdf)
+        .iter()
+        .filter(|operation| operation.operator == "Tf")
+        .map(|operation| {
+            String::from_utf8_lossy(operation.operands[0].as_name().unwrap()).into_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_word_abel_lacks_when_a_later_registered_font_has_it_then_that_font_draws_only_those_letters(
+) {
+    let pdf = with_fallback(super::FontId::new(12), "ab \u{5e9}\u{5dc}\u{5d5}\u{5dd} cd").unwrap();
+    assert_eq!(fonts_set(&pdf), ["F5", "F6", "F5"]);
+    let hebrew = ['\u{5dd}', '\u{5d5}', '\u{5dc}', '\u{5e9}'].map(|letter| nominal(HEBREW, letter));
+    let glyphs = shown_glyphs(&pdf);
+    assert_eq!(glyphs[3..7], hebrew);
+}
+
+#[test]
+fn given_helvetica_text_with_a_character_outside_winansi_when_a_registered_font_has_it_then_it_falls_back(
+) {
+    let pdf = with_fallback(super::FontId::HELVETICA, "a\u{5e9}").unwrap();
+    assert_eq!(fonts_set(&pdf), ["F1", "F6"]);
+}
+
+#[test]
+fn given_a_character_no_registered_font_has_when_rendered_then_rejects_naming_it() {
+    assert_eq!(
+        with_fallback(super::FontId::new(12), "a\u{4e2d}").unwrap_err(),
+        RenderError::MissingGlyph('\u{4e2d}')
+    );
+    assert_eq!(
+        with_fallback(super::FontId::HELVETICA, "a\u{4e2d}").unwrap_err(),
+        RenderError::UnsupportedCharacter('\u{4e2d}')
+    );
+}

@@ -53,6 +53,35 @@ impl FontBook {
         Self { fonts, used, names }
     }
 
+    /// Whether the font draws every character of a cluster; default ignorables, which
+    /// shaping drops, count as drawn in an embedded font.
+    pub(crate) fn covers(&self, id: FontId, cluster: &str) -> bool {
+        match self.get(id) {
+            Some(Font::Standard(_)) => cluster.chars().all(|character| crate::win_ansi::encode(character).is_ok()),
+            Some(Font::Embedded(font)) => cluster.chars().all(|character| {
+                font.glyph(character).is_some()
+                    || matches!(character, '\u{200c}'..='\u{200d}' | '\u{fe00}'..='\u{fe0f}' | '\u{e0100}'..='\u{e01ef}')
+            }),
+            None => false,
+        }
+    }
+
+    /// The embedded fonts to try, in registration order, when `id` lacks a glyph: those of
+    /// the same weight and slant first, then the rest.
+    pub(crate) fn fallbacks(&self, id: FontId) -> Vec<FontId> {
+        let style = |font: &Font| match font {
+            Font::Standard(face) => (face % 4 == 1 || face % 4 == 3, face % 4 >= 2),
+            Font::Embedded(font) => (font.bold, font.italic),
+        };
+        let wanted = self.get(id).map(style);
+        let mut candidates: Vec<FontId> = (BUILT_IN..self.fonts.len())
+            .filter(|index| *index != id.index())
+            .map(|index| FontId::new(index as u8))
+            .collect();
+        candidates.sort_by_key(|candidate| self.get(*candidate).map(style) != wanted);
+        candidates
+    }
+
     /// Shapes `text` in an embedded font, or names a character it has no glyph for.
     pub(crate) fn shape(&self, id: FontId, text: &str, flags: u8) -> Result<Arc<Shaped>, char> {
         let Some(Font::Embedded(font)) = self.get(id) else {
