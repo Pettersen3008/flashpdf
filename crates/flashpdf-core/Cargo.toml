@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 itoa = "=1.0.18"
+libm = { version = "=0.2.16", default-features = false }
 miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
 pdf-writer = "=0.15.0"
 unicode-linebreak = "=0.1.5"

@@ -1,0 +1,195 @@
+use super::super::{Prop, Value};
+use super::color::{color, Rgb};
+use super::length::{corner, dimension, point, Dimension};
+use super::{Style, BORDER_COLORS, BORDER_STYLES, BORDER_WIDTHS, MARGINS, PADDINGS, RADII};
+
+/// `margin` or `padding` in points, top first. An `auto` margin is zero here; `box_size` flags it.
+pub fn edges(s: &Style, name: &str, parent: f64) -> Result<[f64; 4], String> {
+    let margin = name == "margin";
+    let sides = if margin { MARGINS } else { PADDINGS };
+    let mut result = [0.0; 4];
+    for (side, prop) in result.iter_mut().zip(sides) {
+        let value = s.get(prop).cloned().unwrap_or(Value::Number(0.0));
+        *side = if margin && value.is("auto") {
+            0.0
+        } else {
+            point(&value, parent, false)?
+        };
+    }
+    Ok(result)
+}
+
+/// Width-like sizes are points (kind 1) or percent of the container's width (kind 2). Heights
+/// are points, percents already resolved against the parent's fixed height.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Size {
+    pub border_box: bool,
+    /// One bit per `auto` margin: top 1, right 2, bottom 4, left 8.
+    pub auto_margin: u8,
+    pub width: Option<Dimension>,
+    pub min_width: Option<Dimension>,
+    pub max_width: Option<Dimension>,
+    pub height: Option<f64>,
+    pub min_height: Option<f64>,
+    pub max_height: Option<f64>,
+}
+
+/// The box's sizes and auto margins, or None when it has none. `height` is the parent's
+/// definite content height, which percent heights need; `width` is false where a table or
+/// column-model flex row owns the width.
+pub fn box_size(s: &Style, height: Option<f64>, width: bool) -> Result<Option<Size>, String> {
+    let auto_margin = MARGINS
+        .iter()
+        .enumerate()
+        .filter(|(_, prop)| s.get(**prop).is_some_and(|value| value.is("auto")))
+        .fold(0, |bits, (index, _)| bits | 1 << index);
+    let horizontal = |prop: Prop| {
+        s.get(prop)
+            .map(|value| dimension(value, prop.name(), true))
+            .transpose()
+    };
+    let vertical = |prop: Prop| -> Result<Option<f64>, String> {
+        let Some(value) = s.get(prop) else {
+            return Ok(None);
+        };
+        let Dimension { kind, value } = dimension(value, prop.name(), true)?;
+        if kind == 1 {
+            return Ok(Some(value));
+        }
+        let Some(height) = height else {
+            return Err(format!(
+                "a percent {} needs a parent with a fixed height; use pt or px",
+                prop.name()
+            ));
+        };
+        Ok(Some(f64::from((height * value / 100.0) as f32)))
+    };
+    let size = Size {
+        border_box: s
+            .get(prop!("boxSizing"))
+            .is_some_and(|value| value.is("border-box")),
+        auto_margin,
+        width: if width {
+            horizontal(prop!("width"))?
+        } else {
+            None
+        },
+        min_width: horizontal(prop!("minWidth"))?,
+        max_width: horizontal(prop!("maxWidth"))?,
+        height: vertical(prop!("height"))?,
+        min_height: vertical(prop!("minHeight"))?,
+        max_height: vertical(prop!("maxHeight"))?,
+    };
+    let sized = [size.width, size.min_width, size.max_width]
+        .iter()
+        .any(Option::is_some)
+        || [size.height, size.min_height, size.max_height]
+            .iter()
+            .any(Option::is_some);
+    Ok((auto_margin != 0 || sized).then_some(size))
+}
+
+/// Eight values, clockwise from the top left corner, horizontal then vertical, in points; bit `i`
+/// of `percent` makes value `i` a percent of the box's width (even `i`) or height (odd `i`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Radius {
+    pub values: [f64; 8],
+    pub percent: u8,
+}
+
+/// The corner radii, or None when every corner is square.
+pub fn radius_of(s: &Style, parent: f64) -> Result<Option<Radius>, String> {
+    let mut radius = Radius {
+        values: [0.0; 8],
+        percent: 0,
+    };
+    for (index, prop) in RADII.into_iter().enumerate() {
+        let value = s.get(prop).cloned().unwrap_or(Value::Number(0.0));
+        for (half, (amount, percent)) in corner(&value, parent)?.into_iter().enumerate() {
+            let at = index * 2 + half;
+            radius.values[at] = amount;
+            radius.percent |= u8::from(percent) << at;
+        }
+    }
+    Ok(radius
+        .values
+        .iter()
+        .any(|&value| value != 0.0)
+        .then_some(radius))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Box {
+    pub margin: [f64; 4],
+    pub padding: [f64; 4],
+    pub border: [f64; 4],
+    pub background: Option<Rgb>,
+    pub border_color: [Rgb; 4],
+    /// Per side, top first: 0 solid, 1 dashed, 2 dotted.
+    pub border_style: [u8; 4],
+    pub radius: Option<Radius>,
+    /// 0 to 1, with every ancestor's opacity multiplied in.
+    pub opacity: f64,
+    pub size: Option<Size>,
+}
+
+/// The box's edges, paint, and radii, or None when the style sets none of them.
+// ponytail: no memo per style and font size as the TypeScript has; add one if profiles show it.
+pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, String> {
+    let boxed = [MARGINS, PADDINGS, BORDER_WIDTHS, BORDER_COLORS]
+        .iter()
+        .flatten()
+        .chain([&prop!("backgroundColor")])
+        .any(|prop| s.get(*prop).is_some());
+    if !boxed {
+        return Ok(None);
+    }
+    let lines = BORDER_STYLES.map(|prop| s.get(prop).cloned().unwrap_or_else(|| "solid".into()));
+    let mut border = [0.0; 4];
+    for (index, width) in border.iter_mut().enumerate() {
+        let paint = s.get(BORDER_COLORS[index]);
+        if let Some(value) = s.get(BORDER_WIDTHS[index]) {
+            if !paint.is_some_and(|paint| paint.is("transparent")) && !lines[index].is("none") {
+                *width = point(value, parent, false)?;
+            }
+        }
+    }
+    let mut border_color = [[0; 3]; 4];
+    for (rgb, prop) in border_color.iter_mut().zip(BORDER_COLORS) {
+        if let Some(paint) = s.get(prop).filter(|paint| !paint.is("transparent")) {
+            *rgb = color(paint)?;
+        }
+    }
+    let border_style = lines.map(|line| match line.text() {
+        Some("dashed") => 1,
+        Some("dotted") => 2,
+        _ => 0,
+    });
+    let radius = radius_of(s, parent)?;
+    // The engine's `uniform_border`: one stroke around the box draws all four borders.
+    let uniform = border.iter().all(|&width| width == border[0])
+        && (border[0] == 0.0
+            || (border_color.iter().all(|rgb| *rgb == border_color[0])
+                && border_style.iter().all(|&line| line == border_style[0])));
+    if radius.is_some() && !uniform {
+        return Err("border-radius needs one width, colour, and style on all four borders, or none, because a curved border is drawn as one stroke".into());
+    }
+    let margin = edges(s, "margin", parent)?;
+    let padding = edges(s, "padding", parent)?;
+    let background = s
+        .get(prop!("backgroundColor"))
+        .filter(|paint| !paint.is("transparent"))
+        .map(color)
+        .transpose()?;
+    Ok(Some(Box {
+        margin,
+        padding,
+        border,
+        background,
+        border_color,
+        border_style,
+        radius,
+        opacity,
+        size: None,
+    }))
+}
