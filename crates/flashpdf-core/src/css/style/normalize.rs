@@ -6,6 +6,7 @@ use super::list::parse_list_style;
 use super::{
     Style, BORDER_COLORS, BORDER_SIDES, BORDER_STYLES, BORDER_WIDTHS, MARGINS, PADDINGS, RADII,
 };
+use crate::css::Message;
 
 const COLOR: Prop = prop!("color");
 const MARGIN: Prop = prop!("margin");
@@ -135,7 +136,7 @@ fn replace_current(text: &str, current: &str) -> String {
 /// Expands every shorthand into its longhands in cascade order, so the later declaration wins.
 /// `inherit` and `initial` resolve against `parent`, the parent's normalized style, and
 /// `currentcolor` becomes the element's own colour.
-pub(super) fn normalize(value: &Cascaded, parent: &Style) -> Result<Style, String> {
+pub(super) fn normalize(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
     let declared = value.get(&Key::Prop(COLOR));
     let own = declared.and_then(keyword);
     let current = match (own.as_deref(), declared) {
@@ -195,7 +196,7 @@ pub(super) fn normalize(value: &Cascaded, parent: &Style) -> Result<Style, Strin
                 Value::Number(_) => vec![item.clone()],
             };
             if values.len() > 2 {
-                return Err(format!("invalid {}: {item}", prop.name()));
+                return Err(format!("invalid {}: {item}", prop.name()).into());
             }
             result.set(*start, values[0].clone());
             result.set(
@@ -234,7 +235,7 @@ pub(super) fn normalize(value: &Cascaded, parent: &Style) -> Result<Style, Strin
                 Value::Number(_) => vec![item.clone()],
             };
             if parts.len() > 2 {
-                return Err(format!("invalid border-radius: {item}"));
+                return Err(format!("invalid border-radius: {item}").into());
             }
             let across = edge_values(&parts[0], "border-radius")?;
             let down = parts

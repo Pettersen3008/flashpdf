@@ -1,4 +1,5 @@
 use super::super::{js_trim, number, number_end, parse_number, unit_points, words, Value};
+use crate::css::Message;
 
 /// `value.trim().split(/\s+/)` for text, the value alone otherwise.
 pub(super) fn tokens(value: &Value) -> Vec<Value> {
@@ -9,7 +10,7 @@ pub(super) fn tokens(value: &Value) -> Vec<Value> {
 }
 
 /// One to four values spread over the sides, top first, as `margin` gives them.
-pub fn edge_values(value: &Value, name: &str) -> Result<[Value; 4], String> {
+pub fn edge_values(value: &Value, name: &str) -> Result<[Value; 4], Message> {
     let values = tokens(value);
     let at = |index: usize| values[index].clone();
     Ok(match values.len() {
@@ -17,17 +18,19 @@ pub fn edge_values(value: &Value, name: &str) -> Result<[Value; 4], String> {
         2 => [at(0), at(1), at(0), at(1)],
         3 => [at(0), at(1), at(2), at(1)],
         4 => [at(0), at(1), at(2), at(3)],
-        _ => return Err(format!("invalid {name}: {value}")),
+        _ => return Err(format!("invalid {name}: {value}").into()),
     })
 }
 
 /// Whether `text` is all `\d+(\.\d*)?|\.\d+`, without an exponent.
+#[inline(never)]
 pub(super) fn plain_number(text: &str) -> bool {
     !text.is_empty() && number_end(text.as_bytes(), false) == text.len()
 }
 
 /// A length in points; a number is points already. `em` scales `parent`.
-pub fn point(value: &Value, parent: f64, positive: bool) -> Result<f64, String> {
+#[inline(never)]
+pub fn point(value: &Value, parent: f64, positive: bool) -> Result<f64, Message> {
     match value {
         Value::Number(amount) => number(*amount, positive),
         Value::Text(text) => super::super::point(text, parent, positive),
@@ -38,12 +41,12 @@ pub fn point(value: &Value, parent: f64, positive: bool) -> Result<f64, String> 
 pub type CornerRadius = (f64, bool);
 
 /// A corner's radius, horizontal then vertical; one value serves both.
-pub fn corner(value: &Value, parent: f64) -> Result<[CornerRadius; 2], String> {
+pub fn corner(value: &Value, parent: f64) -> Result<[CornerRadius; 2], Message> {
     let tokens = tokens(value);
     if tokens.len() > 2 {
-        return Err(format!("invalid border radius: {value}"));
+        return Err(format!("invalid border radius: {value}").into());
     }
-    let radius = |token: &Value| -> Result<CornerRadius, String> {
+    let radius = |token: &Value| -> Result<CornerRadius, Message> {
         let percent = token.text().and_then(|text| text.strip_suffix('%'));
         match percent {
             Some(amount)
@@ -61,7 +64,7 @@ pub fn corner(value: &Value, parent: f64) -> Result<[CornerRadius; 2], String> {
 }
 
 /// A number or percent, clamped to 0 through 1 as CSS does.
-pub fn opacity(value: &Value) -> Result<f64, String> {
+pub fn opacity(value: &Value) -> Result<f64, Message> {
     let amount = match value {
         Value::Number(amount) => *amount,
         Value::Text(text) => {
@@ -78,13 +81,13 @@ pub fn opacity(value: &Value) -> Result<f64, String> {
         }
     };
     if amount.is_nan() {
-        return Err(format!("invalid opacity: {value}"));
+        return Err(format!("invalid opacity: {value}").into());
     }
     Ok(amount.clamp(0.0, 1.0))
 }
 
 /// `letter-spacing` or `word-spacing` in points, either sign, bounded by the largest page side.
-pub fn spacing(value: &Value, size: f64, name: &str) -> Result<f64, String> {
+pub fn spacing(value: &Value, size: f64, name: &str) -> Result<f64, Message> {
     if value.is("normal") {
         return Ok(0.0);
     }
@@ -102,7 +105,7 @@ pub fn spacing(value: &Value, size: f64, name: &str) -> Result<f64, String> {
         .map_err(|_| format!("invalid {name}: {value} (use normal or a length)"))?
         * if negative { -1.0 } else { 1.0 };
     if amount.abs() > 14_400.0 {
-        return Err(format!("invalid {name}: {value}"));
+        return Err(format!("invalid {name}: {value}").into());
     }
     Ok(amount)
 }
@@ -115,7 +118,7 @@ pub struct Dimension {
 }
 
 /// A `width` or img `height`: points (kind 1) or percent of the container width (kind 2).
-pub fn dimension(value: &Value, name: &str, zero: bool) -> Result<Dimension, String> {
+pub fn dimension(value: &Value, name: &str, zero: bool) -> Result<Dimension, Message> {
     let mut percent = false;
     let amount = match value {
         Value::Number(amount) => *amount,
@@ -138,7 +141,7 @@ pub fn dimension(value: &Value, name: &str, zero: bool) -> Result<Dimension, Str
     // The engine takes f32, so a long digit string must not round to Infinity.
     let single = amount as f32;
     if !(amount > 0.0 || (zero && amount == 0.0)) || !single.is_finite() {
-        return Err(format!("invalid {name}: {value}"));
+        return Err(format!("invalid {name}: {value}").into());
     }
     Ok(Dimension {
         kind: if percent && amount > 0.0 { 2 } else { 1 },
@@ -147,7 +150,7 @@ pub fn dimension(value: &Value, name: &str, zero: bool) -> Result<Dimension, Str
 }
 
 /// `auto` (None), or a zero, length, or percent basis.
-pub fn flex_basis(value: &Value) -> Result<Option<Dimension>, String> {
+pub fn flex_basis(value: &Value) -> Result<Option<Dimension>, Message> {
     if value.is("auto") {
         return Ok(None);
     }
@@ -160,12 +163,12 @@ pub fn flex_basis(value: &Value) -> Result<Option<Dimension>, String> {
 /// The `flex` shorthand's longhands, grow, shrink, and basis: `none`, `auto`, or grow and shrink
 /// factors with a basis before or after them. Factors alone have a zero basis; a basis alone
 /// grows and shrinks by 1.
-pub(super) fn flex_shorthand(value: &Value) -> Result<(f64, f64, Value), String> {
+pub(super) fn flex_shorthand(value: &Value) -> Result<(f64, f64, Value), Message> {
     let text = match value {
         Value::Number(amount) => return Ok((number(*amount, false)?, 1.0, Value::Number(0.0))),
         Value::Text(text) => js_trim(text).to_lowercase(),
     };
-    let invalid = || format!("invalid flex: {value}");
+    let invalid = || Message::from(format!("invalid flex: {value}"));
     match text.as_str() {
         "" => return Err(invalid()),
         "none" => return Ok((0.0, 0.0, "auto".into())),
@@ -211,7 +214,7 @@ pub enum LineHeight {
 }
 
 /// None is `normal`.
-pub fn line_height(value: &Value, size: f64) -> Result<Option<LineHeight>, String> {
+pub fn line_height(value: &Value, size: f64) -> Result<Option<LineHeight>, Message> {
     let text = match value {
         Value::Number(amount) => return Ok(Some(LineHeight::Factor(number(*amount, true)?))),
         Value::Text(text) if &**text == "normal" => return Ok(None),

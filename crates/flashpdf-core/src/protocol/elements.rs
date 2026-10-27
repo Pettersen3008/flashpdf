@@ -136,7 +136,8 @@ impl Decoder {
                 };
                 let source = String::from_utf8(bytes).map_err(|_| ProtocolError::InvalidUtf8)?;
                 if matches!(code, Opcode::StrictStylesheet) {
-                    stylesheet(&source).map_err(ProtocolError::Message)?;
+                    stylesheet(&source)
+                        .map_err(|message| ProtocolError::Message(message.into()))?;
                 }
                 elements.sheets.push(source);
                 Ok(())
@@ -273,14 +274,15 @@ impl Decoder {
                     &pages,
                 )
             })
-            .map_err(ProtocolError::Message)?;
+            .map_err(|message| ProtocolError::Message(message.into()))?;
         let [top, right, bottom, left] = page.margin;
         self.commands.set_page(
             [page.width as f32, page.height as f32],
             [top as f32, right as f32, bottom as f32, left as f32],
         )?;
         let width = page.width - right - left;
-        let cascade = resolver(&elements.sheets, width).map_err(ProtocolError::Message)?;
+        let cascade = resolver(&elements.sheets, width)
+            .map_err(|message| ProtocolError::Message(message.into()))?;
         let families = elements.families().clone();
         elements.outline = outline;
         elements.compiler = Some(Compiler::new(

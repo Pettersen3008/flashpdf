@@ -1,4 +1,5 @@
 use super::super::{js_trim, words, Value};
+use crate::css::Message;
 
 const TYPES: [&str; 12] = [
     "disc",
@@ -16,18 +17,18 @@ const TYPES: [&str; 12] = [
 ];
 
 /// The type's name.
-pub fn list_style_type(value: &Value) -> Result<&'static str, String> {
+pub fn list_style_type(value: &Value) -> Result<&'static str, Message> {
     let word = value.text().map(|text| js_trim(text).to_lowercase());
     TYPES
         .into_iter()
         .find(|name| word.as_deref() == Some(name))
         .ok_or_else(|| format!(
             "invalid listStyleType: {value} (use disc, circle, square, decimal, decimal-leading-zero, lower-alpha, lower-latin, upper-alpha, upper-latin, lower-roman, upper-roman, or none)"
-        ))
+        ).into())
 }
 
 /// `outside` or `inside`.
-pub fn list_style_position(value: &Value) -> Result<&'static str, String> {
+pub fn list_style_position(value: &Value) -> Result<&'static str, Message> {
     match value
         .text()
         .map(|text| js_trim(text).to_lowercase())
@@ -35,19 +36,17 @@ pub fn list_style_position(value: &Value) -> Result<&'static str, String> {
     {
         Some("outside") => Ok("outside"),
         Some("inside") => Ok("inside"),
-        _ => Err(format!(
-            "invalid listStylePosition: {value} (use outside or inside)"
-        )),
+        _ => Err(format!("invalid listStylePosition: {value} (use outside or inside)").into()),
     }
 }
 
 /// The `list-style` shorthand as type and position. A part left out resets to its initial
 /// value, `disc` and `outside`.
-pub(super) fn parse_list_style(value: &Value) -> Result<(&'static str, &'static str), String> {
+pub(super) fn parse_list_style(value: &Value) -> Result<(&'static str, &'static str), Message> {
     let Value::Text(text) = value else {
-        return Err(format!("invalid listStyle: {value}"));
+        return Err(format!("invalid listStyle: {value}").into());
     };
-    let invalid = || format!("invalid listStyle: {text}");
+    let invalid = || Message::from(format!("invalid listStyle: {text}"));
     let mut kind = None;
     let mut position = None;
     let mut nones = 0;

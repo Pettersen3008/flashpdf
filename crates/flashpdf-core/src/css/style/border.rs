@@ -1,5 +1,6 @@
 use super::super::{js_space, js_trim, Value};
 use super::length::point;
+use crate::css::Message;
 
 const BORDER_STYLES: [&str; 10] = [
     "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
@@ -30,7 +31,7 @@ pub(super) fn tokens(value: &str) -> Vec<&str> {
 
 /// A border line as the box reads it: `none`, `solid`, `dashed`, or `dotted`. `hidden` draws
 /// like `none`. A border with no style at all is solid, unlike CSS, where it is `none`.
-pub(super) fn line(value: &Value) -> Result<&'static str, String> {
+pub(super) fn line(value: &Value) -> Result<&'static str, Message> {
     let word = value.text().map(|text| js_trim(text).to_lowercase());
     match word.as_deref() {
         Some("none" | "hidden") => Ok("none"),
@@ -39,15 +40,16 @@ pub(super) fn line(value: &Value) -> Result<&'static str, String> {
         Some("dotted") => Ok("dotted"),
         Some(word) if BORDER_STYLES.contains(&word) => Err(format!(
             "unsupported border style: {word} (only none, solid, dashed, and dotted are drawn)"
-        )),
-        _ => Err(format!("invalid border style: {value}")),
+        )
+        .into()),
+        _ => Err(format!("invalid border style: {value}").into()),
     }
 }
 
 /// The width, colour, and line of a `border` shorthand. Only the width is matched by shape;
 /// whatever is left over is the colour, so an unpaintable colour reports itself later instead
 /// of being ignored.
-pub(super) fn parse_border(value: &Value) -> Result<(Value, Value, &'static str), String> {
+pub(super) fn parse_border(value: &Value) -> Result<(Value, Value, &'static str), Message> {
     let text = match value {
         Value::Number(_) => return Ok((value.clone(), "black".into(), "solid")),
         Value::Text(text) => text,
@@ -66,11 +68,11 @@ pub(super) fn parse_border(value: &Value) -> Result<(Value, Value, &'static str)
         } else if paint.is_none() {
             paint = Some(token);
         } else {
-            return Err(format!("invalid border: {text}"));
+            return Err(format!("invalid border: {text}").into());
         }
     }
     let Some(width) = width else {
-        return Err(format!("invalid border: {text}"));
+        return Err(format!("invalid border: {text}").into());
     };
     let width = Value::from(width);
     point(&width, 12.0, false)?;

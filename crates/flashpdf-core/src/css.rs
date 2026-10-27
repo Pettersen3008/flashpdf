@@ -26,6 +26,45 @@ use style::{box_style, color, style, Style};
 
 use std::rc::Rc;
 
+/// A CSS error message. Boxed, so `?` on a `Result<_, Message>` moves one pointer; the extra
+/// allocation only happens on the error path.
+#[allow(clippy::box_collection)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Message(Box<String>);
+
+impl From<String> for Message {
+    #[inline(never)]
+    fn from(message: String) -> Self {
+        Self(Box::new(message))
+    }
+}
+
+impl From<&str> for Message {
+    #[inline(never)]
+    fn from(message: &str) -> Self {
+        Self(Box::new(message.into()))
+    }
+}
+
+impl From<Message> for String {
+    fn from(message: Message) -> Self {
+        *message.0
+    }
+}
+
+impl std::ops::Deref for Message {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Message {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
 /// A property a declaration sets: a known one, a custom `--name`, or an unknown style-object key
 /// that normalisation rejects.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,10 +83,21 @@ impl Key {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Value {
     Text(Rc<str>),
     Number(f64),
+}
+
+// By hand, to keep the reference count update out of each of the many inlined clones.
+impl Clone for Value {
+    #[inline(never)]
+    fn clone(&self) -> Self {
+        match self {
+            Self::Text(text) => Self::Text(text.clone()),
+            Self::Number(number) => Self::Number(*number),
+        }
+    }
 }
 
 impl Value {
@@ -58,12 +108,14 @@ impl Value {
         }
     }
     /// Whether this is the string `text`, as `===` compares.
+    #[inline(never)]
     pub fn is(&self, text: &str) -> bool {
         self.text() == Some(text)
     }
 }
 
 impl From<&str> for Value {
+    #[inline(never)]
     fn from(text: &str) -> Self {
         Self::Text(text.into())
     }
@@ -252,7 +304,7 @@ pub(crate) fn js_number(value: f64) -> String {
 }
 
 /// A finite f32 value as the engine stores it; `positive` also rejects zero.
-pub(crate) fn number(value: f64, positive: bool) -> Result<f64, String> {
+pub(crate) fn number(value: f64, positive: bool) -> Result<f64, Message> {
     let single = value as f32;
     if !single.is_finite() || (if positive { single <= 0.0 } else { value < 0.0 }) {
         return Err("invalid number".into());
@@ -276,6 +328,7 @@ fn unit_points(unit: &str) -> Option<f64> {
 }
 
 /// Length of the CSS number `\d+(\.\d*)?|\.\d+` with an optional exponent at the start of `text`.
+#[inline(never)]
 pub(crate) fn number_end(text: &[u8], exponent: bool) -> usize {
     let digits = |from: usize| {
         from + text[from..]
@@ -309,7 +362,7 @@ pub(crate) fn parse_number(text: &str) -> f64 {
 }
 
 /// A length in points: `em` scales `parent`, every other unit is absolute.
-pub fn point(value: &str, parent: f64, positive: bool) -> Result<f64, String> {
+pub fn point(value: &str, parent: f64, positive: bool) -> Result<f64, Message> {
     if value == "0" {
         return Ok(0.0);
     }
@@ -323,13 +376,13 @@ pub fn point(value: &str, parent: f64, positive: bool) -> Result<f64, String> {
     };
     match scale {
         Some(scale) if end > 0 => number(parse_number(&trimmed[..end]) * scale, positive),
-        _ => Err(format!("invalid length: {value}")),
+        _ => Err(format!("invalid length: {value}").into()),
     }
 }
 
 /// `stylesheet()`: every declaration of every rule that can match, validated up front where
 /// `render` validates only the rules that match. The decoder runs it on StrictStylesheet records.
-pub fn stylesheet(source: &str) -> Result<(), String> {
+pub fn stylesheet(source: &str) -> Result<(), Message> {
     let mut sheet = Stylesheet::default();
     parse(source, None, &mut sheet)?;
     for rule in sheet.rules.iter().filter(|rule| rule.blocked.is_none()) {

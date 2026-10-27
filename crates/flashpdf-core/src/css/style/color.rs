@@ -1,4 +1,5 @@
 use super::super::{js_parse, js_space, js_trim, Value};
+use crate::css::Message;
 
 /// Sorted by name, for a binary search.
 #[rustfmt::skip]
@@ -52,7 +53,7 @@ static NAMED: &[(&str, u32)] = &[
 
 pub type Rgb = [u8; 3];
 
-fn opaque(alpha: f64) -> Result<(), String> {
+fn opaque(alpha: f64) -> Result<(), Message> {
     if (alpha - 1.0).abs() > 1e-6 {
         return Err("a colour with alpha is not supported; use the opacity property".into());
     }
@@ -89,7 +90,7 @@ fn max(left: f64, right: f64) -> f64 {
     }
 }
 
-fn hex(source: &str) -> Result<Option<Rgb>, String> {
+fn hex(source: &str) -> Result<Option<Rgb>, Message> {
     let Some(digits) = source.strip_prefix('#') else {
         return Ok(None);
     };
@@ -151,7 +152,7 @@ fn hue(token: &str) -> f64 {
     js_parse(token.strip_suffix("deg").unwrap_or(token))
 }
 
-fn functional(source: &str) -> Result<Option<Rgb>, String> {
+fn functional(source: &str) -> Result<Option<Rgb>, Message> {
     let Some(open) = source.find('(') else {
         return Ok(None);
     };
@@ -194,9 +195,9 @@ fn functional(source: &str) -> Result<Option<Rgb>, String> {
     Ok((!rgb.iter().any(|channel| channel.is_nan())).then(|| rgb.map(|channel| channel as u8)))
 }
 
-pub fn color(value: &Value) -> Result<Rgb, String> {
+pub fn color(value: &Value) -> Result<Rgb, Message> {
     let Value::Text(text) = value else {
-        return Err(format!("invalid color: {value}"));
+        return Err(format!("invalid color: {value}").into());
     };
     let source = js_trim(text).to_lowercase();
     let rgb = match NAMED.binary_search_by(|(name, _)| name.cmp(&source.as_str())) {
@@ -213,7 +214,7 @@ pub fn color(value: &Value) -> Result<Rgb, String> {
         if source == "transparent" {
             "transparent applies only to background and border color".into()
         } else {
-            format!("unsupported color: {source}")
+            format!("unsupported color: {source}").into()
         }
     })
 }

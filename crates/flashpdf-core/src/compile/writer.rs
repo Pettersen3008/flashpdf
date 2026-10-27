@@ -153,6 +153,7 @@ impl Record {
     }
 
     /// The payload bytes, exactly as protocol.ts writes them.
+    #[inline(never)]
     pub fn encode(&self, out: &mut Vec<u8>) {
         let mut b = Bytes(out);
         match self {
@@ -284,15 +285,19 @@ fn js_u16(value: f64) -> u16 {
 struct Bytes<'a>(&'a mut Vec<u8>);
 
 impl Bytes<'_> {
+    #[inline(never)]
     fn u8(&mut self, value: u8) {
         self.0.push(value);
     }
+    #[inline(never)]
     fn u16(&mut self, value: f64) {
         self.0.extend_from_slice(&js_u16(value).to_le_bytes());
     }
+    #[inline(never)]
     fn f32(&mut self, value: f64) {
         self.0.extend_from_slice(&(value as f32).to_le_bytes());
     }
+    #[inline(never)]
     fn text(&mut self, value: &str) {
         self.0
             .extend_from_slice(&(value.len() as u32).to_le_bytes());
@@ -764,6 +769,7 @@ fn multiply(m: &[f64; 6], n: &[f64; 6]) -> [f64; 6] {
 /// svg.ts `encode`: the drawing fitted to the unit square, y up, as an image fills it.
 /// `opacity` is the element's CSS opacity, folded into each shape because a shape's own alpha
 /// replaces the page's inside a form XObject.
+#[inline(never)]
 pub(super) fn encode(
     drawing: &Drawing,
     [width, height]: [f64; 2],
