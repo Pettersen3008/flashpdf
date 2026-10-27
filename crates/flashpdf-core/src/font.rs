@@ -16,7 +16,7 @@ use pdf_writer::types::{CidFontType, FontFlags, SystemInfo, UnicodeCmap};
 use pdf_writer::{Filter, Finish, Name, Pdf, Ref, Str};
 
 use crate::layout::LayoutBuffer;
-use crate::pdf::deflate;
+use crate::pdf::{deflate, Stream};
 use crate::{FontId, RenderError, BUILT_IN};
 
 pub(crate) enum Font {
@@ -319,6 +319,6 @@ pub(crate) fn write_embedded(
     for (gid, text) in font.unicode() {
         cmap.pair_with_multiple(gid, text.chars());
     }
-    pdf.stream(refs.to_unicode, &deflate(&cmap.finish()))
+    pdf.stream(refs.to_unicode, &deflate(&cmap.finish(), Stream::Table))
         .filter(Filter::FlateDecode);
 }

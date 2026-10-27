@@ -2,7 +2,7 @@
 //! through to the PDF undecoded, except where an alpha channel must be split
 //! off into an `/SMask`, which needs the scanlines inflated and unfiltered.
 
-use crate::pdf::deflate;
+use crate::pdf::{deflate, Stream};
 
 /// Total bytes of registered images per render.
 pub const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
@@ -331,8 +331,8 @@ fn split_alpha(
     }
     Ok(crate::pdf::join(
         color.len(),
-        || deflate(&color),
-        || deflate(&mask),
+        || deflate(&color, Stream::Binary),
+        || deflate(&mask, Stream::Binary),
     ))
 }
 
