@@ -119,6 +119,8 @@ pub trait Sink {
     fn record(&mut self, record: &Record, payload: &[u8]) -> Result<(), String>;
     /// Registers a drawing's encoded bytes and returns its image slot.
     fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, String>;
+    /// Registers the raster the host staged as `handle` and returns its image slot.
+    fn add_raster(&mut self, handle: u16) -> Result<u16, String>;
 }
 
 /// The largest payload, which the decoder also enforces.
@@ -437,6 +439,8 @@ pub struct Writer<S> {
     repeating: Option<String>,
     /// Slot per drawing, by encoded content, so an icon on every row embeds once.
     drawings: HashMap<Vec<u8>, u16>,
+    /// Slot per staged raster, registered on first paint so slots follow compile order.
+    rasters: HashMap<u16, u16>,
     pages: u32,
     held: f64,
     /// Box and stack starts waiting for content, so a held margin lands outside them.
@@ -450,6 +454,7 @@ impl<S: Sink> Writer<S> {
             sink,
             repeating: None,
             drawings: HashMap::new(),
+            rasters: HashMap::new(),
             pages: 1,
             held: 0.0,
             starts: Vec::new(),
@@ -535,6 +540,16 @@ impl<S: Sink> Writer<S> {
         }
         let slot = self.sink.add_image(bytes.clone())?;
         self.drawings.insert(bytes, slot);
+        Ok(slot)
+    }
+
+    /// The slot of the raster staged as `handle`, registered once.
+    pub fn raster(&mut self, handle: u16) -> Result<u16, Error> {
+        if let Some(slot) = self.rasters.get(&handle) {
+            return Ok(*slot);
+        }
+        let slot = self.sink.add_raster(handle)?;
+        self.rasters.insert(handle, slot);
         Ok(slot)
     }
 

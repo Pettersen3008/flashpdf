@@ -12,12 +12,13 @@ fn header(version: u16, width: f32, height: f32, margin: f32) -> Vec<u8> {
 fn page_header(version: u16, width: f32, height: f32, margin: [f32; 4]) -> Vec<u8> {
     let mut bytes = MAGIC.to_vec();
     bytes.extend(version.to_le_bytes());
-    bytes.extend(width.to_le_bytes());
-    bytes.extend(height.to_le_bytes());
-    for side in margin {
-        bytes.extend(side.to_le_bytes());
-    }
     assert_eq!(bytes.len(), HEADER_LEN);
+    let mut page = width.to_le_bytes().to_vec();
+    page.extend(height.to_le_bytes());
+    for side in margin {
+        page.extend(side.to_le_bytes());
+    }
+    bytes.extend(record(1, &page));
     bytes
 }
 
@@ -353,7 +354,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     unknown.extend(record(42, &[]));
     assert_eq!(push_error(&unknown), "unknown opcode");
 
-    for legacy in [1, 16, 19] {
+    for legacy in [16, 19] {
         let mut removed = header(VERSION, 120.0, 60.0, 10.0);
         removed.extend(record(legacy, &[]));
         assert_eq!(push_error(&removed), "unknown opcode");
@@ -446,21 +447,6 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     late.extend(plain(b"Body"));
     late.extend(record(13, &[0]));
     assert_eq!(push_error(&late), "invalid nesting");
-}
-
-#[test]
-fn given_a_batch_with_a_bad_record_when_pushing_then_records_is_its_index() {
-    let mut batch = header(VERSION, 120.0, 60.0, 10.0);
-    batch.extend(plain(b"one"));
-    batch.extend(plain(b"two"));
-    batch.extend(record(4, &[]));
-    batch.extend(plain(b"never read"));
-    let mut decoder = Decoder::default();
-    assert_eq!(
-        decoder.push(&batch).unwrap_err().to_string(),
-        "invalid nesting"
-    );
-    assert_eq!(decoder.records(), 2);
 }
 
 #[test]
@@ -1053,7 +1039,7 @@ fn given_a_painted_box_around_a_table_over_the_block_cap_when_decoding_then_buff
     decoder.push(&record(10, &table_start(1))).unwrap();
     for _ in 0..=rows {
         decoder.push(&row).unwrap();
-        assert!(decoder.block_bytes < 1024);
+        assert!(decoder.commands.block_bytes < 1024);
     }
     decoder.push(&record(11, &[])).unwrap();
     decoder.push(&record(18, &[])).unwrap();

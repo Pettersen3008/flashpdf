@@ -32,9 +32,9 @@ impl PdfRenderer {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
-    pub fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, JsValue> {
+    pub fn stage_image(&mut self, bytes: Vec<u8>) -> Result<u16, JsValue> {
         self.decoder
-            .add_image(bytes)
+            .stage_image(bytes)
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
@@ -51,11 +51,6 @@ impl PdfRenderer {
         self.decoder
             .push(&self.input[..length])
             .map_err(|error| JsValue::from_str(&error.to_string()))
-    }
-
-    /// Records decoded so far; after a failed `push`, the index of the failing record.
-    pub fn records(&self) -> usize {
-        self.decoder.records()
     }
 
     pub fn finish(self) -> Result<Vec<u8>, JsValue> {

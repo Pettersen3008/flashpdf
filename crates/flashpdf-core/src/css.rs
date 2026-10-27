@@ -16,12 +16,12 @@ mod properties;
 mod selector;
 pub mod style;
 
-pub use cascade::{list_key, Inline, Resolver};
+pub use cascade::{list_key, pages, resolver, Inline, Resolver};
 pub use math::evaluate_math;
 use page::css_page;
 pub use parser::{parse, Stylesheet};
 pub use properties::{property, Prop};
-pub use selector::{ElemInput, Tree};
+pub use selector::{ElemInput, Tree, TAGS};
 use style::{box_style, color, style, Style};
 
 use std::rc::Rc;
@@ -88,6 +88,14 @@ impl std::fmt::Display for Value {
 /// `String(value)` of a value that may be `undefined`.
 pub(crate) fn show(value: Option<&Value>) -> String {
     value.map_or_else(|| "undefined".into(), Value::to_string)
+}
+
+/// The key a style object's `name` sets; normalisation rejects an unknown one.
+pub fn property_key(name: &str) -> Key {
+    if name.starts_with("--") {
+        return Key::Custom(name.into());
+    }
+    Prop::named(name).map_or_else(|| Key::Other(name.into()), Key::Prop)
 }
 
 /// Declarations in cascade order. Setting a key moves it last, because normalisation applies

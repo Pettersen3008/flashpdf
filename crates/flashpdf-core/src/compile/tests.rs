@@ -16,6 +16,9 @@ impl Sink for Collect {
         self.images.push(bytes);
         Ok(99 + self.images.len() as u16)
     }
+    fn add_raster(&mut self, handle: u16) -> std::result::Result<u16, String> {
+        Ok(handle)
+    }
 }
 
 fn text(value: &str) -> Node {
@@ -51,7 +54,7 @@ fn helvetica() -> Fonts {
 
 fn compiled_with(nodes: Vec<Node>, fonts: &Fonts, outline: bool) -> Result<Collect> {
     let styler = Styler::new(&[], 523.0).unwrap();
-    let mut compiler = Compiler::new(styler, fonts, Collect::default());
+    let mut compiler = Compiler::new(styler, fonts.clone(), Collect::default());
     compiler.body(&nodes, outline)?;
     Ok(compiler.writer.sink)
 }
@@ -1491,11 +1494,14 @@ impl Sink for Failing {
     fn add_image(&mut self, _: Vec<u8>) -> std::result::Result<u16, String> {
         Ok(0)
     }
+    fn add_raster(&mut self, handle: u16) -> std::result::Result<u16, String> {
+        Ok(handle)
+    }
 }
 
 fn engine_failure(code: &'static str, nodes: Vec<Node>) -> String {
     let fonts = helvetica();
-    let mut compiler = Compiler::new(Styler::new(&[], 523.0).unwrap(), &fonts, Failing(code));
+    let mut compiler = Compiler::new(Styler::new(&[], 523.0).unwrap(), fonts, Failing(code));
     compiler.body(&nodes, false).err().unwrap().into_message()
 }
 

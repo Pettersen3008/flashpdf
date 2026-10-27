@@ -38,6 +38,8 @@ pub enum ProtocolError {
     DuplicateAttachment,
     PdfAFont,
     PdfACmyk,
+    /// A compile or page setup error, already worded for the user.
+    Message(String),
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -79,7 +81,9 @@ impl std::fmt::Display for ProtocolError {
                 )
             }
             Self::Render(error) => return write!(formatter, "{error:?}"),
-            Self::InvalidImage(message) => return formatter.write_str(message),
+            Self::InvalidImage(message) | Self::Message(message) => {
+                return formatter.write_str(message)
+            }
             Self::ImagesTooLarge => "images exceed 64 MiB per render",
             Self::TooManyImages => "too many images",
             Self::UnknownImage => "unknown image",

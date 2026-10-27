@@ -197,7 +197,7 @@ fn collapse(rows: &[GridRow], width: usize, boxes: &[Vec<Option<Box>>]) -> Vec<V
 
 const PAGE_BREAKS: &str = "page breaks inside tables are not supported; split the table";
 
-impl<S: Sink> Compiler<'_, S> {
+impl<S: Sink> Compiler<S> {
     pub(super) fn table(&mut self, node: &Styled, context: &Ctx, depth: usize) -> Result<()> {
         let s = &*node.style;
         if [p!("flexGrow"), p!("flexShrink"), p!("flexBasis")]
@@ -213,7 +213,7 @@ impl<S: Sink> Compiler<'_, S> {
             ));
         }
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, self.fonts)?;
+        let next = inherit(s, context, &self.fonts)?;
         let paint = box_style(s, next.size, next.opacity)?;
         if paint.is_some_and(|paint| {
             paint.margin[1] != 0.0
@@ -263,7 +263,7 @@ impl<S: Sink> Compiler<'_, S> {
                                 element.el.tag
                             )));
                         }
-                        inherit(&element.style, &inner, self.fonts)
+                        inherit(&element.style, &inner, &self.fonts)
                     })()
                     .map_err(|error| error.locate(&element.at))?,
                 };
@@ -279,7 +279,7 @@ impl<S: Sink> Compiler<'_, S> {
                         {
                             return Err(Error::new(PAGE_BREAKS));
                         }
-                        let own = inherit(&tr.style, &state, self.fonts)?;
+                        let own = inherit(&tr.style, &state, &self.fonts)?;
                         let paint = box_style(&tr.style, own.size, own.opacity)?;
                         let mut row = GridRow {
                             node: tr,
@@ -413,7 +413,7 @@ impl<S: Sink> Compiler<'_, S> {
             for row in &rows {
                 let mut line = Vec::with_capacity(row.cells.len());
                 for cell in &row.cells {
-                    let paint = inherit(&cell.node.style, &row.state, self.fonts)
+                    let paint = inherit(&cell.node.style, &row.state, &self.fonts)
                         .and_then(|own| Ok(box_style(&cell.node.style, own.size, 1.0)?))
                         .map_err(|error| error.locate(&cell.node.at))?;
                     line.push(paint);

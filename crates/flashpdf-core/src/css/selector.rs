@@ -168,6 +168,28 @@ pub struct Complex {
 
 pub type Specificity = [u32; 3];
 
+/// What the rightmost compound demands of every element it matches: an id, else a class,
+/// else a tag. `Any` holds only pseudo-classes or `*`, so every element is a candidate.
+pub(super) enum Bucket<'a> {
+    Id(&'a str),
+    Class(&'a str),
+    Tag(u8),
+    Any,
+}
+
+impl Complex {
+    pub(super) fn bucket(&self) -> Bucket<'_> {
+        let last = &self.compounds[self.compounds.len() - 1];
+        if let Some(id) = last.ids.first() {
+            Bucket::Id(id)
+        } else if let Some(class) = last.classes.first() {
+            Bucket::Class(class)
+        } else {
+            last.tag.map_or(Bucket::Any, Bucket::Tag)
+        }
+    }
+}
+
 /// End of the escape at the backslash `index`: up to six hex digits and one whitespace, or one
 /// other character. None for a backslash that ends the source or precedes a newline.
 fn escape_end(source: &str, index: usize) -> Option<usize> {

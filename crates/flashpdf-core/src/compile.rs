@@ -41,8 +41,8 @@ pub enum InlineStyle {
     Object(Cascaded),
 }
 
-/// What an `<img>` or `<svg>` paints: a raster the host registered with `add_image`, or a
-/// drawing svg.ts parsed, which the compiler fits, colours, and registers itself.
+/// What an `<img>` or `<svg>` paints: a raster the host staged, by handle, or a drawing svg.ts
+/// parsed. The compiler registers both on first paint, so image slots follow compile order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Picture {
     Image(u16),
@@ -164,21 +164,26 @@ struct Computed {
 /// cascade.ts `styleResolver`: cascades and normalises each element, caching per parent result,
 /// inline style, single-line mode, tag, list defaults, and matched rules.
 pub struct Styler {
-    resolver: Resolver,
+    resolver: Rc<Resolver>,
     /// The root's result first; each entry's children index into it.
     computed: Vec<Computed>,
 }
 
 impl Styler {
+    #[cfg(test)]
     pub fn new(sheets: &[&str], width: f64) -> std::result::Result<Self, String> {
-        Ok(Self {
-            resolver: Resolver::new(sheets, width)?,
+        Ok(Self::shared(Rc::new(Resolver::new(sheets, width)?)))
+    }
+
+    pub fn shared(resolver: Rc<Resolver>) -> Self {
+        Self {
+            resolver,
             computed: vec![Computed {
                 cascaded: Cascaded::default(),
                 style: Rc::default(),
                 children: HashMap::new(),
             }],
-        })
+        }
     }
 
     pub(crate) fn styles<'a>(
@@ -977,17 +982,17 @@ fn link_targets(nodes: &[StyledNode]) -> Result<Navigation> {
 }
 
 /// Compiles element records through a `Writer` into a `Sink`, styling each block of input first.
-pub struct Compiler<'f, S> {
+pub struct Compiler<S> {
     styler: Styler,
-    fonts: &'f Fonts,
+    fonts: Fonts,
     pub writer: Writer<S>,
     /// Set only while compiling the document body.
     nav: Option<Navigation>,
     page_tokens: bool,
 }
 
-impl<'f, S: Sink> Compiler<'f, S> {
-    pub fn new(styler: Styler, fonts: &'f Fonts, sink: S) -> Self {
+impl<S: Sink> Compiler<S> {
+    pub fn new(styler: Styler, fonts: Fonts, sink: S) -> Self {
         Self {
             styler,
             fonts,
@@ -1111,7 +1116,7 @@ impl<'f, S: Sink> Compiler<'f, S> {
             {
                 return Ok(None);
             }
-            let mut next = inherit(s, context, self.fonts)?;
+            let mut next = inherit(s, context, &self.fonts)?;
             if let Some(background) = paint
                 .filter(|_| highlight)
                 .and_then(|paint| paint.background)
@@ -1494,7 +1499,7 @@ impl<'f, S: Sink> Compiler<'f, S> {
             "hr" => {
                 row_only(s, context.in_row)?;
                 self.page_break(s, false, depth)?;
-                let size = inherit(s, context, self.fonts)?.size;
+                let size = inherit(s, context, &self.fonts)?.size;
                 let paint = Self::layout_box(s, size, context)?;
                 self.boxed(paint, collapses(context), false, |_| Ok(()))?;
                 self.page_break(s, true, depth)
@@ -1515,7 +1520,7 @@ impl<'f, S: Sink> Compiler<'f, S> {
         }
         row_only(s, context.in_row)?;
         self.page_break(s, false, depth)?;
-        let mut next = inherit(s, context, self.fonts)?;
+        let mut next = inherit(s, context, &self.fonts)?;
         Self::list_state(node, &mut next, context)?;
         let owed = if tag == "li" {
             next.marker.clone()
@@ -1675,7 +1680,7 @@ impl<'f, S: Sink> Compiler<'f, S> {
         let tag = node.el.tag.as_str();
         row_only(s, context.in_row)?;
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, self.fonts)?;
+        let next = inherit(s, context, &self.fonts)?;
         let mut inner = next.clone();
         if let Some(href) = &node.el.href {
             inner.link = Some(href.as_str().into());
@@ -1738,7 +1743,7 @@ impl<'f, S: Sink> Compiler<'f, S> {
             }
         }
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, self.fonts)?;
+        let next = inherit(s, context, &self.fonts)?;
         let length = |prop: Prop| {
             get(s, prop)
                 .map(|value| dimension(value, prop.name(), false))
@@ -1773,7 +1778,7 @@ impl<'f, S: Sink> Compiler<'f, S> {
                         let bytes = writer::encode(drawing, fitted, next.color, next.opacity)?;
                         (this.writer.drawing(bytes)?, 1.0)
                     }
-                    Some(Picture::Image(slot)) => (*slot, next.opacity),
+                    Some(Picture::Image(handle)) => (this.writer.raster(*handle)?, next.opacity),
                     None => return Err(Error::new("unknown image")),
                 };
                 let alt = node.el.alt.as_deref().unwrap_or("");
