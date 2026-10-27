@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::document::Paragraph;
-use crate::font::{Font, FontBook, NO_KERNING, NO_LIGATURES};
+use crate::font::{Font, FontBook, NO_KERNING, NO_LIGATURES, RTL};
 use crate::geometry::{LayoutArea, Point};
 use crate::layout::output::{Gap, LayoutBuffer, Lift, PositionedLine, Segment, MARKER_SLOT};
 use crate::layout::LayoutError;
@@ -72,6 +72,8 @@ struct Piece {
     width: Pt,
     /// Kerning against the previous piece's last glyph, which places this piece.
     lead: Pt,
+    /// Its UAX #9 embedding level; odd is right to left.
+    level: u8,
 }
 
 /// The collapsed space before the pending word, or the hyphen a soft hyphen
@@ -80,6 +82,7 @@ struct Space {
     run: usize,
     text: Range<usize>,
     width: Pt,
+    level: u8,
 }
 
 /// Greedy word wrap over runs. Words end at ASCII whitespace and at the UAX #14
@@ -92,6 +95,14 @@ pub(crate) struct ParagraphLayouter<'a> {
     runs: Vec<RunMetrics<'a>>,
     /// Characters of the pending piece in an embedded font, shaped when the piece ends.
     unshaped: String,
+    /// UAX #9 level per byte of the paragraph text, empty when it has no right-to-left text.
+    levels: Vec<u8>,
+    /// The level of the character being read.
+    level: u8,
+    /// The level of each segment on the current line.
+    line_levels: Vec<u8>,
+    /// The next `append` continues a word placed glyph by glyph.
+    continues: bool,
     align: TextAlign,
     area: LayoutArea,
     height: Pt,
@@ -168,6 +179,10 @@ impl<'a> ParagraphLayouter<'a> {
             fonts,
             runs,
             unshaped: String::new(),
+            levels: levels(paragraph.text),
+            level: 0,
+            line_levels: Vec::new(),
+            continues: false,
             align: paragraph.align,
             area,
             height: Pt::ZERO,
@@ -270,6 +285,12 @@ impl<'a> ParagraphLayouter<'a> {
         let nowrap = self.runs[index].typography.nowrap;
         let mut piece: Option<Piece> = None;
         for (offset, character) in text.char_indices() {
+            // A level change ends the piece, so each piece shapes in one direction.
+            let level = self.levels.get(base + offset).copied().unwrap_or(0);
+            if level != self.level {
+                self.close(index, &mut piece, output)?;
+                self.level = level;
+            }
             if character.is_ascii_whitespace() {
                 self.close(index, &mut piece, output)?;
                 self.word(output)?;
@@ -282,6 +303,7 @@ impl<'a> ParagraphLayouter<'a> {
                         run: index,
                         text: start..output.text.len(),
                         width: width + Pt(metrics.typography.word_spacing),
+                        level,
                     });
                 }
                 continue;
@@ -301,12 +323,14 @@ impl<'a> ParagraphLayouter<'a> {
                         run: index,
                         text: start..output.text.len(),
                         width,
+                        level,
                     });
                     self.word(output)?;
                     continue;
                 }
-                // Zero-width break controls: UAX #14 reads them, no glyph shows.
-                '\u{ad}' | '\u{200b}' | '\u{2060}' => continue,
+                // Zero-width break and bidi controls: UAX #14 and #9 read them, no glyph shows.
+                '\u{ad}' | '\u{200b}' | '\u{2060}' | '\u{200e}' | '\u{200f}' => continue,
+                '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => continue,
                 _ => {}
             }
             // Other whitespace keeps its own glyph and gap, so word spacing and justification find it.
@@ -336,12 +360,17 @@ impl<'a> ParagraphLayouter<'a> {
                 end: start,
                 width: Pt::ZERO,
                 lead,
+                level,
             });
             if slot.start != start {
                 slot.width += lead;
             }
             slot.end = output.text.len();
             slot.width += width;
+            // A built-in font's codes stay in logical order, so right to left each is its own piece.
+            if level % 2 == 1 {
+                self.pieces.extend(piece.take());
+            }
         }
         self.close(index, &mut piece, output)
     }
@@ -372,7 +401,11 @@ impl<'a> ParagraphLayouter<'a> {
         let metrics = &self.runs[run];
         let shaped = self
             .fonts
-            .shape(metrics.id, &self.unshaped, metrics.features)
+            .shape(
+                metrics.id,
+                &self.unshaped,
+                metrics.features | if self.level % 2 == 1 { RTL } else { 0 },
+            )
             .map_err(LayoutError::MissingGlyph)?;
         let start = output.text.len();
         let lead = shaped.glyphs.first().map_or(0, |glyph| glyph.gap);
@@ -412,6 +445,7 @@ impl<'a> ParagraphLayouter<'a> {
             end: start,
             width: Pt::ZERO,
             lead: lead_width,
+            level: self.level,
         });
         if slot.start != start {
             slot.width += lead_width;
@@ -507,7 +541,9 @@ impl<'a> ParagraphLayouter<'a> {
                         output.gaps.push(gap);
                         self.used += width;
                     }
-                    self.append(piece.run, code, glyph, output);
+                    self.continues = position != piece.start;
+                    self.append(piece.run, code, glyph, piece.level, output);
+                    self.continues = false;
                     position += stride;
                 }
             }
@@ -518,11 +554,17 @@ impl<'a> ParagraphLayouter<'a> {
                 if let Some((gap, _)) = self.runs[space.run].word_gap(space.text.end) {
                     output.gaps.push(gap);
                 }
-                self.append(space.run, space.text, space.width, output);
+                self.append(space.run, space.text, space.width, space.level, output);
             }
             for piece in &pieces {
                 self.used += piece.lead;
-                self.append(piece.run, piece.start..piece.end, piece.width, output);
+                self.append(
+                    piece.run,
+                    piece.start..piece.end,
+                    piece.width,
+                    piece.level,
+                    output,
+                );
             }
             output.gaps.extend(pending.drain(..).map(|(gap, _)| gap));
         }
@@ -535,7 +577,18 @@ impl<'a> ParagraphLayouter<'a> {
         Ok(())
     }
 
-    fn append(&mut self, run: usize, text: Range<usize>, width: Pt, output: &mut LayoutBuffer) {
+    fn append(
+        &mut self,
+        run: usize,
+        text: Range<usize>,
+        width: Pt,
+        level: u8,
+        output: &mut LayoutBuffer,
+    ) {
+        // Right to left, each word and space is its own segment so the line can reverse them,
+        // but a word placed glyph by glyph stays one.
+        let joins =
+            self.line_levels.last() == Some(&level) && (level.is_multiple_of(2) || self.continues);
         let metrics = &self.runs[run];
         let on_line = output.segments.len() > self.segment_start;
         // The line box spans the tallest ascent and the deepest depth of its runs.
@@ -561,11 +614,14 @@ impl<'a> ParagraphLayouter<'a> {
                     && last.color == metrics.color
                     && last.letter_spacing == letter_spacing
                     && last.oblique == oblique
-                    && last.rise == rise =>
+                    && last.rise == rise
+                    && joins =>
             {
                 last.text.end = text.end;
             }
-            _ => output.segments.push(Segment {
+            _ => {
+                self.line_levels.push(level);
+                output.segments.push(Segment {
                 text,
                 x: self.used,
                 font: metrics.id,
@@ -575,7 +631,8 @@ impl<'a> ParagraphLayouter<'a> {
                 oblique,
                 rise,
                 shape: 0,
-            }),
+            });
+            }
         }
         self.used += width;
     }
@@ -615,13 +672,61 @@ impl<'a> ParagraphLayouter<'a> {
         self.used = self.area.width;
     }
 
+    /// Puts the line's segments in visual order by UAX #9 rule L2: from the highest level
+    /// down to the lowest odd one, each run of segments at that level or above reverses.
+    /// Each keeps its width, so the line keeps its extent.
+    fn reorder(&mut self, output: &mut LayoutBuffer) {
+        let segments = &mut output.segments[self.segment_start..];
+        let start = segments[0].x;
+        let widths: Vec<Pt> = (0..segments.len())
+            .map(|index| {
+                segments.get(index + 1).map_or(self.used, |next| next.x) - segments[index].x
+            })
+            .collect();
+        let mut order: Vec<usize> = (0..segments.len()).collect();
+        let levels = &self.line_levels;
+        let highest = levels.iter().copied().max().unwrap_or(0);
+        let lowest = levels
+            .iter()
+            .copied()
+            .filter(|level| level % 2 == 1)
+            .min()
+            .unwrap_or(1);
+        for level in (lowest..=highest).rev() {
+            let mut index = 0;
+            while index < order.len() {
+                let run = order[index..]
+                    .iter()
+                    .take_while(|segment| levels[**segment] >= level)
+                    .count();
+                order[index..index + run].reverse();
+                index += run.max(1);
+            }
+        }
+        let mut x = start;
+        let mut placed: Vec<Segment> = Vec::with_capacity(segments.len());
+        for &index in &order {
+            let mut segment = segments[index].clone();
+            segment.x = x;
+            x += widths[index];
+            placed.push(segment);
+        }
+        for (slot, segment) in segments.iter_mut().zip(placed) {
+            *slot = segment;
+        }
+        self.line_levels = order.iter().map(|index| levels[*index]).collect();
+    }
+
     /// A `wrapped` line is justified; the last line and one ending in a hard break are not.
     fn push_line(&mut self, output: &mut LayoutBuffer, wrapped: bool) {
         if let Some(hyphen) = self.hyphen.take().filter(|_| wrapped) {
-            self.append(hyphen.run, hyphen.text, hyphen.width, output);
+            self.append(hyphen.run, hyphen.text, hyphen.width, hyphen.level, output);
         }
         if wrapped && self.align == TextAlign::Justify {
             self.justify(output);
+        }
+        if self.line_levels.iter().any(|level| level % 2 == 1) {
+            self.reorder(output);
         }
         let top = self.area.origin.y + self.height;
         let height = self.ascent + self.depth;
@@ -663,7 +768,26 @@ impl<'a> ParagraphLayouter<'a> {
         self.depth = Pt::ZERO;
         self.has_word = false;
         self.space = None;
+        self.line_levels.clear();
     }
+}
+
+/// UAX #9 levels per byte, with the base direction from the first strong character,
+/// or none when nothing in `text` reads right to left.
+fn levels(text: &str) -> Vec<u8> {
+    use unicode_bidi::BidiClass::{AL, AN, R, RLE, RLI, RLO};
+    let rtl = text.chars().any(|character| {
+        !character.is_ascii()
+            && matches!(
+                unicode_bidi::bidi_class(character),
+                R | AL | AN | RLE | RLO | RLI
+            )
+    });
+    if !rtl {
+        return Vec::new();
+    }
+    let info = unicode_bidi::BidiInfo::new(text, None);
+    info.levels.iter().map(|level| level.number()).collect()
 }
 
 /// Adds a fixed gap, merged with one already at the same code.

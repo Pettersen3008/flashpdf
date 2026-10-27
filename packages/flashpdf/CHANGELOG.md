@@ -4,6 +4,7 @@
 
 ### Added
 
+- Right-to-left text: a paragraph that holds Hebrew, Arabic, or a right-to-left embedding, override, or isolate gets Unicode UAX #9 levels, with the base direction from its first strong character. Each line shows its runs in visual order after breaking, and right-to-left words shape right to left, so Arabic joins and brackets mirror. Paragraphs without right-to-left text skip the algorithm. FlashPDF depends on the `unicode-bidi` crate for this. `direction` and `dir` are a later change, so such a paragraph still aligns left.
 - Node, Bun, and Deno render through a native N-API addon when a prebuilt one exists for the platform, and through the WASM otherwise. The bytes are the same either way. The addon skips WASM compilation, so on the 80-line benchmark invoice the first render in a fresh process takes roughly half as long; warm renders gain less while the TypeScript cascade and compile dominate them. The release publishes one `@pettersen3008/flashpdf-<platform>` package per platform as an optional dependency. The loader moves from the `#wasm` to the `#backend` imports map, with `bun`, `deno`, and `node` conditions.
 - The native build deflates page streams, subsets fonts, and splits PNG alpha planes on several threads once a document holds 64 KiB of such work. Output order is fixed, so the bytes match a single thread.
 - Deno 2 is a tested runtime.

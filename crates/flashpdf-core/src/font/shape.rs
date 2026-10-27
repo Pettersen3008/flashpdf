@@ -25,6 +25,8 @@ const FONT_BYTES_KEPT: usize = 32 * 1024 * 1024;
 pub(crate) const NO_KERNING: u8 = 1;
 /// Letter spacing turns off the optional ligatures, as CSS Text asks.
 pub(crate) const NO_LIGATURES: u8 = 2;
+/// Right to left: harfrust returns the glyphs in visual order and mirrors brackets.
+pub(crate) const RTL: u8 = 4;
 
 static FONTS: Mutex<Vec<Arc<Shaping>>> = Mutex::new(Vec::new());
 
@@ -98,7 +100,7 @@ impl Shaping {
         Ok(shaping)
     }
 
-    /// Shapes `text` left to right in the script of its first letter, or names a
+    /// Shapes `text` in the script of its first letter, right to left under `RTL`, or names a
     /// character the font has no glyph for.
     pub(crate) fn shape(
         &self,
@@ -142,7 +144,12 @@ impl Shaping {
         let mut buffer = words.buffer.take().unwrap_or_default();
         buffer.push_str(text);
         buffer.guess_segment_properties();
-        buffer.set_direction(Direction::LeftToRight);
+        let direction = if flags & RTL != 0 {
+            Direction::RightToLeft
+        } else {
+            Direction::LeftToRight
+        };
+        buffer.set_direction(direction);
         buffer.set_flags(BufferFlags::REMOVE_DEFAULT_IGNORABLES);
         let script = buffer.script();
         // `of` read these bytes as a font already.
@@ -155,13 +162,7 @@ impl Shaping {
         {
             Some(index) => index,
             None => {
-                let plan = ShapePlan::new(
-                    &shaper,
-                    Direction::LeftToRight,
-                    Some(script),
-                    None,
-                    &features,
-                );
+                let plan = ShapePlan::new(&shaper, direction, Some(script), None, &features);
                 words.plans.push(((script, flags), plan));
                 words.plans.len() - 1
             }

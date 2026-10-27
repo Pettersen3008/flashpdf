@@ -4,7 +4,7 @@ mod standard;
 mod subset;
 mod truetype;
 
-pub(crate) use shape::{Shaped, NO_KERNING, NO_LIGATURES};
+pub(crate) use shape::{Shaped, NO_KERNING, NO_LIGATURES, RTL};
 pub(crate) use standard::name as base_font;
 pub(crate) use truetype::EmbeddedFont;
 
