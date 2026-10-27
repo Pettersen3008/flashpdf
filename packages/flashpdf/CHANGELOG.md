@@ -6,6 +6,8 @@
 
 - Lines break at the Unicode UAX #14 break opportunities instead of only at ASCII whitespace and between CJK characters: after a hyphen or `/`, never before closing punctuation, so a long URL or hyphenated word wraps at a natural point instead of mid-glyph. U+00AD shows as `-` only where a line breaks there, U+200B breaks invisibly, and U+2060 keeps text together. FlashPDF depends on the `unicode-linebreak` crate for this, which adds about 23 KB to the WASM.
 - The WASM size gate is 1,000,000 B raw and 400,000 B gzipped, up from 400 KB and 200 KB, to leave room for Unicode line breaking, shaping, and bidi.
+- Tagged output is about a third of its old size: the structure tree goes compact into one Flate object stream, each element names its marked content as `/K <mcid>`, and a cross-reference stream replaces the xref table. The 80-line invoice drops from 52.3 KB to 17.2 KB. Untagged output is unchanged.
+
 ### Internal
 
 - The Rust core gains a port of the CSS parser, selector matcher, cascade, `var()`, and `calc()`, with the TypeScript tests for them ported to Rust. Rendering does not use it yet; a later change moves the cascade and compile out of TypeScript.
