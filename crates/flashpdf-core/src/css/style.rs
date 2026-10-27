@@ -2,6 +2,7 @@
 //! and every value the compiler reads eagerly validated. Values stay loosely typed, as the
 //! compiler validates the rest where it reads them.
 
+use crate::css::Message;
 mod border;
 mod boxes;
 mod color;
@@ -28,8 +29,13 @@ use super::{js_number, js_parse, js_trim, words, Cascaded, Key, Prop, Value};
 pub struct Style(pub Vec<(Key, Value)>);
 
 impl Style {
+    // Out of line: a prop scan inlined at each of the hundreds of call sites cost ~5 KB of wasm.
+    #[inline(never)]
     pub fn get(&self, prop: Prop) -> Option<&Value> {
-        self.key(&Key::Prop(prop))
+        self.0
+            .iter()
+            .find(|(own, _)| matches!(own, Key::Prop(own) if *own == prop))
+            .map(|(_, value)| value)
     }
     pub fn key(&self, key: &Key) -> Option<&Value> {
         self.0
@@ -37,6 +43,7 @@ impl Style {
             .find(|(own, _)| own == key)
             .map(|(_, value)| value)
     }
+    #[inline(never)]
     pub fn set(&mut self, prop: Prop, value: Value) {
         self.set_key(Key::Prop(prop), value);
     }
@@ -100,11 +107,9 @@ pub(crate) const RADII: [Prop; 4] = [
     prop!("borderBottomLeftRadius"),
 ];
 
-pub fn kerning(value: &Value) -> Result<bool, String> {
+pub fn kerning(value: &Value) -> Result<bool, Message> {
     if !(value.is("auto") || value.is("normal") || value.is("none")) {
-        return Err(format!(
-            "invalid fontKerning: {value} (use auto, normal, or none)"
-        ));
+        return Err(format!("invalid fontKerning: {value} (use auto, normal, or none)").into());
     }
     Ok(!value.is("none"))
 }
@@ -118,7 +123,7 @@ pub enum WhiteSpace {
     PreLine,
 }
 
-pub fn white_space(value: &Value) -> Result<WhiteSpace, String> {
+pub fn white_space(value: &Value) -> Result<WhiteSpace, Message> {
     Ok(match value.text() {
         Some("normal") => WhiteSpace::Normal,
         Some("nowrap") => WhiteSpace::Nowrap,
@@ -128,21 +133,22 @@ pub fn white_space(value: &Value) -> Result<WhiteSpace, String> {
         _ => {
             return Err(format!(
                 "invalid whiteSpace: {value} (use normal, nowrap, pre, pre-wrap, or pre-line)"
-            ))
+            )
+            .into())
         }
     })
 }
 
 /// The baseline shift of `sub` and `super` in points upward, as a fraction of the parent's font size.
-pub fn vertical_align(value: &Value, parent: f64) -> Result<f64, String> {
+pub fn vertical_align(value: &Value, parent: f64) -> Result<f64, Message> {
     let shift = match value.text() {
         Some("baseline") => 0.0,
         Some("sub") => -0.2,
         Some("super") => 0.33,
         _ => {
-            return Err(format!(
-                "invalid verticalAlign: {value} (use baseline, sub, or super)"
-            ))
+            return Err(
+                format!("invalid verticalAlign: {value} (use baseline, sub, or super)").into(),
+            )
         }
     };
     Ok(shift * parent)
@@ -156,7 +162,7 @@ pub enum Transform {
     Capitalize,
 }
 
-pub fn transform(value: &Value) -> Result<Transform, String> {
+pub fn transform(value: &Value) -> Result<Transform, Message> {
     Ok(match value.text() {
         Some("none") => Transform::None,
         Some("uppercase") => Transform::Uppercase,
@@ -165,19 +171,20 @@ pub fn transform(value: &Value) -> Result<Transform, String> {
         _ => {
             return Err(format!(
                 "invalid textTransform: {value} (use none, uppercase, lowercase, or capitalize)"
-            ))
+            )
+            .into())
         }
     })
 }
 
 /// `border-spacing` as one or two lengths; true when either is nonzero.
-pub fn border_spacing(value: &Value) -> Result<bool, String> {
+pub fn border_spacing(value: &Value) -> Result<bool, Message> {
     let lengths = match value {
         Value::Number(_) => vec![value.clone()],
         Value::Text(text) => words(text).into_iter().map(Value::from).collect(),
     };
     if lengths.len() > 2 {
-        return Err(format!("invalid borderSpacing: {value}"));
+        return Err(format!("invalid borderSpacing: {value}").into());
     }
     let mut spaced = false;
     for length in &lengths {
@@ -243,17 +250,16 @@ fn absent_or(value: Option<&Value>, allowed: &[&str]) -> bool {
 
 /// `value` is an element's cascaded declarations and `parent` the parent's normalised style,
 /// which `inherit` reads.
-pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, String> {
+pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
     for (key, _) in &value.0 {
         match key {
             Key::Custom(_) => {}
-            Key::Other(name) => return Err(format!("unsupported style property: {name}")),
+            Key::Other(name) => return Err(format!("unsupported style property: {name}").into()),
             Key::Prop(prop) => {
                 if let Some(reason) = prop.unsupported() {
-                    return Err(format!(
-                        "unsupported style property: {} ({reason})",
-                        prop.name()
-                    ));
+                    return Err(
+                        format!("unsupported style property: {} ({reason})", prop.name()).into(),
+                    );
                 }
             }
         }
@@ -297,9 +303,10 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, String> {
             return Err(format!(
                 "{}: {value} is not supported (pages have no sides; use page)",
                 prop.name()
-            ));
+            )
+            .into());
         } else if !absent_or(Some(value), allowed) {
-            return Err(format!("invalid {}", prop.name()));
+            return Err(format!("invalid {}", prop.name()).into());
         }
     }
     for prop in [prop!("orphans"), prop!("widows")] {
@@ -321,7 +328,8 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, String> {
             return Err(format!(
                 "invalid {}: {shown} (use a whole number of lines from 1)",
                 prop.name()
-            ));
+            )
+            .into());
         };
         // No paragraph record holds 65,535 lines, so the cap changes nothing.
         result.set(prop, whole.min(65_535.0).into());
@@ -341,7 +349,8 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, String> {
     {
         return Err(format!(
             "flex-wrap: {value} is not supported; flex items stay on one line, so size them to fit"
-        ));
+        )
+        .into());
     }
     result.remove(prop!("flexWrap"));
     for (prop, allowed) in KEYWORDS {
@@ -357,7 +366,8 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, String> {
                 )
             } else {
                 format!("invalid {}: {value}", prop.name())
-            });
+            }
+            .into());
         }
     }
     for prop in [prop!("flexGrow"), prop!("flexShrink")] {
@@ -370,7 +380,7 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, String> {
         };
         let single = factor as f32;
         if factor.is_nan() || factor < 0.0 || !single.is_finite() {
-            return Err(format!("invalid {}: {value}", prop.name()));
+            return Err(format!("invalid {}: {value}", prop.name()).into());
         }
         result.set(prop, f64::from(single).into());
     }
@@ -461,7 +471,7 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, String> {
         if lower.contains("gradient(") || lower.contains("url(") {
             return Err(format!(
                 "unsupported background: {background} (gradients and background images are not drawn; use a solid colour)"
-            ));
+            ).into());
         }
     }
     Ok(result)

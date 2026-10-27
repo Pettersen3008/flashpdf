@@ -8,7 +8,10 @@ wasm-pack build crates/flashpdf-wasm --release --target web --out-dir ../../$was
 # wasm-opt writes back over the glue's default path, so the package ships one
 # WASM file and a bundler resolves it without a fallback URL.
 mv $wasm/flashpdf_wasm_bg.wasm target/flashpdf_wasm_bg.raw.wasm
-pnpm exec wasm-opt -O3 \
+# --low-memory-unused lets wasm-opt fold constant offsets into loads and stores (-16 KB). It
+# assumes addresses below 1 KiB stay unused: Rust puts its 1 MiB stack there, growing down,
+# so only a stack within 1 KiB of overflowing would reach them.
+pnpm exec wasm-opt -O3 --low-memory-unused \
   --enable-bulk-memory --enable-nontrapping-float-to-int \
   target/flashpdf_wasm_bg.raw.wasm -o $wasm/flashpdf_wasm_bg.wasm
 

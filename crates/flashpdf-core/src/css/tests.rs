@@ -130,7 +130,7 @@ fn matched(selector: &str, tree: &[N]) -> String {
 }
 
 fn validate(css: &str) -> Result<(), String> {
-    stylesheet(css)
+    stylesheet(css).map_err(String::from)
 }
 fn rejects(css: &str, parts: &[&str]) {
     let message = validate(css).expect_err(css);
@@ -940,7 +940,7 @@ fn given_calc_color_mix_custom_properties_and_css_wide_keywords_when_validating_
 
 /// `cascaded` normalised as a root's style, and its box at font size `size`.
 fn boxed(cascaded: &Cascaded, size: f64) -> Result<Option<style::Box>, String> {
-    box_style(&style(cascaded, &Style::default())?, size, 1.0)
+    Ok(box_style(&style(cascaded, &Style::default())?, size, 1.0)?)
 }
 
 #[test]

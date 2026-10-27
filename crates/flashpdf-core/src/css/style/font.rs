@@ -1,9 +1,10 @@
+use crate::css::Message;
 use std::collections::HashMap;
 
 use super::super::{js_space, js_trim, Value};
 use super::Style;
 
-pub fn bold(value: &Value) -> Result<bool, String> {
+pub fn bold(value: &Value) -> Result<bool, Message> {
     if value.is("normal") || value.is("bold") {
         return Ok(value.is("bold"));
     }
@@ -21,9 +22,7 @@ pub fn bold(value: &Value) -> Result<bool, String> {
         }
     };
     if !(1.0..=1000.0).contains(&weight) {
-        return Err(format!(
-            "invalid fontWeight: {value} (use normal, bold, or 1 to 1000)"
-        ));
+        return Err(format!("invalid fontWeight: {value} (use normal, bold, or 1 to 1000)").into());
     }
     Ok(weight >= 600.0)
 }
@@ -54,11 +53,9 @@ pub const HELVETICA: FontSlots = slots(0);
 pub const TIMES: FontSlots = slots(4);
 pub const COURIER: FontSlots = slots(8);
 
-pub fn italic(value: &Value) -> Result<bool, String> {
+pub fn italic(value: &Value) -> Result<bool, Message> {
     if !(value.is("normal") || value.is("italic") || value.is("oblique")) {
-        return Err(format!(
-            "invalid fontStyle: {value} (use normal, italic, or oblique)"
-        ));
+        return Err(format!("invalid fontStyle: {value} (use normal, italic, or oblique)").into());
     }
     Ok(!value.is("normal"))
 }
@@ -137,7 +134,7 @@ pub fn font(
     inherited_bold: bool,
     inherited_italic: bool,
     fonts: &HashMap<String, FontSlots>,
-) -> Result<Font, String> {
+) -> Result<Font, Message> {
     let mut family = inherited;
     let declared = s.get(prop!("fontFamily"));
     if let Some(value) = declared {
@@ -164,7 +161,7 @@ pub fn font(
         .map_or(Ok(inherited_italic), italic)?;
     if weight && face(&family, true, slanted).0.is_none() {
         let name = declared.map_or_else(|| "inherited".into(), Value::to_string);
-        return Err(format!("font family has no bold face: {name}"));
+        return Err(format!("font family has no bold face: {name}").into());
     }
     Ok(Font {
         family,

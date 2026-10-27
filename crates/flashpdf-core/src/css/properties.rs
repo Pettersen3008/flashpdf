@@ -1,4 +1,5 @@
 use super::Key;
+use crate::css::Message;
 
 struct Definition {
     name: &'static str,
@@ -235,7 +236,7 @@ fn css_name(name: &str) -> Option<Prop> {
 }
 
 /// The key a stylesheet or inline-style declaration of `name` sets. `context` ends each message.
-pub fn property(name: &str, context: &str) -> Result<Key, String> {
+pub fn property(name: &str, context: &str) -> Result<Key, Message> {
     if name.starts_with("--") {
         return Ok(Key::Custom(name.into()));
     }
@@ -254,12 +255,10 @@ pub fn property(name: &str, context: &str) -> Result<Key, String> {
             Some(_) => format!(" (use kebab-case: {kebab})"),
             None => String::new(),
         };
-        return Err(format!("unsupported CSS property: {name}{hint}{context}"));
+        return Err(format!("unsupported CSS property: {name}{hint}{context}").into());
     };
     match prop.unsupported() {
-        Some(reason) => Err(format!(
-            "unsupported CSS property: {name} ({reason}){context}"
-        )),
+        Some(reason) => Err(format!("unsupported CSS property: {name} ({reason}){context}").into()),
         None => Ok(Key::Prop(prop)),
     }
 }

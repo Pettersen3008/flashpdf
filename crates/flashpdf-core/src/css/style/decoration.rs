@@ -1,6 +1,7 @@
 use super::super::{js_trim, Value};
 use super::border::tokens;
 use super::color::{color, Rgb};
+use crate::css::Message;
 
 /// The `text-decoration` shorthand.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -11,12 +12,15 @@ pub struct Decoration {
 }
 
 /// Lines, the `solid` style, and at most one colour.
-pub fn decoration(value: &Value) -> Result<Decoration, String> {
+pub fn decoration(value: &Value) -> Result<Decoration, Message> {
     let Value::Text(text) = value else {
-        return Err(format!("invalid textDecoration: {value}"));
+        return Err(format!("invalid textDecoration: {value}").into());
     };
-    let invalid =
-        || format!("invalid textDecoration: {text} (use none, underline, or line-through)");
+    let invalid = || {
+        Message::from(format!(
+            "invalid textDecoration: {text} (use none, underline, or line-through)"
+        ))
+    };
     let mut result = Decoration::default();
     let mut none = false;
     for token in tokens(text) {
@@ -26,9 +30,9 @@ pub fn decoration(value: &Value) -> Result<Decoration, String> {
             "none" => none = true,
             "overline" => return Err("text-decoration: overline is not supported".into()),
             "dotted" | "dashed" | "double" | "wavy" => {
-                return Err(format!(
-                    "text-decoration: {token} is not supported; lines are solid"
-                ))
+                return Err(
+                    format!("text-decoration: {token} is not supported; lines are solid").into(),
+                )
             }
             "solid" => {}
             _ => {
@@ -47,7 +51,7 @@ pub fn decoration(value: &Value) -> Result<Decoration, String> {
 }
 
 /// None for `currentcolor`, the text colour the engine uses when no colour is sent.
-pub fn decoration_color(value: &Value) -> Result<Option<Rgb>, String> {
+pub fn decoration_color(value: &Value) -> Result<Option<Rgb>, Message> {
     if value
         .text()
         .is_some_and(|text| js_trim(text).to_lowercase() == "currentcolor")

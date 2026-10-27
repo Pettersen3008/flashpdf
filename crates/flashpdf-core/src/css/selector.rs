@@ -1,3 +1,4 @@
+use crate::css::Message;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -399,8 +400,8 @@ struct Parse<'a> {
 }
 
 impl Parse<'_> {
-    fn bad(&self) -> String {
-        format!("invalid CSS selector{}", self.at)
+    fn bad(&self) -> Message {
+        format!("invalid CSS selector{}", self.at).into()
     }
     fn why(&mut self, reason: impl FnOnce() -> String) {
         if self.why.is_none() {
@@ -414,7 +415,7 @@ struct Parser<'a> {
     ids: &'a mut u32,
 }
 
-type Step<T> = Result<(T, usize), String>;
+type Step<T> = Result<(T, usize), Message>;
 
 impl Parser<'_> {
     fn bytes(&self) -> &[u8] {
@@ -422,6 +423,7 @@ impl Parser<'_> {
     }
 
     /// The `:pseudo` at `start` as the pseudo-classes it adds, or None when it can match no rendered element.
+    #[inline(never)]
     fn pseudo(
         &mut self,
         start: usize,
@@ -505,7 +507,8 @@ impl Parser<'_> {
                 return Err(format!(
                     ":{name}() nests deeper than {MAX_SELECTOR_DEPTH} levels{}",
                     parse.at
-                ));
+                )
+                .into());
             }
             let list = self.alternatives(args, depth + 1, parse)?;
             return Ok(match (name.as_str(), list.is_empty()) {
@@ -531,7 +534,7 @@ impl Parser<'_> {
         source: &str,
         depth: usize,
         parse: &mut Parse,
-    ) -> Result<Vec<Complex>, String> {
+    ) -> Result<Vec<Complex>, Message> {
         let mut found = Vec::new();
         if source.trim().is_empty() {
             return Ok(found);
@@ -635,7 +638,7 @@ impl Parser<'_> {
     }
 
     /// Compounds joined by combinators; None when any compound can match no rendered element.
-    fn complex(&mut self, depth: usize, parse: &mut Parse) -> Result<Option<Complex>, String> {
+    fn complex(&mut self, depth: usize, parse: &mut Parse) -> Result<Option<Complex>, Message> {
         let mut complex = Complex {
             compounds: Vec::new(),
             combinators: Vec::new(),
@@ -678,11 +681,11 @@ impl Parser<'_> {
 
 /// None when no rendered element can match, so the rule is skipped; an error for what the subset lacks.
 /// `at` ends each message; `ids` numbers the compounds.
-pub(super) fn selector(source: &str, at: &str, ids: &mut u32) -> Result<Option<Complex>, String> {
+pub(super) fn selector(source: &str, at: &str, ids: &mut u32) -> Result<Option<Complex>, Message> {
     let mut parse = Parse { at, why: None };
     let pieces = Parser { source, ids }.complex(0, &mut parse)?;
     match (&pieces, parse.why) {
-        (Some(_), Some(why)) => Err(format!("unsupported CSS selector: {why}{at}")),
+        (Some(_), Some(why)) => Err(format!("unsupported CSS selector: {why}{at}").into()),
         _ => Ok(pieces),
     }
 }
@@ -777,7 +780,7 @@ impl Tree {
         &mut self,
         parent: Option<u32>,
         siblings: &[ElemInput],
-    ) -> Result<u32, String> {
+    ) -> Result<u32, Message> {
         let first = self.elems.len() as u32;
         let tags = siblings
             .iter()

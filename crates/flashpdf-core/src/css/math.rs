@@ -1,3 +1,4 @@
+use crate::css::Message;
 use std::borrow::Cow;
 
 use super::{js_number, number_end, parse_number, point};
@@ -62,7 +63,7 @@ fn quantity_end(text: &[u8]) -> Option<usize> {
     free(number).then_some(number)
 }
 
-fn lex(expression: &str) -> Result<Vec<String>, String> {
+fn lex(expression: &str) -> Result<Vec<String>, Message> {
     let bytes = expression.as_bytes();
     let mut tokens = Vec::new();
     let mut end = 0;
@@ -82,12 +83,12 @@ fn lex(expression: &str) -> Result<Vec<String>, String> {
     }
     let rest = expression[end..].trim();
     if !rest.is_empty() {
-        return Err(format!("unexpected \"{rest}\""));
+        return Err(format!("unexpected \"{rest}\"").into());
     }
     Ok(tokens)
 }
 
-fn quantity(token: &str, em: f64) -> Result<Quantity, String> {
+fn quantity(token: &str, em: f64) -> Result<Quantity, Message> {
     let (negative, unsigned) = match token.as_bytes()[0] {
         b'-' => (true, &token[1..]),
         b'+' => (false, &token[1..]),
@@ -107,12 +108,12 @@ fn quantity(token: &str, em: f64) -> Result<Quantity, String> {
 }
 
 /// `+`, `-`, `min()`, `max()`, and `clamp()` take operands of one kind.
-fn same(left: Quantity, right: Quantity, verb: &str) -> Result<(), String> {
+fn same(left: Quantity, right: Quantity, verb: &str) -> Result<(), Message> {
     if left.kind == right.kind {
         return Ok(());
     }
     Err(if left.kind == Kind::Number || right.kind == Kind::Number {
-        format!("cannot {verb} a number and a length or percentage")
+        format!("cannot {verb} a number and a length or percentage").into()
     } else {
         "a percentage cannot combine with a length, because the engine resolves percentages when it lays the box out".into()
     })
@@ -129,7 +130,7 @@ impl Evaluator<'_> {
         self.tokens.get(self.at).map(String::as_str)
     }
 
-    fn sum(&mut self, depth: usize) -> Result<Quantity, String> {
+    fn sum(&mut self, depth: usize) -> Result<Quantity, Message> {
         let mut left = self.product(depth)?;
         while let Some(operator @ ("+" | "-")) = self.peek() {
             let add = operator == "+";
@@ -145,7 +146,7 @@ impl Evaluator<'_> {
         Ok(left)
     }
 
-    fn product(&mut self, depth: usize) -> Result<Quantity, String> {
+    fn product(&mut self, depth: usize) -> Result<Quantity, Message> {
         let mut left = self.operand(depth)?;
         while let Some(operator @ ("*" | "/")) = self.peek() {
             let multiply = operator == "*";
@@ -176,7 +177,7 @@ impl Evaluator<'_> {
         Ok(left)
     }
 
-    fn operand(&mut self, depth: usize) -> Result<Quantity, String> {
+    fn operand(&mut self, depth: usize) -> Result<Quantity, Message> {
         let token = self.tokens.get(self.at).ok_or("unexpected end")?;
         self.at += 1;
         if depth > MAX_DEPTH {
@@ -192,7 +193,7 @@ impl Evaluator<'_> {
             if digit(0) || (matches!(bytes[0], b'+' | b'-') && digit(1)) {
                 return quantity(token, self.em);
             }
-            return Err(format!("unexpected \"{token}\""));
+            return Err(format!("unexpected \"{token}\"").into());
         };
         let mut args = vec![self.sum(depth + 1)?];
         while !name.is_empty() && self.peek() == Some(",") {
@@ -201,7 +202,7 @@ impl Evaluator<'_> {
         }
         match self.peek() {
             Some(")") => self.at += 1,
-            Some(other) => return Err(format!("unexpected \"{other}\"")),
+            Some(other) => return Err(format!("unexpected \"{other}\"").into()),
             None => return Err("expected \")\"".into()),
         }
         if name.is_empty() || name == "calc" {
@@ -259,7 +260,7 @@ impl Evaluator<'_> {
     }
 }
 
-fn evaluate(expression: &str, em: f64) -> Result<Quantity, String> {
+fn evaluate(expression: &str, em: f64) -> Result<Quantity, Message> {
     let tokens = lex(expression)?;
     let mut evaluator = Evaluator {
         tokens: &tokens,
@@ -268,7 +269,7 @@ fn evaluate(expression: &str, em: f64) -> Result<Quantity, String> {
     };
     let result = evaluator.sum(0)?;
     if let Some(token) = evaluator.peek() {
-        return Err(format!("unexpected \"{token}\""));
+        return Err(format!("unexpected \"{token}\"").into());
     }
     Ok(result)
 }
@@ -296,12 +297,12 @@ fn fixed6(value: f64) -> f64 {
     }
 }
 
-fn format(result: Quantity, property: &str) -> Result<String, String> {
+fn format(result: Quantity, property: &str) -> Result<String, Message> {
     if result.value.is_nan() || result.value.abs() >= 1e9 {
         return Err("the result is out of range".into());
     }
     if result.kind == Kind::Percent && !matches!(property, "width" | "height" | "lineHeight") {
-        return Err(format!("{property} does not take a percentage"));
+        return Err(format!("{property} does not take a percentage").into());
     }
     let text = js_number(fixed6(result.value));
     Ok(match result.kind {
@@ -312,7 +313,7 @@ fn format(result: Quantity, property: &str) -> Result<String, String> {
 }
 
 /// Index of the `)` closing the `(` at `open`, searching at most MAX_EXPRESSION characters.
-fn closing(value: &[u8], open: usize) -> Result<usize, String> {
+fn closing(value: &[u8], open: usize) -> Result<usize, Message> {
     let mut depth = 0usize;
     for (index, &byte) in value
         .iter()
@@ -329,15 +330,13 @@ fn closing(value: &[u8], open: usize) -> Result<usize, String> {
             }
         }
     }
-    Err(format!(
-        "unbalanced parentheses or longer than {MAX_EXPRESSION} characters"
-    ))
+    Err(format!("unbalanced parentheses or longer than {MAX_EXPRESSION} characters").into())
 }
 
 /// Replaces each top-level `calc()`, `min()`, `max()`, and `clamp()` in `value` with the plain
 /// number, `pt` length, or percentage it computes to, so every later parser sees plain values.
 /// `em` is the font size an `em` unit resolves against.
-pub fn evaluate_math<'a>(property: &str, value: &'a str, em: f64) -> Result<Cow<'a, str>, String> {
+pub fn evaluate_math<'a>(property: &str, value: &'a str, em: f64) -> Result<Cow<'a, str>, Message> {
     let bytes = value.as_bytes();
     let found = (0..bytes.len()).any(|at| function(&bytes[at..], false).is_some());
     if !found {
@@ -374,7 +373,8 @@ pub fn evaluate_math<'a>(property: &str, value: &'a str, em: f64) -> Result<Cow<
                     return Err(format!(
                         "invalid {} in {property}: {message}",
                         &value[index..=end]
-                    ));
+                    )
+                    .into());
                 }
             }
             copied = end + 1;

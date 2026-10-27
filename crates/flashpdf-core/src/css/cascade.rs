@@ -1,3 +1,4 @@
+use crate::css::Message;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -135,7 +136,7 @@ struct Variables<'a> {
 impl Variables<'_> {
     /// Replaces each top-level `var(--name, fallback)`, matching parentheses so the fallback may
     /// hold `rgb(...)` or a nested `var()`.
-    fn resolve(&mut self, value: &str) -> Result<String, String> {
+    fn resolve(&mut self, value: &str) -> Result<String, Message> {
         // Bounds the rescan of each nested fallback.
         if too_large(value) {
             return Err("CSS variable output is too large".into());
@@ -169,7 +170,7 @@ impl Variables<'_> {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
             if end == bytes.len() || !valid {
                 let reference = &value[start..(end + 1).min(bytes.len())];
-                return Err(format!("invalid CSS variable reference: {reference}"));
+                return Err(format!("invalid CSS variable reference: {reference}").into());
             }
             let fallback = comma.map(|comma| value[comma + 1..end].trim());
             result.push_str(&value[index..start]);
@@ -183,13 +184,13 @@ impl Variables<'_> {
         Ok(result)
     }
 
-    fn substitute(&mut self, name: &str, fallback: Option<&str>) -> Result<String, String> {
+    fn substitute(&mut self, name: &str, fallback: Option<&str>) -> Result<String, Message> {
         *self.expansions += 1;
         if *self.expansions > MAX_VARIABLE_EXPANSIONS {
             return Err("CSS variable expansion is too large".into());
         }
         if self.resolving.iter().any(|own| &**own == name) {
-            return Err(format!("cyclic CSS variable: {name}"));
+            return Err(format!("cyclic CSS variable: {name}").into());
         }
         let candidate = match self.values.get(&Key::Custom(name.into())) {
             Some(Value::Text(text)) => text.to_string(),
@@ -199,7 +200,7 @@ impl Variables<'_> {
                 None => {
                     return Err(format!(
                         "undefined CSS variable: {name} (rules inside an @layer block, such as Tailwind's :root theme, are skipped)"
-                    ))
+                    ).into())
                 }
             },
         };
@@ -239,8 +240,8 @@ thread_local! {
 /// The cache entry for `sheets`, parsing their `@page` declarations on a miss, moved to the front.
 fn cached<T>(
     sheets: &[String],
-    read: impl FnOnce(&mut Parsed) -> Result<T, String>,
-) -> Result<T, String> {
+    read: impl FnOnce(&mut Parsed) -> Result<T, Message>,
+) -> Result<T, Message> {
     PARSED.with_borrow_mut(|cache| {
         match cache.iter().position(|entry| entry.sheets == sheets) {
             Some(index) => {
@@ -268,12 +269,12 @@ fn cached<T>(
 }
 
 /// The `@page` declarations of `sheets`, which decide the content width `@media` compares.
-pub fn pages(sheets: &[String]) -> Result<Rc<[PageDeclaration]>, String> {
+pub fn pages(sheets: &[String]) -> Result<Rc<[PageDeclaration]>, Message> {
     cached(sheets, |entry| Ok(entry.pages.clone()))
 }
 
 /// A resolver for `sheets` at content width `width`, shared with earlier renders of the same input.
-pub fn resolver(sheets: &[String], width: f64) -> Result<Rc<Resolver>, String> {
+pub fn resolver(sheets: &[String], width: f64) -> Result<Rc<Resolver>, Message> {
     cached(sheets, |entry| {
         if let Some((_, resolver)) = entry
             .resolvers
@@ -294,7 +295,7 @@ pub fn resolver(sheets: &[String], width: f64) -> Result<Rc<Resolver>, String> {
 
 impl Resolver {
     /// `width` is the page content width in points that `@media` width conditions compare.
-    pub fn new(sheets: &[&str], width: f64) -> Result<Self, String> {
+    pub fn new(sheets: &[&str], width: f64) -> Result<Self, Message> {
         let mut sheet = Stylesheet::default();
         for source in sheets {
             parse(source, Some(width), &mut sheet)?;
@@ -340,7 +341,7 @@ impl Resolver {
         parent: &Cascaded,
         parent_font_size: Option<f64>,
         single_line: bool,
-    ) -> Result<Cascaded, String> {
+    ) -> Result<Cascaded, Message> {
         let matched = self.matched(tree, node);
         self.cascaded(
             tree,
@@ -351,7 +352,7 @@ impl Resolver {
             parent_font_size,
             single_line,
         )
-        .map_err(|message| format!("{message} on {}", tree.path(node)))
+        .map_err(|message| format!("{message} on {}", tree.path(node)).into())
     }
 
     /// The rules that match `node`, as indices in cascade order: with the parent's result,
@@ -385,7 +386,7 @@ impl Resolver {
         parent: &Cascaded,
         parent_font_size: Option<f64>,
         single_line: bool,
-    ) -> Result<Cascaded, String> {
+    ) -> Result<Cascaded, Message> {
         let matched: Vec<&Rule> = matched.iter().map(|&index| &self.rules[index]).collect();
         let mut result = Cascaded::default();
         for (key, value) in &parent.0 {

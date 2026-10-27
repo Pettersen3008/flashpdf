@@ -1,3 +1,4 @@
+use crate::css::Message;
 use std::cell::OnceCell;
 use std::ops::Range;
 use std::rc::Rc;
@@ -17,7 +18,7 @@ fn important(value: &str) -> Option<&str> {
     before.strip_suffix('!').map(str::trim_end)
 }
 
-pub(super) fn declarations(source: &str, context: &str) -> Result<Declarations, String> {
+pub(super) fn declarations(source: &str, context: &str) -> Result<Declarations, Message> {
     let mut result = Declarations::default();
     for item in source.split(';') {
         if item.trim().is_empty() {
@@ -25,7 +26,7 @@ pub(super) fn declarations(source: &str, context: &str) -> Result<Declarations, 
         }
         let colon = item.find(':').filter(|&colon| colon > 0);
         let Some(colon) = colon else {
-            return Err(format!("invalid CSS declaration: {}{context}", item.trim()));
+            return Err(format!("invalid CSS declaration: {}{context}", item.trim()).into());
         };
         let key = property(item[..colon].trim(), context)?;
         let value = item[colon + 1..].trim();
@@ -38,8 +39,8 @@ pub(super) fn declarations(source: &str, context: &str) -> Result<Declarations, 
     Ok(result)
 }
 
-fn invalid(source: &str, index: usize) -> String {
-    format!("invalid CSS stylesheet at {}", position(source, index))
+fn invalid(source: &str, index: usize) -> Message {
+    format!("invalid CSS stylesheet at {}", position(source, index)).into()
 }
 
 /// Blanks comments to whitespace of the same UTF-16 length, keeping newlines, so error positions match the source.
@@ -68,7 +69,7 @@ fn without_comments(source: &str) -> String {
 
 /// Index just past the `}` matching the `{` at `open`; braces inside strings do not count, and an
 /// escape such as the `\'` in Tailwind's `.\[\&_svg\:not\(\[class\*\=\'size-\'\]\)\]` opens no string.
-fn closing(source: &str, open: usize) -> Result<usize, String> {
+fn closing(source: &str, open: usize) -> Result<usize, Message> {
     let bytes = source.as_bytes();
     let mut depth = 0usize;
     let mut index = open;
@@ -91,7 +92,7 @@ fn closing(source: &str, open: usize) -> Result<usize, String> {
 }
 
 /// Index of the `{` or `;` that ends the at-rule prelude starting at `start`.
-fn prelude_end(source: &str, start: usize) -> Result<usize, String> {
+fn prelude_end(source: &str, start: usize) -> Result<usize, Message> {
     let bytes = source.as_bytes();
     let mut index = start;
     while index < bytes.len() {
@@ -127,7 +128,7 @@ const PAGE_PROPERTIES: [&str; 6] = [
 ];
 
 /// Reads the `@page` rule at `start` into `pages`.
-fn page_rule(source: &str, start: usize, pages: &mut Vec<PageDeclaration>) -> Result<(), String> {
+fn page_rule(source: &str, start: usize, pages: &mut Vec<PageDeclaration>) -> Result<(), Message> {
     let open = source[start..]
         .find('{')
         .map(|at| start + at)
@@ -137,7 +138,8 @@ fn page_rule(source: &str, start: usize, pages: &mut Vec<PageDeclaration>) -> Re
     if !selector.is_empty() {
         return Err(format!(
             "unsupported @page selector: {selector} (one size and margin apply to every page){at}"
-        ));
+        )
+        .into());
     }
     let end = closing(source, open)?;
     let body = &source[open + 1..end - 1];
@@ -152,20 +154,22 @@ fn page_rule(source: &str, start: usize, pages: &mut Vec<PageDeclaration>) -> Re
     if let Some(margin_box) = margin_box {
         return Err(format!(
             "unsupported @page margin box: {margin_box} (use the header and footer options){at}"
-        ));
+        )
+        .into());
     }
     for item in body.split(';') {
         if item.trim().is_empty() {
             continue;
         }
         let Some(colon) = item.find(':').filter(|&colon| colon > 0) else {
-            return Err(format!("invalid CSS declaration: {}{at}", item.trim()));
+            return Err(format!("invalid CSS declaration: {}{at}", item.trim()).into());
         };
         let name = item[..colon].trim();
         if !PAGE_PROPERTIES.contains(&name) {
             return Err(format!(
                 "unsupported @page property: {name} (only size and margin apply){at}"
-            ));
+            )
+            .into());
         }
         let value = item[colon + 1..].trim();
         let stripped = important(value);
@@ -224,7 +228,7 @@ fn width_feature(term: &str) -> Option<(&'static str, &str)> {
 /// Whether an `@media` prelude matches a page `width` points wide: `print` and `all` match,
 /// `screen` does not, and a width condition compares the width. With no `width`, a width
 /// condition counts as matching, so validation checks the rules it guards. Errors for anything else.
-fn media(prelude: &str, width: Option<f64>) -> Result<bool, String> {
+fn media(prelude: &str, width: Option<f64>) -> Result<bool, Message> {
     let lower = prelude.to_lowercase();
     for alternative in lower.split(',') {
         let query = alternative.trim();
@@ -298,7 +302,7 @@ pub struct Registration {
     pub initial: Option<Rc<str>>,
 }
 
-fn register(name: &str, body: &str) -> Result<Registration, String> {
+fn register(name: &str, body: &str) -> Result<Registration, Message> {
     let mut descriptors: Vec<(String, &str)> = Vec::new();
     for item in body.split(';') {
         if let Some(colon) = item.find(':').filter(|&colon| colon > 0) {
@@ -323,9 +327,7 @@ fn register(name: &str, body: &str) -> Result<Registration, String> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
     if !custom || get("syntax").is_none() || !matches!(inherits, Some("true" | "false")) {
-        return Err(format!(
-            "invalid @property {name}: it needs syntax and inherits"
-        ));
+        return Err(format!("invalid @property {name}: it needs syntax and inherits").into());
     }
     Ok(Registration {
         inherits: inherits == Some("true"),
@@ -357,9 +359,9 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn declarations(&self) -> Result<Rc<Declarations>, String> {
+    pub fn declarations(&self) -> Result<Rc<Declarations>, Message> {
         if let Some(blocked) = &self.blocked {
-            return Err(format!("{blocked}{}", self.at));
+            return Err(format!("{blocked}{}", self.at).into());
         }
         if let Some(parsed) = self.body.parsed.get() {
             return Ok(parsed.clone());
@@ -401,7 +403,7 @@ impl Context<'_> {
         stop: usize,
         depth: usize,
         blocked: Option<Rc<str>>,
-    ) -> Result<(), String> {
+    ) -> Result<(), Message> {
         let clean = self.clean.clone();
         let bytes = clean.as_bytes();
         let mut index = start;
@@ -431,7 +433,8 @@ impl Context<'_> {
                         return Err(format!(
                             "@media nests deeper than {MAX_MEDIA_DEPTH} levels at {}",
                             position(&clean, index)
-                        ));
+                        )
+                        .into());
                     }
                     let prelude = clean[index + 6..open].trim();
                     let (applies, reason) = match media(prelude, self.width) {
@@ -499,7 +502,7 @@ impl Context<'_> {
 
 /// Adds the rules, `@page` declarations, and `@property` registrations of `source` to `sheet`.
 /// `width` is the page content width `@media` width conditions compare; None matches them all.
-pub fn parse(source: &str, width: Option<f64>, sheet: &mut Stylesheet) -> Result<(), String> {
+pub fn parse(source: &str, width: Option<f64>, sheet: &mut Stylesheet) -> Result<(), Message> {
     let clean: Rc<str> = without_comments(source).into();
     let length = clean.len();
     Context {

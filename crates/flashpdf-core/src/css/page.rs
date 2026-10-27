@@ -3,6 +3,7 @@
 use super::parser::PageDeclaration;
 use super::style::{edge_values, point};
 use super::{show, split_space, Value};
+use crate::css::Message;
 
 /// Width and height in points.
 type Size = (f64, f64);
@@ -26,7 +27,7 @@ pub struct CssPage {
 }
 
 /// Folds `@page` declarations as the cascade does: normal ones in source order, then `!important` ones.
-pub fn css_page(declarations: &[PageDeclaration]) -> Result<CssPage, String> {
+pub fn css_page(declarations: &[PageDeclaration]) -> Result<CssPage, Message> {
     let mut page = CssPage::default();
     for important in [false, true] {
         for declaration in declarations.iter().filter(|own| own.important == important) {
@@ -50,7 +51,7 @@ pub fn css_page(declarations: &[PageDeclaration]) -> Result<CssPage, String> {
                         }
                     }
                 }
-                Ok::<(), String>(())
+                Ok::<(), Message>(())
             })();
             applied.map_err(|message| format!("{message}{}", declaration.at))?;
         }
@@ -59,7 +60,7 @@ pub fn css_page(declarations: &[PageDeclaration]) -> Result<CssPage, String> {
 }
 
 /// `size: auto | <length>{1,2} | <page-size> || [portrait | landscape]`.
-fn css_size(value: &str) -> Result<Size, String> {
+fn css_size(value: &str) -> Result<Size, Message> {
     let tokens = split_space(value);
     let numeric = |token: &&str| token.starts_with(|c: char| c == '.' || c.is_ascii_digit());
     if tokens.len() <= 2 && tokens.iter().all(numeric) {
@@ -85,7 +86,7 @@ fn css_size(value: &str) -> Result<Size, String> {
         .filter(|token| !orientation.contains(token))
         .collect();
     if orientation.len() > 1 || format.len() > 1 {
-        return Err(format!("invalid page size: {value}"));
+        return Err(format!("invalid page size: {value}").into());
     }
     let size = named(&format.first().copied().unwrap_or("A4").into())?;
     let orientation = orientation
@@ -125,7 +126,7 @@ pub fn page_setup(
     orientation: Option<&Value>,
     margin: Option<&Margin>,
     pages: &[PageDeclaration],
-) -> Result<PageSetup, String> {
+) -> Result<PageSetup, Message> {
     let css = css_page(pages)?;
     let size = match format {
         None => match css.size {
@@ -167,19 +168,19 @@ pub fn page_setup(
     })
 }
 
-fn named(format: &Value) -> Result<Size, String> {
+fn named(format: &Value) -> Result<Size, Message> {
     let name = format.text().map(str::to_lowercase);
     FORMATS
         .iter()
         .find(|(own, _)| name.as_deref() == Some(own))
         .map(|(_, size)| *size)
         .ok_or_else(|| {
-            format!("unsupported page size: {format} (use A3, A4, A5, Letter, Legal, or a width and height)")
+            format!("unsupported page size: {format} (use A3, A4, A5, Letter, Legal, or a width and height)").into()
         })
 }
 
 /// As CSS defines it: landscape puts the longer side across, portrait puts it down.
-fn turn(size: Size, orientation: Option<&Value>) -> Result<Size, String> {
+fn turn(size: Size, orientation: Option<&Value>) -> Result<Size, Message> {
     let Some(orientation) = orientation else {
         return Ok(size);
     };
@@ -187,19 +188,19 @@ fn turn(size: Size, orientation: Option<&Value>) -> Result<Size, String> {
     match orientation.text() {
         Some("landscape") => Ok((long, short)),
         Some("portrait") => Ok((short, long)),
-        _ => Err(format!("invalid orientation: {orientation}")),
+        _ => Err(format!("invalid orientation: {orientation}").into()),
     }
 }
 
-fn length(value: Option<&Value>, name: &str) -> Result<f64, String> {
+fn length(value: Option<&Value>, name: &str) -> Result<f64, Message> {
     value
         .ok_or(())
         .and_then(|value| point(value, 12.0, false).map_err(drop))
-        .map_err(|()| format!("invalid {name}: {}", show(value)))
+        .map_err(|()| format!("invalid {name}: {}", show(value)).into())
 }
 
 /// PDF readers cap each page side at 14,400 units (ISO 32000-1, Annex C).
-fn side(value: Option<&Value>, name: &str) -> Result<f64, String> {
+fn side(value: Option<&Value>, name: &str) -> Result<f64, Message> {
     let result = length(value, name)?;
     if result > 0.0 && result <= 14_400.0 {
         return Ok(result);
@@ -207,5 +208,6 @@ fn side(value: Option<&Value>, name: &str) -> Result<f64, String> {
     Err(format!(
         "invalid {name}: {} (a page side is above 0 and at most 14400pt)",
         show(value)
-    ))
+    )
+    .into())
 }

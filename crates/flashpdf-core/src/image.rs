@@ -58,6 +58,7 @@ pub(crate) struct Image {
 }
 
 impl Image {
+    #[inline(never)]
     pub(crate) fn parse(bytes: Vec<u8>) -> Result<Self, String> {
         if bytes.starts_with(PNG_SIGNATURE) {
             png(bytes)

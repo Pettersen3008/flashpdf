@@ -2,9 +2,10 @@ use super::super::{Prop, Value};
 use super::color::{color, Rgb};
 use super::length::{corner, dimension, point, Dimension};
 use super::{Style, BORDER_COLORS, BORDER_STYLES, BORDER_WIDTHS, MARGINS, PADDINGS, RADII};
+use crate::css::Message;
 
 /// `margin` or `padding` in points, top first. An `auto` margin is zero here; `box_size` flags it.
-pub fn edges(s: &Style, name: &str, parent: f64) -> Result<[f64; 4], String> {
+pub fn edges(s: &Style, name: &str, parent: f64) -> Result<[f64; 4], Message> {
     let margin = name == "margin";
     let sides = if margin { MARGINS } else { PADDINGS };
     let mut result = [0.0; 4];
@@ -37,7 +38,7 @@ pub struct Size {
 /// The box's sizes and auto margins, or None when it has none. `height` is the parent's
 /// definite content height, which percent heights need; `width` is false where a table or
 /// column-model flex row owns the width.
-pub fn box_size(s: &Style, height: Option<f64>, width: bool) -> Result<Option<Size>, String> {
+pub fn box_size(s: &Style, height: Option<f64>, width: bool) -> Result<Option<Size>, Message> {
     let auto_margin = MARGINS
         .iter()
         .enumerate()
@@ -48,7 +49,7 @@ pub fn box_size(s: &Style, height: Option<f64>, width: bool) -> Result<Option<Si
             .map(|value| dimension(value, prop.name(), true))
             .transpose()
     };
-    let vertical = |prop: Prop| -> Result<Option<f64>, String> {
+    let vertical = |prop: Prop| -> Result<Option<f64>, Message> {
         let Some(value) = s.get(prop) else {
             return Ok(None);
         };
@@ -60,7 +61,8 @@ pub fn box_size(s: &Style, height: Option<f64>, width: bool) -> Result<Option<Si
             return Err(format!(
                 "a percent {} needs a parent with a fixed height; use pt or px",
                 prop.name()
-            ));
+            )
+            .into());
         };
         Ok(Some(f64::from((height * value / 100.0) as f32)))
     };
@@ -98,7 +100,7 @@ pub struct Radius {
 }
 
 /// The corner radii, or None when every corner is square.
-pub fn radius_of(s: &Style, parent: f64) -> Result<Option<Radius>, String> {
+pub fn radius_of(s: &Style, parent: f64) -> Result<Option<Radius>, Message> {
     let mut radius = Radius {
         values: [0.0; 8],
         percent: 0,
@@ -135,7 +137,7 @@ pub struct Box {
 
 /// The box's edges, paint, and radii, or None when the style sets none of them.
 // ponytail: no memo per style and font size as the TypeScript has; add one if profiles show it.
-pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, String> {
+pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, Message> {
     let boxed = [MARGINS, PADDINGS, BORDER_WIDTHS, BORDER_COLORS]
         .iter()
         .flatten()

@@ -23,7 +23,7 @@ fn object(entries: &[(&str, Value)]) -> Cascaded {
     )
 }
 fn normalized(entries: &[(&str, Value)]) -> Result<Style, String> {
-    style(&object(entries), &Style::default())
+    style(&object(entries), &Style::default()).map_err(String::from)
 }
 fn ok(entries: &[(&str, Value)]) -> Style {
     normalized(entries).unwrap()

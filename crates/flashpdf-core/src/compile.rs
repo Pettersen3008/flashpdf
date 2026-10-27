@@ -88,21 +88,44 @@ pub enum Node {
 }
 
 /// A compile error. A bare `PageOverflow` keeps its message, so a box can still recognise it,
-/// and remembers the innermost element path for `into_message`.
+/// and remembers the innermost element path for `into_message`. Boxed, so `?` on a
+/// `Result<_, Error>` moves one pointer.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Error {
+pub struct Error(std::boxed::Box<Failure>);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Failure {
     pub message: String,
     located: bool,
     overflow: Option<Rc<str>>,
 }
 
+impl std::ops::Deref for Error {
+    type Target = Failure;
+    fn deref(&self) -> &Failure {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Error {
+    fn deref_mut(&mut self) -> &mut Failure {
+        &mut self.0
+    }
+}
+
 impl Error {
+    // Out of line: each call site otherwise inlines the String conversion.
+    #[inline(never)]
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
+        Self::of(message.into())
+    }
+
+    fn of(message: String) -> Self {
+        Self(std::boxed::Box::new(Failure {
+            message,
             located: false,
             overflow: None,
-        }
+        }))
     }
 
     /// tree.ts `locate`: appends the element path once.
@@ -122,12 +145,13 @@ impl Error {
 
     /// tree.ts `pageOverflow`: explains a PageOverflow no box, image, or table claimed.
     pub fn into_message(self) -> String {
-        if self.message != "PageOverflow" {
-            return self.message;
+        let Failure {
+            message, overflow, ..
+        } = *self.0;
+        if message != "PageOverflow" {
+            return message;
         }
-        let at = self
-            .overflow
-            .map_or_else(String::new, |at| format!(" on {at}"));
+        let at = overflow.map_or_else(String::new, |at| format!(" on {at}"));
         format!("PageOverflow: the content does not fit on an empty page; split it into smaller blocks{at}")
     }
 }
@@ -135,6 +159,12 @@ impl Error {
 impl From<String> for Error {
     fn from(message: String) -> Self {
         Self::new(message)
+    }
+}
+
+impl From<crate::css::Message> for Error {
+    fn from(message: crate::css::Message) -> Self {
+        Self::of(message.into())
     }
 }
 
