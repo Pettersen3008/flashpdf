@@ -109,7 +109,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | Export       | Signature                                                                                 | Notes                                                                                                 |
 | ------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `render`     | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
-| `stylesheet` | `(source: string) => string`                                                              | Validates CSS and returns it unchanged, for tagging literals at author time.                          |
+| `stylesheet` | `(source: string) => string`                                                              | Returns CSS unchanged; the first `render` that uses it checks every rule, matched or not.                          |
 | `PageNumber` | `() => Element`                                                                           | Resolves to the current page number inside a header or footer.                                        |
 | `TotalPages` | `() => Element`                                                                           | Resolves to the final page count inside a header or footer.                                           |
 
