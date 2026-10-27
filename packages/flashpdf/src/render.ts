@@ -50,7 +50,8 @@ export type RenderOptions = {
 	tagged?: boolean | undefined;
 	/** Bookmarks every `h1` to `h6` in document order, nested by level, and opens the outline panel. */
 	outline?: boolean | undefined;
-	pdfa?: "3b" | undefined;
+	/** PDF/A-2 forbids attachments and Factur-X, which need "3b". */
+	pdfa?: keyof typeof PDFA | undefined;
 	attachments?: readonly Attachment[] | undefined;
 	facturx?: FacturX | undefined;
 };
@@ -64,6 +65,8 @@ export type Attachment = {
 export type FacturX = { xml: Uint8Array; profile: (typeof PROFILES)[number] };
 
 const RELATIONSHIPS = ["Source", "Data", "Alternative", "Supplement", "Unspecified"] as const;
+/** The core's PDF/A record profile per level; Factur-X takes 1 to 6. */
+const PDFA = { "3b": 0, "2b": 7, "2u": 8 } as const;
 const PROFILES = ["MINIMUM", "BASIC WL", "BASIC", "EN 16931", "EXTENDED", "XRECHNUNG"] as const;
 /** The header and footer options in the order the core takes them, its block kinds 1 to 4. */
 const FURNITURE = ["header", "footer", "firstPageHeader", "firstPageFooter"] as const;
@@ -161,8 +164,9 @@ function attach(
 	attachments: unknown,
 	facturx: unknown,
 ) {
-	if (pdfa !== undefined && pdfa !== "3b")
-		throw new Error('invalid pdfa option; the supported level is "3b"');
+	if (pdfa !== undefined && !Object.hasOwn(PDFA, pdfa as string))
+		throw new Error('invalid pdfa option; use "2b", "2u", or "3b"');
+	const level = pdfa === undefined ? undefined : PDFA[pdfa as keyof typeof PDFA];
 	let bytes = 0;
 	const add = (data: Uint8Array) => {
 		if ((bytes += data.byteLength) > 64 * 1024 * 1024)
@@ -174,13 +178,15 @@ function attach(
 		}
 	};
 	if (facturx !== undefined) {
+		if (pdfa !== undefined && pdfa !== "3b")
+			throw new Error('Factur-X embeds its XML, which PDF/A-2 forbids; use pdfa "3b"');
 		const options = props(facturx, ["xml", "profile"]);
 		const profile = PROFILES.indexOf(options.profile as FacturX["profile"]);
 		if (profile < 0) throw new Error(`invalid facturx profile; use one of ${PROFILES.join(", ")}`);
 		if (!(options.xml instanceof Uint8Array) || !looksLikeXml(options.xml))
 			throw new Error("facturx xml must be UTF-8 XML bytes");
 		writer.pdfa(profile + 1, add(options.xml));
-	} else if (pdfa) writer.pdfa(0, 0);
+	} else if (level !== undefined) writer.pdfa(level);
 	if (attachments === undefined) return;
 	if (!Array.isArray(attachments)) throw new Error("invalid attachments");
 	const names = new Set<string>();

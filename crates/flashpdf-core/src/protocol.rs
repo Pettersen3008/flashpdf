@@ -20,7 +20,7 @@ use pdf_writer::types::AssociationKind;
 
 use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
-use crate::pdf::Attachment;
+use crate::pdf::{Attachment, PdfA};
 use crate::{
     Align, BoxSize, Edges, Flex, FlexItem, FontId, Justify, LineStyle, Marker, OwnedCommand, Pt,
     Radii, RunDecoration, TextRun, BUILT_IN, OPAQUE,
@@ -500,10 +500,15 @@ impl Commands {
             }
             Opcode::PdfA => {
                 let profile = cursor.take(1)?[0];
-                let facturx = match profile {
-                    0 => None,
-                    1..=6 => Some((FACTURX[usize::from(profile - 1)], cursor.u16()?)),
-                    _ => return Err(ProtocolError::InvalidValue("Factur-X profile")),
+                let (level, facturx) = match profile {
+                    0 => (PdfA::A3b, None),
+                    1..=6 => (
+                        PdfA::A3b,
+                        Some((FACTURX[usize::from(profile - 1)], cursor.u16()?)),
+                    ),
+                    7 => (PdfA::A2b, None),
+                    8 => (PdfA::A2u, None),
+                    _ => return Err(ProtocolError::InvalidValue("PDF/A profile")),
                 };
                 cursor.done()?;
                 self.before_body()?;
@@ -514,8 +519,11 @@ impl Commands {
                 {
                     return Err(ProtocolError::PdfACmyk);
                 }
+                if level != PdfA::A3b && !self.metadata.attachments.is_empty() {
+                    return Err(ProtocolError::PdfA2Attachment);
+                }
                 self.pdfa = true;
-                self.metadata.pdfa = true;
+                self.metadata.pdfa = Some(level);
                 if let Some(((level, name, relationship), slot)) = facturx {
                     let data = self.claim_attachment(slot)?;
                     // A cheap shape check; the XML's schema and content are the caller's.
@@ -556,6 +564,9 @@ impl Commands {
                 }
                 if !valid_mime(&mime) {
                     return Err(ProtocolError::InvalidValue("attachment MIME type"));
+                }
+                if matches!(self.metadata.pdfa, Some(PdfA::A2b | PdfA::A2u)) {
+                    return Err(ProtocolError::PdfA2Attachment);
                 }
                 let data = self.claim_attachment(slot)?;
                 self.attach(Attachment {

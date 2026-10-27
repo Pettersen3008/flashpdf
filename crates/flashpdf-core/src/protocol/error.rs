@@ -38,6 +38,7 @@ pub enum ProtocolError {
     DuplicateAttachment,
     PdfAFont,
     PdfACmyk,
+    PdfA2Attachment,
     /// A compile or page setup error, already worded for the user.
     Message(String),
 }
@@ -94,6 +95,9 @@ impl std::fmt::Display for ProtocolError {
                 "PDF/A embeds every font and the built-in Helvetica, Times, and Courier have none; register one with `fonts` and set fontFamily"
             }
             Self::PdfACmyk => "PDF/A output uses an sRGB output intent, so CMYK JPEGs are not supported",
+            Self::PdfA2Attachment => {
+                "PDF/A-2 embeds only files that are PDF/A themselves; use pdfa '3b' for attachments and Factur-X"
+            }
         };
         formatter.write_str(message)
     }
