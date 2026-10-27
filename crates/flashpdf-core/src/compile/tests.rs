@@ -832,3 +832,688 @@ fn given_a_text_decoration_shorthand_without_a_colour_inside_one_with_a_colour_w
     };
     assert_eq!(records, [Record::Spacer(12.0), para(vec![a, b])]);
 }
+
+fn li(children: Vec<Node>) -> Node {
+    node("li", "", children)
+}
+
+/// Each paragraph's first run: its marker, or its text when the item owes none.
+fn firsts(records: &[Record]) -> Vec<(u8, String)> {
+    paragraphs(records)
+        .into_iter()
+        .map(|runs| (runs[0].marker, runs[0].text.clone()))
+        .collect()
+}
+
+#[test]
+fn given_a_ul_and_an_ol_with_start_reversed_and_an_li_value_when_compiling_then_each_items_first_run_is_a_marker_that_numbers_from_them(
+) {
+    let item = |value: &str| li(vec![text(value)]);
+    let records = records(vec![node(
+        "main",
+        "",
+        vec![
+            node("ul", "", vec![item("a"), item("b")]),
+            with(
+                el(
+                    "ol",
+                    "",
+                    vec![
+                        item("c"),
+                        with(el("li", "", vec![text("d")]), |li| li.value = Some(10)),
+                        item("e"),
+                    ],
+                ),
+                |ol| ol.start = Some(3),
+            ),
+            with(el("ol", "", vec![item("f"), item("g")]), |ol| {
+                ol.reversed = true
+            }),
+        ],
+    )]);
+    let markers: Vec<_> = paragraphs(&records)
+        .into_iter()
+        .map(|runs| (runs[0].marker, runs[0].text.clone(), runs[1].text.clone()))
+        .collect();
+    let expected = [
+        ("\u{2022}", "a"),
+        ("\u{2022}", "b"),
+        ("3. ", "c"),
+        ("10. ", "d"),
+        ("11. ", "e"),
+        ("2. ", "f"),
+        ("1. ", "g"),
+    ]
+    .map(|(marker, value)| (1, marker.to_owned(), value.to_owned()));
+    assert_eq!(markers, expected);
+}
+
+#[test]
+fn given_lists_nested_three_deep_when_compiling_then_ul_markers_cycle_disc_circle_square_and_ol_stays_decimal(
+) {
+    let list = |tag: &str, children| node(tag, "", children);
+    let records = records(vec![list(
+        "ul",
+        vec![li(vec![
+            text("a"),
+            list(
+                "ul",
+                vec![li(vec![text("b"), list("ul", vec![li(vec![text("c")])])])],
+            ),
+        ])],
+    )]);
+    let ordered = self::records(vec![list(
+        "ol",
+        vec![li(vec![text("x"), list("ul", vec![li(vec![text("y")])])])],
+    )]);
+    let marker = |records: &[Record]| -> Vec<String> {
+        firsts(records).into_iter().map(|(_, text)| text).collect()
+    };
+    assert_eq!(marker(&records), ["\u{2022}", "\u{25e6}", "\u{25aa}"]);
+    assert_eq!(marker(&ordered), ["1. ", "\u{25e6}"]);
+}
+
+#[test]
+fn given_list_style_position_inside_and_type_none_when_compiling_then_the_marker_is_inside_or_absent_while_the_count_goes_on(
+) {
+    let records = records(vec![node(
+        "ol",
+        "list-style: upper-roman inside",
+        vec![
+            li(vec![text("a")]),
+            node("li", "list-style-type: none", vec![text("b")]),
+            li(vec![text("c")]),
+        ],
+    )]);
+    assert_eq!(
+        firsts(&records),
+        [(2, "I. ".into()), (0, "b".into()), (2, "III. ".into())]
+    );
+}
+
+#[test]
+fn given_an_li_outside_a_list_a_ul_with_another_child_or_a_value_in_a_ul_when_compiling_then_rejects(
+) {
+    assert_eq!(
+        rejects(vec![li(vec![text("x")])]),
+        "<li> belongs in a <ul> or <ol> on <li>"
+    );
+    assert_eq!(
+        rejects(vec![node("ul", "", vec![node("p", "", vec![text("x")])])]),
+        "<ul> accepts only <li> on <ul>"
+    );
+    let valued = with(el("li", "", vec![text("x")]), |li| li.value = Some(2));
+    assert_eq!(
+        rejects(vec![node("ul", "", vec![valued])]),
+        "value applies only to an <li> in an <ol> on <li> in <ul>"
+    );
+}
+
+#[test]
+fn given_an_item_that_starts_with_a_nested_list_when_compiling_then_its_marker_takes_a_line_of_its_own(
+) {
+    let records = records(vec![node(
+        "ul",
+        "",
+        vec![li(vec![node("ul", "", vec![li(vec![text("in")])])])],
+    )]);
+    let lines: Vec<_> = paragraphs(&records)
+        .into_iter()
+        .map(|runs| (runs[0].marker, runs[0].text.clone(), runs[1].text.clone()))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            (1, "\u{2022}".into(), "\u{a0}".into()),
+            (1, "\u{25e6}".into(), "in".into())
+        ]
+    );
+}
+
+#[test]
+fn given_pre_text_with_tabs_runs_of_spaces_and_newlines_when_compiling_then_each_line_is_a_run_that_keeps_its_spaces_and_tabs_reach_multiples_of_8(
+) {
+    let records = records(vec![node("pre", "", vec![text("\nab\tc  d\n\nend")])]);
+    let lines: Vec<_> = paragraphs(&records)[0]
+        .iter()
+        .map(|run| (run.text.clone(), run.hard_break, run.font))
+        .collect();
+    let nbsp = "\u{a0}";
+    assert_eq!(
+        lines,
+        [
+            (format!("ab{}c{}d", nbsp.repeat(6), nbsp.repeat(2)), true, 8),
+            (String::new(), true, 8),
+            ("end".into(), false, 8),
+        ]
+    );
+}
+
+#[test]
+fn given_pre_wrap_pre_line_and_nowrap_when_compiling_then_spaces_keep_one_wrap_point_collapse_or_never_break(
+) {
+    let lines = |mode: &str, value: &str| -> Vec<String> {
+        let style = format!("white-space: {mode}");
+        paragraphs(&records(vec![node("p", &style, vec![text(value)])]))[0]
+            .iter()
+            .map(|run| run.text.clone())
+            .collect()
+    };
+    assert_eq!(
+        lines("pre-wrap", "  a   b\nc"),
+        ["\u{a0}\u{a0}a\u{a0}\u{a0} b", "c"]
+    );
+    assert_eq!(lines("pre-line", "a   b\n c"), ["a   b", " c"]);
+    assert_eq!(lines("nowrap", "  a \n  b  "), ["a\u{a0}b"]);
+}
+
+#[test]
+fn given_sub_and_sup_inside_each_other_and_a_mark_when_compiling_then_the_rise_accumulates_the_size_shrinks_and_the_mark_carries_its_background(
+) {
+    let records = records(vec![node(
+        "p",
+        "",
+        vec![
+            text("x"),
+            node("sup", "", vec![text("2"), node("sub", "", vec![text("i")])]),
+            node("mark", "", vec![text("m")]),
+        ],
+    )]);
+    let runs = &paragraphs(&records)[0];
+    let [x, two, i, mark] = [&runs[0], &runs[1], &runs[2], &runs[3]];
+    // A sup lifts a third of the parent's size and a nested sub lowers a fifth of the sup's.
+    assert_eq!([x.rise, two.rise], [0.0, 0.33 * 12.0]);
+    assert!((i.rise - (0.33 * 12.0 - 0.2 * two.size)).abs() < 1e-9);
+    assert!((two.size - 12.0 * 0.83).abs() < 1e-5 && i.size < two.size);
+    assert_eq!(
+        (mark.background, mark.color),
+        (Some([255, 255, 0]), [0, 0, 0])
+    );
+}
+
+#[test]
+fn given_vertical_align_on_a_block_a_box_or_with_an_unknown_value_when_compiling_then_rejects() {
+    assert!(
+        rejects(vec![node("p", "vertical-align: sub", vec![text("x")])])
+            .starts_with("vertical-align applies only to inline elements")
+    );
+    assert!(rejects(vec![node("sup", "padding: 2pt", vec![text("x")])])
+        .starts_with("vertical-align: super shifts text within a line, and <sup> has box styles"));
+    let middle = node("span", "vertical-align: middle", vec![text("x")]);
+    assert!(rejects(vec![node("p", "", vec![middle])]).starts_with("invalid verticalAlign: middle"));
+}
+
+#[test]
+fn given_a_p_with_a_10pt_bottom_margin_before_an_h2_with_a_16pt_top_margin_when_compiling_then_one_16pt_spacer_separates_them(
+) {
+    let records = records(vec![node(
+        "main",
+        "",
+        vec![
+            node("p", "margin-bottom: 10pt", vec![text("a")]),
+            node("h2", "margin-top: 16pt", vec![text("b")]),
+        ],
+    )]);
+    assert_eq!(
+        names(&records),
+        ["spacer", "paragraph", "spacer", "paragraph", "avoid"]
+    );
+    assert_eq!(
+        [&records[0], &records[2]],
+        [&Record::Spacer(12.0), &Record::Spacer(16.0)]
+    );
+}
+
+#[test]
+fn given_a_box_with_a_left_border_and_bottom_padding_when_compiling_then_a_childs_top_margin_collapses_through_it_and_its_bottom_margin_stays_inside(
+) {
+    let records = records(vec![node(
+        "main",
+        "",
+        vec![
+            node(
+                "blockquote",
+                "margin: 8pt 0; border-left: 2pt solid; padding-bottom: 4pt",
+                vec![node("p", "margin: 12pt 0", vec![text("a")])],
+            ),
+            text("b"),
+        ],
+    )]);
+    assert_eq!(
+        names(&records),
+        [
+            "spacer",
+            "boxStart",
+            "paragraph",
+            "spacer",
+            "boxEnd",
+            "spacer",
+            "paragraph"
+        ]
+    );
+    let margin = boxes(&records)[0].margin;
+    assert_eq!((margin[0], margin[2]), (0.0, 0.0));
+    let spacers: Vec<_> = records
+        .iter()
+        .filter(|record| matches!(record, Record::Spacer(_)))
+        .collect();
+    assert_eq!(
+        spacers,
+        [
+            &Record::Spacer(12.0),
+            &Record::Spacer(12.0),
+            &Record::Spacer(8.0)
+        ]
+    );
+}
+
+#[test]
+fn given_an_empty_bordered_div_with_20pt_margins_between_paragraphs_when_compiling_then_its_margins_collapse_with_theirs_and_it_writes_no_box(
+) {
+    let records = records(vec![node(
+        "main",
+        "",
+        vec![
+            node("p", "margin-bottom: 8pt", vec![text("a")]),
+            node("div", "margin: 20pt 0; border-left: 1pt solid", vec![]),
+            node("p", "margin-top: 8pt", vec![text("b")]),
+        ],
+    )]);
+    assert_eq!(
+        names(&records),
+        ["spacer", "paragraph", "spacer", "paragraph"]
+    );
+    assert_eq!(records[2], Record::Spacer(20.0));
+}
+
+#[test]
+fn given_flex_column_items_with_margins_when_compiling_then_their_margins_and_their_childrens_add_up(
+) {
+    let records = records(vec![node(
+        "main",
+        "display: flex; flex-direction: column",
+        vec![
+            node("div", "margin-bottom: 10pt", vec![text("a")]),
+            node(
+                "div",
+                "",
+                vec![node("p", "margin-top: 6pt", vec![text("b")])],
+            ),
+        ],
+    )]);
+    assert_eq!(
+        names(&records),
+        [
+            "boxStart",
+            "paragraph",
+            "boxEnd",
+            "spacer",
+            "paragraph",
+            "spacer"
+        ]
+    );
+    let margin = boxes(&records)[0].margin;
+    assert_eq!((margin[0], margin[2]), (0.0, 10.0));
+    assert_eq!(
+        (&records[3], &records[5]),
+        (&Record::Spacer(6.0), &Record::Spacer(12.0))
+    );
+}
+
+#[test]
+fn given_margins_around_a_forced_page_break_when_compiling_then_drops_the_one_before_and_keeps_the_one_after(
+) {
+    let records = records(vec![node(
+        "main",
+        "",
+        vec![
+            node("p", "margin-bottom: 20pt", vec![text("a")]),
+            node("p", "break-before: page; margin-top: 12pt", vec![text("b")]),
+        ],
+    )]);
+    assert_eq!(
+        names(&records),
+        ["spacer", "paragraph", "pageBreak", "spacer", "paragraph"]
+    );
+    assert_eq!(records[3], Record::Spacer(12.0));
+}
+
+#[test]
+fn given_nested_opacity_when_compiling_then_each_box_run_and_image_carries_the_product_down_the_tree(
+) {
+    let image = with(el("img", "opacity: 0.5", vec![]), |img| {
+        img.picture = Some(Picture::Image(0));
+    });
+    let records = records(vec![node(
+        "div",
+        "opacity: 0.5; background-color: #eee; padding: 4pt",
+        vec![
+            node("p", "", vec![text("a")]),
+            node("p", "opacity: 50%", vec![text("b")]),
+            image,
+        ],
+    )]);
+    assert_eq!(boxes(&records)[0].opacity, 0.5);
+    let opacities: Vec<_> = paragraphs(&records)
+        .iter()
+        .map(|runs| runs[0].opacity)
+        .collect();
+    assert_eq!(opacities, [0.5, 0.25]);
+    let image = records.iter().find_map(|record| match record {
+        Record::Image { opacity, .. } => Some(*opacity),
+        _ => None,
+    });
+    assert_eq!(image, Some(0.25));
+}
+
+/// svg.ts's drawing of `<svg width=10 height=10><rect width=10 height=10 fill="red"/></svg>`.
+fn red_square() -> Drawing {
+    Drawing {
+        width: 7.5,
+        height: 7.5,
+        view_box: [0.0, 0.0, 10.0, 10.0],
+        align: Some([0.5, 0.5]),
+        slice: false,
+        shapes: vec![Shape {
+            matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            fill: Some(Paint::Rgb([255, 0, 0])),
+            even_odd: false,
+            fill_opacity: 1.0,
+            stroke: None,
+            stroke_width: 1.0,
+            cap: 0,
+            join: 0,
+            miter: 4.0,
+            dashes: vec![],
+            dash_offset: 0.0,
+            stroke_opacity: 1.0,
+            ops: vec![0, 1, 1, 1, 3],
+            points: vec![0.0, 0.0, 10.0, 0.0, 10.0, 10.0, 0.0, 10.0],
+        }],
+    }
+}
+
+#[test]
+fn given_an_svg_with_opacity_when_compiling_then_the_drawing_holds_the_opacity_and_the_image_record_stays_opaque(
+) {
+    let svg = with(el("svg", "opacity: 0.5", vec![]), |svg| {
+        svg.picture = Some(Picture::Drawing(red_square()));
+    });
+    let twice = vec![svg.clone(), svg];
+    let collected = compiled_with(twice, &helvetica(), false).unwrap();
+    // 12 header bytes, then the shape's flags, a 24-byte matrix, and the fill's RGB before its alpha.
+    assert_eq!(
+        collected.images.len(),
+        1,
+        "an identical drawing registers once"
+    );
+    assert_eq!(collected.images[0][12 + 1 + 24 + 3], 128);
+    let images: Vec<_> = collected
+        .records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Image { slot, opacity, .. } => Some((*slot, *opacity)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images, [(100, 1.0), (100, 1.0)]);
+}
+
+#[test]
+fn given_a_border_radius_with_elliptical_and_percent_corners_when_compiling_then_emits_eight_radii_and_a_percent_mask(
+) {
+    let records = records(vec![node(
+        "div",
+        "background-color: #eee; border-radius: 4pt 8pt / 50% 2pt",
+        vec![text("x")],
+    )]);
+    let radius = boxes(&records)[0].radius.unwrap();
+    assert_eq!(radius.values, [4.0, 50.0, 8.0, 2.0, 4.0, 50.0, 8.0, 2.0]);
+    assert_eq!(radius.percent, 0b100010);
+}
+
+#[test]
+fn given_a_radius_on_an_img_when_compiling_then_rejects_because_the_picture_would_not_be_clipped() {
+    let image = with(el("img", "border-radius: 4pt", vec![]), |img| {
+        img.picture = Some(Picture::Image(0));
+    });
+    let message = rejects(vec![image]);
+    assert!(
+        message.starts_with("border-radius does not clip <img>") && message.ends_with(" on <img>")
+    );
+}
+
+#[test]
+fn given_a_link_target_and_headings_with_an_outline_when_compiling_the_body_then_an_anchor_precedes_each_target_and_each_bookmarked_heading(
+) {
+    let link = with(el("a", "", vec![text("Terms")]), |a| {
+        a.href = Some("#terms".into())
+    });
+    let heading = |tag: &str, bookmark, value| {
+        with(el(tag, "", vec![text(value)]), |h| h.bookmark = bookmark)
+    };
+    let section = with(
+        el(
+            "section",
+            "",
+            vec![
+                node(
+                    "h2",
+                    "",
+                    vec![
+                        text("Terms "),
+                        node("b", "", vec![text("and")]),
+                        node("br", "", vec![]),
+                        text(" conditions"),
+                    ],
+                ),
+                heading("h3", Bookmark::Off, "Skipped"),
+                heading("h3", Bookmark::Title("Late fees".into()), "Fees"),
+                with(el("h4", "", vec![text("   ")]), |h| {
+                    h.id = Some("unlinked".into())
+                }),
+            ],
+        ),
+        |section| section.id = Some("terms".into()),
+    );
+    let nodes = vec![node("p", "", vec![link]), section];
+    let records = compiled_with(nodes, &helvetica(), true).unwrap().records;
+    let shown: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Anchor { name, level, title } => Some(format!("{name}|{level}|{title}")),
+            Record::Paragraph { .. } => Some("paragraph".into()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            "paragraph",
+            "terms|0|",
+            "|2|Terms and conditions",
+            "paragraph",
+            "paragraph",
+            "|3|Late fees",
+            "paragraph",
+            "paragraph",
+        ]
+    );
+    let plain = compiled_with(
+        vec![node("h1", "", vec![text("Title")])],
+        &helvetica(),
+        false,
+    );
+    assert!(
+        !names(&plain.unwrap().records).contains(&"anchor"),
+        "without the outline option or a link target, no anchor is written"
+    );
+}
+
+#[test]
+fn given_a_link_to_an_id_that_is_missing_repeated_or_on_an_inline_span_when_compiling_the_body_then_rejects_naming_the_id_and_element(
+) {
+    let link = |id: &str| {
+        with(el("a", "", vec![text("x")]), |a| {
+            a.href = Some(format!("#{id}"))
+        })
+    };
+    let owner = |value| with(el("p", "", vec![text(value)]), |p| p.id = Some("a".into()));
+    assert_eq!(
+        rejects(vec![link("nope")]),
+        "link to #nope: no element has id=\"nope\" on <a>"
+    );
+    assert_eq!(
+        rejects(vec![owner("1"), owner("2"), link("a")]),
+        "link to #a: id=\"a\" is on more than one element on <p#a>"
+    );
+    assert!(compiled_with(vec![owner("1"), owner("2")], &helvetica(), false).is_ok());
+    let span = with(el("span", "", vec![text("this")]), |span| {
+        span.id = Some("n".into())
+    });
+    let message = rejects(vec![node("p", "", vec![text("see "), span]), link("n")]);
+    assert!(message.starts_with("link to #n: its element cannot hold a destination"));
+    assert!(message.ends_with(" on <span#n> in <p>"));
+}
+
+#[test]
+fn given_more_than_10000_bookmarked_headings_when_compiling_the_body_then_rejects_before_the_engine_does(
+) {
+    let headings = (0..10_001)
+        .map(|_| node("h2", "", vec![text("x")]))
+        .collect();
+    let message = compiled_with(headings, &helvetica(), true)
+        .err()
+        .unwrap()
+        .into_message();
+    assert_eq!(
+        message,
+        "more than 10000 link targets and bookmarks on <h2>"
+    );
+}
+
+#[test]
+fn given_justify_content_on_a_row_when_compiling_then_emits_one_flex_record_and_keeps_each_items_width_on_its_own_box(
+) {
+    let records = records(vec![node(
+        "div",
+        "display: flex; justify-content: space-between; align-items: center",
+        vec![
+            node("div", "width: 80pt", vec![text("Logo")]),
+            node("p", "flex: 1 0 50%", vec![text("Due")]),
+        ],
+    )]);
+    assert_eq!(
+        records[0],
+        Record::FlexStart(
+            Flex {
+                column: false,
+                justify: 3,
+                align: 4,
+                gap: 0.0,
+                min_height: 0.0,
+                max_height: None
+            },
+            vec![
+                FlexItem {
+                    grow: 0.0,
+                    shrink: 1.0,
+                    basis: None,
+                    align: 0
+                },
+                FlexItem {
+                    grow: 1.0,
+                    shrink: 0.0,
+                    basis: Some(Dimension {
+                        kind: 2,
+                        value: 50.0
+                    }),
+                    align: 0
+                },
+            ]
+        )
+    );
+    let width = boxes(&records)[0].size.and_then(|size| size.width);
+    assert_eq!(
+        width,
+        Some(Dimension {
+            kind: 1,
+            value: 80.0
+        })
+    );
+    assert_eq!(
+        names(&records[1..]),
+        [
+            "boxStart",
+            "paragraph",
+            "boxEnd",
+            "boxStart",
+            "paragraph",
+            "boxEnd",
+            "flexEnd"
+        ]
+    );
+}
+
+#[test]
+fn given_a_flex_column_without_a_height_when_compiling_justify_content_or_a_grow_factor_then_rejects_with_the_reason(
+) {
+    let column = "display: flex; flex-direction: column";
+    assert_eq!(
+        rejects(vec![node(
+            "div",
+            &format!("{column}; justify-content: center"),
+            vec![text("x")]
+        )]),
+        "justify-content in a flex column needs a height or min-height on the column on <div>"
+    );
+    let grown = node("p", "flex: 1", vec![text("x")]);
+    assert_eq!(
+        rejects(vec![node(
+            "div",
+            &format!("{column}; height: 100pt"),
+            vec![grown]
+        )]),
+        "flex-grow and flex-basis size flex row items; give a column item a height on <p> in <div>"
+    );
+}
+
+/// Fails the first paragraph with an engine code, as the decoder does.
+struct Failing(&'static str);
+
+impl Sink for Failing {
+    fn record(&mut self, record: &Record, _: &[u8]) -> std::result::Result<(), String> {
+        match record {
+            Record::Paragraph { .. } => Err(self.0.into()),
+            _ => Ok(()),
+        }
+    }
+    fn add_image(&mut self, _: Vec<u8>) -> std::result::Result<u16, String> {
+        Ok(0)
+    }
+}
+
+fn engine_failure(code: &'static str, nodes: Vec<Node>) -> String {
+    let fonts = helvetica();
+    let mut compiler = Compiler::new(Styler::new(&[], 523.0).unwrap(), &fonts, Failing(code));
+    compiler.body(&nodes, false).err().unwrap().into_message()
+}
+
+#[test]
+fn given_an_engine_error_while_writing_when_compiling_then_explains_it_and_names_the_element() {
+    let nodes = || vec![node("div", "", vec![node("p", "", vec![text("x")])])];
+    assert_eq!(
+        engine_failure("MissingGlyph('\\u{301}')", nodes()),
+        "the font has no glyph for \"\u{301}\" (U+0301) on <p> in <div>"
+    );
+    assert!(engine_failure("TextTooWide", nodes()).starts_with("TextTooWide: a character is wider"));
+    assert_eq!(
+        engine_failure("PageOverflow", nodes()),
+        "PageOverflow: the content does not fit on an empty page; split it into smaller blocks on <p> in <div>"
+    );
+    let decorated = vec![node("div", "border: 1pt solid", vec![text("x")])];
+    assert_eq!(
+        engine_failure("PageOverflow", decorated),
+        "PageOverflow: use document margins or split this decorated box on <div>"
+    );
+}
