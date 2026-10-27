@@ -12,3 +12,10 @@ strip = true
 # Cold crate: size over speed, measured no slower warm render.
 [profile.release.package.pdf-writer]
 opt-level = "z"
+
+# Shaping runs once per distinct word; the word cache keeps it off the warm path.
+[profile.release.package.harfrust]
+opt-level = "z"
+
+[profile.release.package.read-fonts]
+opt-level = "z"

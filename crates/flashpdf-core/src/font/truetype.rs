@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
+use std::sync::Arc;
 
 use pdf_writer::Rect;
 
-use super::kern::Kerning;
+use super::shape::Shaping;
 use super::{cmap, subset, Stroke};
 
 pub(super) const INVALID: &str = "invalid TrueType font";
 
 pub(crate) struct EmbeddedFont {
-    pub(crate) bytes: Vec<u8>,
+    pub(crate) bytes: Arc<Vec<u8>>,
+    pub(crate) shaping: Arc<Shaping>,
     cmap: Vec<cmap::Range>,
     /// Advance per glyph id in 1/1000 em.
     advances: Vec<u16>,
@@ -26,9 +28,10 @@ pub(crate) struct EmbeddedFont {
     pub(crate) stem_v: f32,
     pub(crate) underline: Stroke,
     pub(crate) strikeout: Stroke,
-    kerning: Kerning,
+    /// Text of used glyphs no code point maps to, such as ligatures, for `/ToUnicode`.
+    pub(crate) names: BTreeMap<u16, Box<str>>,
     /// 1000 over units per em.
-    scale: f32,
+    pub(crate) scale: f32,
 }
 
 impl EmbeddedFont {
@@ -114,13 +117,14 @@ impl EmbeddedFont {
             offset: 262.0,
             thickness: 50.0,
         });
-        let kerning = Kerning::parse(&bytes);
         let name = ttf_table(&bytes, b"name")
             .ok()
             .and_then(postscript_name)
             .unwrap_or_else(|| "FlashPDF".into());
+        let shaping = Shaping::of(bytes).map_err(|()| INVALID.to_owned())?;
         Ok(Self {
-            bytes,
+            bytes: shaping.bytes.clone(),
+            shaping,
             cmap,
             advances,
             used: BTreeSet::new(),
@@ -136,7 +140,7 @@ impl EmbeddedFont {
             stem_v: (50.0 + (f32::from(weight) / 65.0) * (f32::from(weight) / 65.0)).round(),
             underline,
             strikeout,
-            kerning,
+            names: BTreeMap::new(),
             scale,
         })
     }
@@ -157,21 +161,33 @@ impl EmbeddedFont {
         self.advances.get(usize::from(gid)).copied().unwrap_or(0)
     }
 
-    /// Pair kerning in 1/1000 em, rounded like the advances.
-    pub(crate) fn kern(&self, left: u16, right: u16) -> i16 {
-        let units = self.kerning.get(&self.bytes, left, right);
-        (units as f32 * self.scale).round().clamp(-1000.0, 1000.0) as i16
+    /// Lowest code point that maps to `gid`, leaving out private use, which reads as nothing.
+    pub(crate) fn character(&self, gid: u16) -> Option<char> {
+        cmap::reverse(&self.cmap, &BTreeSet::from([gid]))
+            .pop_first()
+            .map(|(_, character)| character)
+            .filter(|character| !matches!(character, '\u{e000}'..='\u{f8ff}' | '\u{f0000}'..))
     }
 
-    /// Lowest code point per used glyph, for `/ToUnicode`.
-    pub(crate) fn unicode(&self) -> BTreeMap<u16, char> {
-        cmap::reverse(&self.cmap, &self.used)
+    /// Text per used glyph for `/ToUnicode`: what shaping made it from, else its lowest code point.
+    pub(crate) fn unicode(&self) -> Vec<(u16, String)> {
+        let characters = cmap::reverse(&self.cmap, &self.used);
+        self.used
+            .iter()
+            .filter_map(|gid| {
+                let text = match self.names.get(gid) {
+                    Some(name) => name.to_string(),
+                    None => characters.get(gid)?.to_string(),
+                };
+                Some((*gid, text))
+            })
+            .collect()
     }
 
     /// The font program to embed: the used-glyph subset, or the whole file
     /// when a glyph table is malformed in a way parsing did not catch.
     pub(crate) fn program(&self) -> Vec<u8> {
-        subset::subset(&self.bytes, &self.used).unwrap_or_else(|| self.bytes.clone())
+        subset::subset(&self.bytes, &self.used).unwrap_or_else(|| self.bytes.to_vec())
     }
 
     /// `/BaseFont` with the PDF subset prefix.

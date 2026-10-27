@@ -1,9 +1,9 @@
 use std::ops::Range;
 
 use crate::document::Paragraph;
-use crate::font::{Font, FontBook};
+use crate::font::{Font, FontBook, NO_KERNING, NO_LIGATURES};
 use crate::geometry::{LayoutArea, Point};
-use crate::layout::output::{Gap, LayoutBuffer, PositionedLine, Segment, MARKER_SLOT};
+use crate::layout::output::{Gap, LayoutBuffer, Lift, PositionedLine, Segment, MARKER_SLOT};
 use crate::layout::LayoutError;
 use crate::{FontId, Marker, Pt, RenderError, Rgb, TextAlign, Typography};
 
@@ -18,6 +18,10 @@ struct RunMetrics<'a> {
     typography: Typography,
     /// Spaces carry a `Gap` for word spacing or justification.
     gapped: bool,
+    /// An embedded font, which harfrust shapes word by word.
+    shapes: bool,
+    /// `NO_KERNING` and `NO_LIGATURES`.
+    features: u8,
 }
 
 impl RunMetrics<'_> {
@@ -29,6 +33,16 @@ impl RunMetrics<'_> {
     fn encode(&self, character: char, out: &mut Vec<u8>) -> Result<Pt, LayoutError> {
         let advance = self.font.encode_into(character, out).map_err(text_error)?;
         Ok(self.scaled(advance) + Pt(self.typography.letter_spacing))
+    }
+
+    /// A fixed gap of `amount` thousandths of an em before the code at byte `at`, with its width.
+    fn gap(&self, at: usize, amount: i32) -> (Gap, Pt) {
+        let gap = Gap {
+            at: at as u32,
+            amount: amount as f32,
+            stretch: false,
+        };
+        (gap, Pt(amount as f32 * self.size.get() / 1000.0))
     }
 
     fn advance(&self, code: &[u8]) -> Pt {
@@ -74,7 +88,10 @@ struct Space {
 /// it at both ends.
 /// ponytail: a space always breaks, so `a !` may wrap before `!`, which UAX #14 forbids.
 pub(crate) struct ParagraphLayouter<'a> {
+    fonts: &'a FontBook,
     runs: Vec<RunMetrics<'a>>,
+    /// Characters of the pending piece in an embedded font, shaped when the piece ends.
+    unshaped: String,
     align: TextAlign,
     area: LayoutArea,
     height: Pt,
@@ -135,10 +152,22 @@ impl<'a> ParagraphLayouter<'a> {
                 depth: Pt(line_height - ascent - rise),
                 typography: run.typography,
                 gapped: run.typography.word_spacing != 0.0 || paragraph.align == TextAlign::Justify,
+                shapes: matches!(font, Font::Embedded(_)),
+                features: if run.typography.kerning {
+                    0
+                } else {
+                    NO_KERNING
+                } | if run.typography.letter_spacing != 0.0 {
+                    NO_LIGATURES
+                } else {
+                    0
+                },
             });
         }
         let mut state = Self {
+            fonts,
             runs,
+            unshaped: String::new(),
             align: paragraph.align,
             area,
             height: Pt::ZERO,
@@ -242,7 +271,7 @@ impl<'a> ParagraphLayouter<'a> {
         let mut piece: Option<Piece> = None;
         for (offset, character) in text.char_indices() {
             if character.is_ascii_whitespace() {
-                self.pieces.extend(piece.take());
+                self.close(index, &mut piece, output)?;
                 self.word(output)?;
                 self.hyphen = None;
                 if self.has_word && self.space.is_none() {
@@ -259,13 +288,13 @@ impl<'a> ParagraphLayouter<'a> {
             }
             while breaks.next_if(|at| *at < base + offset).is_some() {}
             if !nowrap && breaks.next_if_eq(&(base + offset)).is_some() {
-                self.pieces.extend(piece.take());
+                self.close(index, &mut piece, output)?;
                 self.word(output)?;
             }
             match character {
                 // A soft hyphen shows as a hyphen at a line end and never otherwise.
                 '\u{ad}' if !nowrap => {
-                    self.pieces.extend(piece.take());
+                    self.close(index, &mut piece, output)?;
                     let start = output.text.len();
                     let width = self.runs[index].encode('-', &mut output.text)?;
                     self.soft_hyphen = Some(Space {
@@ -280,6 +309,12 @@ impl<'a> ParagraphLayouter<'a> {
                 '\u{ad}' | '\u{200b}' | '\u{2060}' => continue,
                 _ => {}
             }
+            // Other whitespace keeps its own glyph and gap, so word spacing and justification find it.
+            if self.runs[index].shapes && !character.is_whitespace() {
+                self.unshaped.push(character);
+                continue;
+            }
+            self.shape(index, &mut piece, output)?;
             let start = output.text.len();
             let mut width = self.runs[index].encode(character, &mut output.text)?;
             let lead = if character.is_whitespace() {
@@ -308,7 +343,81 @@ impl<'a> ParagraphLayouter<'a> {
             slot.end = output.text.len();
             slot.width += width;
         }
-        self.pieces.extend(piece);
+        self.close(index, &mut piece, output)
+    }
+
+    /// Ends the pending word's piece in this run.
+    fn close(
+        &mut self,
+        run: usize,
+        piece: &mut Option<Piece>,
+        output: &mut LayoutBuffer,
+    ) -> Result<(), LayoutError> {
+        self.shape(run, piece, output)?;
+        self.pieces.extend(piece.take());
+        Ok(())
+    }
+
+    /// Shapes the characters waiting in `unshaped` and appends their glyphs to the piece.
+    /// Each glyph's advance beyond its `/W` width, as kerning, becomes a gap before the next code.
+    fn shape(
+        &mut self,
+        run: usize,
+        piece: &mut Option<Piece>,
+        output: &mut LayoutBuffer,
+    ) -> Result<(), LayoutError> {
+        if self.unshaped.is_empty() {
+            return Ok(());
+        }
+        let metrics = &self.runs[run];
+        let shaped = self
+            .fonts
+            .shape(metrics.id, &self.unshaped, metrics.features)
+            .map_err(LayoutError::MissingGlyph)?;
+        let start = output.text.len();
+        let lead = shaped.glyphs.first().map_or(0, |glyph| glyph.gap);
+        let (_, lead_width) = metrics.gap(start, lead);
+        if lead != 0 {
+            push_gap(&mut self.gaps, metrics.gap(start, lead));
+        }
+        for glyph in &shaped.glyphs {
+            let at = output.text.len();
+            if at != start && glyph.gap != 0 {
+                push_gap(&mut self.gaps, metrics.gap(at, glyph.gap));
+            }
+            if glyph.lift != 0 {
+                output.lifts.push(Lift {
+                    at: at as u32,
+                    amount: glyph.lift as f32,
+                });
+            }
+            output.text.extend(glyph.gid.to_be_bytes());
+        }
+        if shaped.trail != 0 {
+            push_gap(&mut self.gaps, metrics.gap(output.text.len(), shaped.trail));
+        }
+        for &(first, last, from, to) in &shaped.actual {
+            let codes = start as u32 + first * 2..start as u32 + last * 2;
+            output
+                .actual
+                .push((codes, self.unshaped[from as usize..to as usize].into()));
+        }
+        let (_, inner) = metrics.gap(0, shaped.advance - lead);
+        let width = inner + Pt(metrics.typography.letter_spacing * shaped.glyphs.len() as f32);
+        self.unshaped.clear();
+        self.previous = None;
+        let slot = piece.get_or_insert(Piece {
+            run,
+            start,
+            end: start,
+            width: Pt::ZERO,
+            lead: lead_width,
+        });
+        if slot.start != start {
+            slot.width += lead_width;
+        }
+        slot.end = output.text.len();
+        slot.width += width;
         Ok(())
     }
 
@@ -554,6 +663,17 @@ impl<'a> ParagraphLayouter<'a> {
         self.depth = Pt::ZERO;
         self.has_word = false;
         self.space = None;
+    }
+}
+
+/// Adds a fixed gap, merged with one already at the same code.
+fn push_gap(gaps: &mut Vec<(Gap, Pt)>, (gap, width): (Gap, Pt)) {
+    match gaps.last_mut() {
+        Some((last, total)) if last.at == gap.at && !last.stretch => {
+            last.amount += gap.amount;
+            *total += width;
+        }
+        _ => gaps.push((gap, width)),
     }
 }
 

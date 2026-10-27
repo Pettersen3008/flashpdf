@@ -3,11 +3,11 @@ use std::ops::Range;
 use std::f32::consts::FRAC_PI_4;
 
 use pdf_writer::types::LineCapStyle;
-use pdf_writer::{Content, Name, Str};
+use pdf_writer::{Content, Name, Str, TextStr};
 
 use crate::font::font_name;
 use crate::geometry::Point;
-use crate::layout::{Gap, LayoutBuffer, PositionedBox, Segment, MARKER_SHAPE};
+use crate::layout::{Actual, Gap, LayoutBuffer, Lift, PositionedBox, Segment, MARKER_SHAPE};
 use crate::vector::{alpha_name, dash, op};
 use crate::{BoxStyle, FontId, LineStyle, Pt, Radii, Rgb, TextAlign, OPAQUE};
 
@@ -383,12 +383,36 @@ impl<'a> PdfPainter<'a> {
                 let last = layout
                     .gaps
                     .partition_point(|gap| (gap.at as usize) < segment.text.end);
-                if segment.shape == 0 {
+                let range = segment.text.clone();
+                let within = |at: u32| range.contains(&(at as usize));
+                let lifts = &layout.lifts[layout.lifts.partition_point(|lift| !within(lift.at))..];
+                let lifts = &lifts[..lifts.partition_point(|lift| within(lift.at))];
+                let actual: &[_] = match self.tags {
+                    Some(_) => {
+                        let start = layout
+                            .actual
+                            .partition_point(|(codes, _)| codes.end as usize <= range.start);
+                        let actual = &layout.actual[start..];
+                        &actual[..actual
+                            .partition_point(|(codes, _)| (codes.start as usize) < range.end)]
+                    }
+                    None => &[],
+                };
+                if segment.shape == 0 && lifts.is_empty() && actual.is_empty() {
                     show(
                         self.content,
-                        &layout.text[segment.text.clone()],
-                        segment.text.start,
+                        &layout.text[range.clone()],
+                        range.start,
                         &layout.gaps[first..last],
+                    );
+                } else if segment.shape == 0 {
+                    show_marked(
+                        self.content,
+                        &layout.text,
+                        range,
+                        &layout.gaps[first..last],
+                        (lifts, actual),
+                        segment.size.get(),
                     );
                 }
                 previous = Some(segment);
@@ -518,10 +542,79 @@ fn show(content: &mut Content, text: &[u8], start: usize, gaps: &[Gap]) {
     let mut from = 0;
     for gap in gaps.iter().filter(|gap| gap.amount != 0.0) {
         let at = gap.at as usize - start;
-        items.show(Str(&text[from..at])).adjust(-gap.amount);
+        if at > from {
+            items.show(Str(&text[from..at]));
+        }
+        items.adjust(-gap.amount);
         from = at;
     }
-    items.show(Str(&text[from..]));
+    if from < text.len() {
+        items.show(Str(&text[from..]));
+    }
+}
+
+/// `show` for a segment with marks: a lifted glyph sits on its own `Ts`, and a cluster
+/// whose glyphs do not spell its text is a `/Span` with `/ActualText`. A cluster split
+/// over two lines gives its text to the first part and none to the rest.
+fn show_marked(
+    content: &mut Content,
+    text: &[u8],
+    range: Range<usize>,
+    gaps: &[Gap],
+    (lifts, actual): (&[Lift], &[Actual]),
+    size: f32,
+) {
+    let mut cuts: Vec<usize> = lifts
+        .iter()
+        .flat_map(|lift| [lift.at, lift.at + 2])
+        .chain(
+            actual
+                .iter()
+                .flat_map(|(codes, _)| [codes.start, codes.end]),
+        )
+        .map(|at| at as usize)
+        .filter(|at| *at > range.start && *at < range.end)
+        .chain([range.end])
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let (mut from, mut rise, mut open, mut gap) = (range.start, 0.0, None, 0);
+    for to in cuts {
+        let span = actual
+            .iter()
+            .find(|(codes, _)| (codes.start as usize..codes.end as usize).contains(&from));
+        if let (Some((codes, source)), None) = (span, open) {
+            let source = if codes.start as usize >= range.start {
+                &**source
+            } else {
+                ""
+            };
+            content
+                .begin_marked_content_with_properties(Name(b"Span"))
+                .properties()
+                .actual_text(TextStr(source));
+            open = Some(codes.end as usize);
+        }
+        let lift = lifts
+            .iter()
+            .find(|lift| lift.at as usize == from)
+            .map_or(0.0, |lift| lift.amount * size / 1000.0);
+        if lift != rise {
+            content.set_rise(lift);
+            rise = lift;
+        }
+        let end = gap + gaps[gap..].partition_point(|next| (next.at as usize) < to);
+        show(content, &text[from..to], from, &gaps[gap..end]);
+        gap = end;
+        if open.is_some_and(|end| end <= to) || to == range.end && open.is_some() {
+            content.end_marked_content();
+            open = None;
+        }
+        from = to;
+    }
+    if rise != 0.0 {
+        content.set_rise(0.0);
+    }
 }
 
 /// Chrome's synthetic italic skews by a quarter, about 14 degrees.

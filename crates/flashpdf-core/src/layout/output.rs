@@ -46,6 +46,17 @@ pub(crate) struct Gap {
     pub(crate) stretch: bool,
 }
 
+/// The baseline shift of the one code at byte `at`, as a mark sits above its
+/// base, in 1/1000 em of its segment, up positive.
+#[derive(Clone, Copy)]
+pub(crate) struct Lift {
+    pub(crate) at: u32,
+    pub(crate) amount: f32,
+}
+
+/// A range of codes and the source text they show, for `/ActualText`.
+pub(crate) type Actual = (Range<u32>, Box<str>);
+
 #[derive(Clone, Copy)]
 pub(crate) struct PositionedBox {
     pub(crate) origin: Point,
@@ -89,6 +100,11 @@ pub(crate) struct LayoutBuffer {
     pub(crate) text: Vec<u8>,
     /// Sorted by `at`.
     pub(crate) gaps: Vec<Gap>,
+    /// Sorted by `at`.
+    pub(crate) lifts: Vec<Lift>,
+    /// Codes whose `/ToUnicode` text differs from their source text, with that text, for
+    /// a tagged PDF's `/ActualText`. Sorted and disjoint.
+    pub(crate) actual: Vec<Actual>,
     pub(crate) boxes: Vec<PositionedBox>,
     pub(crate) images: Vec<PositionedImage>,
     pub(crate) links: Vec<String>,
@@ -134,6 +150,8 @@ impl LayoutBuffer {
         self.decorations.clear();
         self.text.clear();
         self.gaps.clear();
+        self.lifts.clear();
+        self.actual.clear();
         self.boxes.clear();
         self.images.clear();
         self.links.clear();
@@ -147,6 +165,8 @@ impl LayoutBuffer {
             + self.segments.capacity() * size_of::<Segment>()
             + self.decorations.capacity() * size_of::<Decoration>()
             + self.text.capacity()
+            + self.lifts.capacity() * size_of::<Lift>()
+            + self.actual.capacity() * size_of::<Actual>()
             + self.boxes.capacity() * size_of::<PositionedBox>()
             + self.images.capacity() * size_of::<PositionedImage>()
             + self.links.capacity() * size_of::<String>()
