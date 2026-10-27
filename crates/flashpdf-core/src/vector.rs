@@ -5,7 +5,7 @@
 use pdf_writer::{Content, Name};
 
 use crate::image::{ColorSpace, Encoding, Image};
-use crate::pdf::deflate;
+use crate::pdf::{deflate, Stream};
 
 pub(crate) const MAGIC: &[u8; 4] = b"FPDV";
 /// Bounds one drawing's content stream; a version 40 QR code needs under 80,000.
@@ -147,7 +147,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Image, String> {
             height,
             alphas: alphas.collect(),
         },
-        data: deflate(&content.finish()),
+        data: deflate(&content.finish(), Stream::Content),
         alpha: None,
         color_key: None,
     })

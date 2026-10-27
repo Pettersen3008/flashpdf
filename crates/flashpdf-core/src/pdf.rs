@@ -73,15 +73,39 @@ pub(crate) fn finish_pdf(
         .filter(|slot| used_fonts[*slot])
         .map(|slot| FontId::new(slot as u8))
         .collect();
-    let capacity = contents
+    // Subsetting and deflating are per font and per page and independent, so they may run in
+    // parallel. Doing them first sizes the output buffer from the deflated lengths.
+    let embedded: Vec<&crate::EmbeddedFont> = used
         .iter()
-        .map(Vec::len)
-        .chain(used.iter().filter_map(|slot| match &fonts[slot.index()] {
-            Font::Embedded(font) => Some(font.bytes.len()),
+        .filter_map(|slot| match &fonts[slot.index()] {
+            Font::Embedded(font) => Some(&**font),
             Font::Standard(_) => None,
-        }))
+        })
+        .collect();
+    let programs = map_ordered(
+        embedded,
+        |font| font.bytes.len(),
+        |font| {
+            let program = font.program();
+            (program.len(), deflate(&program, Stream::Table))
+        },
+    );
+    let attached = map_ordered(
+        metadata.attachments.iter().collect(),
+        |attachment| attachment.data.len(),
+        |attachment| deflate(&attachment.data, Stream::Binary),
+    );
+    let count = contents.len();
+    let streams = map_ordered(contents, Vec::len, |content| {
+        deflate(&content, Stream::Content)
+    });
+    let capacity = (streams.iter().chain(&attached))
+        .chain(programs.iter().map(|(_, program)| program))
+        .map(Vec::len)
         .chain(images.iter().map(|image| image.data.len()))
-        .try_fold(8 * 1024_usize, |total, length| total.checked_add(length));
+        .try_fold(8 * 1024 + count * 512, |total, length| {
+            total.checked_add(length)
+        });
     let mut pdf = capacity
         .map(|capacity| Pdf::with_capacity(capacity.max(8 * 1024)))
         .unwrap_or_else(Pdf::new);
@@ -167,7 +191,6 @@ pub(crate) fn finish_pdf(
         .collect();
     let outline = (!bookmarks.is_empty()).then(&mut allocate);
     let first_page = next;
-    let count = contents.len();
     let page_refs = (0..count).map(|index| Ref::new(first_page + index as i32 * 2));
     let mut next_annotation = first_page + count as i32 * 2;
 
@@ -304,30 +327,14 @@ pub(crate) fn finish_pdf(
             }
         }
         let (data, first) = pack_objects(chunk.as_bytes(), &packed, &starts);
-        pdf.stream(stream, &deflate(&data))
+        pdf.stream(stream, &deflate(&data, Stream::Table))
             .filter(Filter::FlateDecode)
             .pair(Name(b"Type"), Name(b"ObjStm"))
             .pair(Name(b"N"), packed.len() as i32)
             .pair(Name(b"First"), first as i32);
     }
 
-    // Subsetting and deflating are per font and independent, so they may run in parallel.
-    let embedded: Vec<&crate::EmbeddedFont> = font_refs
-        .iter()
-        .filter_map(|refs| match &fonts[refs.slot.index()] {
-            Font::Embedded(font) => Some(&**font),
-            Font::Standard(_) => None,
-        })
-        .collect();
-    let mut programs = map_ordered(
-        embedded,
-        |font| font.bytes.len(),
-        |font| {
-            let program = font.program();
-            (program.len(), deflate(&program))
-        },
-    )
-    .into_iter();
+    let mut programs = programs.into_iter();
     for refs in &font_refs {
         match &fonts[refs.slot.index()] {
             Font::Standard(face) => {
@@ -360,11 +367,6 @@ pub(crate) fn finish_pdf(
         pdf.metadata(xmp, xmp_packet(&metadata).as_bytes());
         pdf.icc_profile(profile, SRGB).n(3);
     }
-    let attached = map_ordered(
-        metadata.attachments.iter().collect(),
-        |attachment| attachment.data.len(),
-        |attachment| deflate(&attachment.data),
-    );
     for ((attachment, (spec, file)), data) in metadata.attachments.iter().zip(&files).zip(attached)
     {
         let mut stream = pdf.embedded_file(*file, &data);
@@ -382,7 +384,6 @@ pub(crate) fn finish_pdf(
         }
     }
 
-    let streams = map_ordered(contents, Vec::len, |content| deflate(&content));
     for (index, ((stream, page_links), page_alphas)) in
         streams.into_iter().zip(links).zip(alphas).enumerate()
     {
@@ -547,7 +548,7 @@ fn finish_with_xref_stream(
         data.extend_from_slice(&field.to_be_bytes()[size_of::<usize>() - middle..]);
         data.extend_from_slice(&index.to_be_bytes()[size_of::<usize>() - last..]);
     }
-    let data = deflate(&data);
+    let data = deflate(&data, Stream::Table);
     let mut chunk = Chunk::new();
     let mut xref = chunk.stream(Ref::new(size as i32), &data);
     xref.filter(Filter::FlateDecode)
@@ -752,9 +753,41 @@ pub(crate) fn join<A: Send, B: Send>(
     (a(), b())
 }
 
-/// Fixed level keeps the output byte-for-byte deterministic across runs.
-pub(crate) fn deflate(bytes: &[u8]) -> Vec<u8> {
-    miniz_oxide::deflate::compress_to_vec_zlib(bytes, 6)
+/// What a stream holds, which picks how hard `deflate` works on it.
+#[derive(Clone, Copy)]
+pub(crate) enum Stream {
+    /// Page and form operators.
+    Content,
+    /// Font programs, CMaps, object and cross-reference streams.
+    Table,
+    /// Image samples and attachments.
+    Binary,
+}
+
+/// Fixed settings keep the output byte-for-byte deterministic across runs. On the 80-line
+/// invoice, content at level 5 filtered and tables at level 4 deflate about a third faster
+/// than level 6 for 0.1% more bytes; binary data was not measured, so it keeps level 6.
+pub(crate) fn deflate(bytes: &[u8], stream: Stream) -> Vec<u8> {
+    use miniz_oxide::deflate::core::{
+        compress_to_output, create_comp_flags_from_zip_params, CompressionStrategy,
+        CompressorOxide, TDEFLFlush, TDEFLStatus,
+    };
+    let (level, strategy) = match stream {
+        // Filtered drops matches under 5 bytes, which in operators are mostly digit runs.
+        Stream::Content => (5, CompressionStrategy::Filtered),
+        Stream::Table => (4, CompressionStrategy::Default),
+        Stream::Binary => (6, CompressionStrategy::Default),
+    };
+    // Window bits above 0 select the zlib wrapper FlateDecode expects.
+    let flags = create_comp_flags_from_zip_params(level, 1, strategy as i32);
+    let mut compressor = CompressorOxide::new(flags);
+    let mut output = Vec::with_capacity(bytes.len() / 4 + 64);
+    let (status, _) = compress_to_output(&mut compressor, bytes, TDEFLFlush::Finish, |chunk| {
+        output.extend_from_slice(chunk);
+        true
+    });
+    assert!(matches!(status, TDEFLStatus::Done), "deflate stopped early");
+    output
 }
 
 /// One `/ExtGState` per fill and stroke alpha pair, named by `alpha_name`.
