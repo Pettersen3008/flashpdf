@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
     cooldown:
-      default-days: 1
+      default-days: 3
     groups:
       cargo-minor-patch:
         update-types: [minor, patch]
@@ -14,7 +14,7 @@ updates:
     schedule:
       interval: weekly
     cooldown:
-      default-days: 1
+      default-days: 3
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
@@ -23,7 +23,7 @@ updates:
     schedule:
       interval: weekly
     cooldown:
-      default-days: 1
+      default-days: 3
     groups:
       actions-minor-patch:
         update-types: [minor, patch]
