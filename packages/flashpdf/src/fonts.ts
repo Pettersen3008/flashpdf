@@ -1,6 +1,14 @@
 import { props } from "./assert.js";
 import { asError, type Engine } from "./binary.js";
-import { type FontSlots, helvetica } from "./style.js";
+
+/** Engine font slots per face of a family; 0 to 3 are the built-in Helvetica faces. */
+export type FontSlots = {
+	regular: number;
+	bold?: number | undefined;
+	italic?: number | undefined;
+	boldItalic?: number | undefined;
+};
+const helvetica: FontSlots = { regular: 0, bold: 1, italic: 2, boldItalic: 3 };
 
 /** The core's cap, checked first because `add_font` copies the bytes into WASM memory. */
 const MAX_FONT_BYTES = 64 * 1024 * 1024;

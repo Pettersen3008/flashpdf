@@ -1554,3 +1554,24 @@ fn given_element_records_outside_the_protocol_when_decoding_then_rejects() {
         assert_eq!(error.as_deref(), Some(message));
     }
 }
+
+#[test]
+fn given_a_strict_stylesheet_record_when_decoding_then_rejects_a_rule_no_element_matches() {
+    let header = [MAGIC.as_slice(), &VERSION.to_le_bytes()].concat();
+    let sheet = |code: u8| {
+        [
+            header.clone(),
+            record(code, &[&[0], ".unused { color: nope }".as_bytes()].concat()),
+        ]
+        .concat()
+    };
+    assert!(Decoder::default().push(&sheet(27)).is_ok());
+    let error = Decoder::default()
+        .push(&sheet(34))
+        .err()
+        .map(|error| error.to_string());
+    assert_eq!(
+        error.as_deref(),
+        Some("unsupported color: nope in selector \".unused\" at 1:1")
+    );
+}

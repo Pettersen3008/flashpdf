@@ -377,6 +377,7 @@ fn given_selectors_that_match_no_rendered_element_when_validating_then_skips_eve
 		:host, :host(.a), html, body, button, .a:not(:is(div)) > svg { letter-spacing: 1pt }
 		.a:-moz-focusring, .a:-webkit-autofill, .a:-ms-input-placeholder { letter-spacing: 1pt }";
     validate(css).unwrap();
+    one(css, "a").unwrap();
     assert_eq!(matched(":not(:hover):not(:focus)", &[item("p", "x")]), "x");
 }
 
@@ -721,6 +722,8 @@ fn given_math_over_lengths_and_numbers_when_resolving_then_evaluates_with_css_pr
     ] {
         assert_eq!(text(&style, name), Some(expected), "{name}");
     }
+    let larger = one(".a { width: max(25%, 50%) }", "a").unwrap();
+    assert_eq!(text(&larger, "width"), Some("50%"));
 }
 
 #[test]
@@ -933,4 +936,453 @@ fn given_calc_color_mix_custom_properties_and_css_wide_keywords_when_validating_
     )
     .unwrap();
     validate(".t { color: currentcolor; background-color: inherit; margin: initial }").unwrap();
+}
+
+/// `cascaded` normalised as a root's style, and its box at font size `size`.
+fn boxed(cascaded: &Cascaded, size: f64) -> Result<Option<style::Box>, String> {
+    box_style(&style(cascaded, &Style::default())?, size, 1.0)
+}
+
+#[test]
+fn given_a_descendant_step_after_a_child_step_when_matching_then_backtracks_over_intermediate_ancestors(
+) {
+    let tree = [e(
+        "div",
+        "",
+        "",
+        vec![e(
+            "section",
+            "",
+            "",
+            vec![e("section", "", "", vec![item("p", "p")])],
+        )],
+    )];
+    assert_eq!(matched("div > section p", &tree), "p");
+}
+
+#[test]
+fn given_headings_inherited_lengths_and_stylesheet_numbers_when_resolving_styles_then_computes_each_child(
+) {
+    let heading = resolve(&[e("h1", "", "title", vec![])], &[".title { color: red }"]).unwrap();
+    let s = style(&heading[0].1, &Style::default()).unwrap();
+    assert_eq!(s.get(Prop::of("fontSize")), Some(&Value::Number(24.0)));
+    assert_eq!(text(&heading[0].1, "fontWeight"), Some("bold"));
+    assert_eq!(text(&heading[0].1, "color"), Some("red"));
+    let nested = resolve(
+        &[styled(
+            "main",
+            "",
+            "font-size: 2em",
+            vec![e("div", "", "", vec![e("p", "", "", vec![])])],
+        )],
+        &[],
+    )
+    .unwrap();
+    let mut parent = Style::default();
+    for (_, cascaded) in &nested {
+        parent = style(cascaded, &parent).unwrap();
+        assert_eq!(parent.get(Prop::of("fontSize")), Some(&Value::Number(24.0)));
+    }
+    let flex = style(
+        &one(".cell { flex: 1 }", "cell").unwrap(),
+        &Style::default(),
+    )
+    .unwrap();
+    assert_eq!(flex.get(Prop::of("flexGrow")), Some(&Value::Number(1.0)));
+}
+
+#[test]
+fn given_cascading_shorthands_selector_whitespace_and_transparent_paint_when_normalizing_styles_then_keeps_css_semantics(
+) {
+    let tree = [e("main", "", "", vec![e("p", "", "x", vec![])])];
+    let double = resolve(
+        &tree,
+        &["main\n\tp.x { color: red; background: transparent; border: 1pt double red }"],
+    )
+    .unwrap();
+    assert!(boxed(&double[1].1, 12.0)
+        .unwrap_err()
+        .contains("unsupported border style: double"));
+    let resolved = resolve(
+        &tree,
+        &["main\n\tp.x { color: red; background: transparent }"],
+    )
+    .unwrap();
+    assert_eq!(text(&resolved[1].1, "color"), Some("red"));
+    let cascade = resolve(
+        &[styled("main", "", "margin: 0", vec![])],
+        &["main { margin-top: 12pt }"],
+    )
+    .unwrap();
+    assert_eq!(
+        boxed(&cascade[0].1, 12.0).unwrap().unwrap().margin,
+        [0.0; 4]
+    );
+    let reordered = one(
+        ".x { margin-top: 1pt } .x { margin: 2pt } .x { margin-top: 3pt }",
+        "x",
+    )
+    .unwrap();
+    assert_eq!(
+        boxed(&reordered, 12.0).unwrap().unwrap().margin,
+        [3.0, 2.0, 2.0, 2.0]
+    );
+    let declared = |css: &'static str| one(&format!(".x {{ {css} }}"), "x").unwrap();
+    let paint = |css| boxed(&declared(css), 12.0).unwrap().unwrap();
+    assert_eq!(paint("background: transparent").background, None);
+    // A colour the border shorthand does not hardcode still reaches `color`.
+    assert_eq!(
+        paint("border: 1pt solid #336699").border_color,
+        [[0x33, 0x66, 0x99]; 4]
+    );
+    assert_eq!(paint("border: 1pt solid transparent").border, [0.0; 4]);
+    assert_eq!(paint("border: none").border, [0.0; 4]);
+    let lab = resolve(
+        &[styled(
+            "main",
+            "",
+            "border: 1pt solid lab(50% 40 20)",
+            vec![],
+        )],
+        &[],
+    )
+    .unwrap();
+    assert!(boxed(&lab[0].1, 12.0)
+        .unwrap_err()
+        .contains("unsupported color: lab(50% 40 20)"));
+    assert!(color(&"transparent".into())
+        .unwrap_err()
+        .contains("only to background"));
+}
+
+#[test]
+fn given_a_longhand_then_a_shorthand_in_a_later_rule_when_cascading_then_the_shorthand_wins() {
+    let cell = one(
+        ".cell { border-bottom: 1pt solid red; background-color: red } .cell.last { border: none; background: blue }",
+        "cell last",
+    )
+    .unwrap();
+    let cell = boxed(&cell, 12.0).unwrap().unwrap();
+    assert_eq!(cell.border, [0.0; 4]);
+    assert_eq!(cell.background, Some([0, 0, 255]));
+}
+
+#[test]
+fn given_calc_and_color_mix_values_when_resolving_styles_then_computes_the_length_and_rejects_the_colour_at_render(
+) {
+    let cascaded = one(
+        ".a { --brand: notacolor; margin: calc(0.25rem * 2); background-color: color-mix(in oklab, #000 50%, transparent) }",
+        "a",
+    )
+    .unwrap();
+    assert_eq!(text(&cascaded, "margin"), Some("6pt"));
+    assert!(boxed(&cascaded, 12.0)
+        .unwrap_err()
+        .contains("unsupported color: color-mix(in oklab"));
+}
+
+#[test]
+fn given_tailwinds_border_and_border_dashed_rules_when_resolving_a_box_then_draws_a_dashed_one_pixel_border(
+) {
+    let css = ".border{border-style:var(--tw-border-style);border-width:1px}.border-dashed{--tw-border-style:dashed;border-style:dashed}";
+    let boxed = boxed(&one(css, "border border-dashed").unwrap(), 12.0)
+        .unwrap()
+        .unwrap();
+    assert_eq!(boxed.border, [0.75; 4]);
+    assert_eq!(boxed.border_style, [1; 4]);
+}
+
+#[test]
+fn given_tailwinds_rounded_full_and_opacity_50_when_resolving_a_box_then_accepts_the_exponent_length_and_the_percent(
+) {
+    let styled = resolve(
+        &[styled(
+            "div",
+            "rounded-full opacity-50",
+            "background: #eee",
+            vec![],
+        )],
+        &[".rounded-full{border-radius:3.40282e38px}.opacity-50{opacity:50%}"],
+    )
+    .unwrap();
+    let radius = boxed(&styled[0].1, 12.0).unwrap().unwrap().radius.unwrap();
+    assert!(radius
+        .values
+        .iter()
+        .all(|value| value.is_finite() && *value > 1e38));
+    let opacity = styled[0].1.get(&Key::Prop(Prop::of("opacity"))).unwrap();
+    assert_eq!(style::opacity(opacity), Ok(0.5));
+}
+
+#[test]
+fn given_paragraphs_and_headings_when_cascading_browser_defaults_then_scales_their_margins_and_honors_author_overrides(
+) {
+    let tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "hr"];
+    let sizes = [1.0, 2.0, 1.5, 1.17, 1.0, 0.83, 0.67, 1.0];
+    let margins = [1.0, 0.67, 0.83, 1.0, 1.33, 1.67, 2.33, 0.5];
+    let children = tags
+        .iter()
+        .map(|&tag| {
+            e(
+                tag,
+                "",
+                "",
+                if tag == "hr" {
+                    vec![]
+                } else {
+                    vec![N::T("text")]
+                },
+            )
+        })
+        .collect();
+    let root = resolve(&[styled("main", "", "font-size: 20pt", children)], &[]).unwrap();
+    for (index, (_, child)) in root[1..].iter().enumerate() {
+        let size = sizes[index] * 20.0;
+        let edges = boxed(child, size).unwrap().unwrap().margin;
+        assert!(
+            (edges[0] - size * margins[index]).abs() < 0.00001,
+            "{}",
+            tags[index]
+        );
+        assert_eq!(
+            [edges[1], edges[2], edges[3]],
+            [0.0, edges[0], 0.0],
+            "{}",
+            tags[index]
+        );
+    }
+    let heading = resolve(
+        &[styled("h1", "", "margin-bottom: 3pt", vec![])],
+        &["h1 { margin: 0 }"],
+    )
+    .unwrap();
+    assert_eq!(
+        boxed(&heading[0].1, 24.0).unwrap().unwrap().margin,
+        [0.0, 0.0, 3.0, 0.0]
+    );
+    let table = resolve(
+        &[e(
+            "table",
+            "",
+            "",
+            vec![e(
+                "tr",
+                "",
+                "",
+                vec![e("th", "", "", vec![N::T("Heading")])],
+            )],
+        )],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(text(&table[2].1, "textAlign"), Some("center"));
+}
+
+#[test]
+fn given_logical_margin_and_padding_properties_when_resolving_styles_then_maps_them_to_left_to_right_top_to_bottom_sides_in_cascade_order(
+) {
+    let s = one(
+        ".a {
+		padding-inline: 4pt 8pt; padding-block: 2pt;
+		margin-inline-start: 6pt; margin-block-end: 10pt; margin-inline-end: 1pt;
+		padding-left: 9pt;
+	}",
+        "a",
+    )
+    .unwrap();
+    let s = boxed(&s, 12.0).unwrap().unwrap();
+    assert_eq!(s.padding, [2.0, 8.0, 2.0, 9.0]);
+    assert_eq!(s.margin, [0.0, 1.0, 10.0, 6.0]);
+    let wrong = one(".a { padding-inline: 1pt 2pt 3pt }", "a")
+        .and_then(|cascaded| boxed(&cascaded, 12.0).map(|_| ()))
+        .unwrap_err();
+    assert!(
+        wrong.contains("invalid paddingInline: 1pt 2pt 3pt"),
+        "{wrong}"
+    );
+    validate(".a { margin-block: 1pt; padding-inline-end: 2pt }").unwrap();
+}
+
+#[test]
+fn given_border_style_when_resolving_styles_then_none_and_hidden_clear_the_width_in_any_order_solid_draws_it_and_other_styles_reject(
+) {
+    let widths = |css: &str| boxed(&one(css, "a")?, 12.0).map(|boxed| boxed.unwrap().border);
+    assert_eq!(
+        widths(".a { border: 1pt solid red; border-bottom-style: none }"),
+        Ok([1.0, 1.0, 0.0, 1.0])
+    );
+    assert_eq!(
+        widths(".a { border-style: none; border-width: 2pt }"),
+        Ok([0.0; 4])
+    );
+    assert_eq!(
+        widths(".a { border-width: 2pt; border-style: hidden }"),
+        Ok([0.0; 4])
+    );
+    assert_eq!(
+        widths(".a { border-style: solid; border-left-width: 3pt }"),
+        Ok([0.0, 0.0, 0.0, 3.0])
+    );
+    for (css, expected) in [
+        (
+            ".a { border-style: double }",
+            "unsupported border style: double",
+        ),
+        (
+            ".a { border-top-style: groove }",
+            "unsupported border style: groove",
+        ),
+    ] {
+        let message = widths(css).unwrap_err();
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+const INVOICE: &str =
+    include_str!("../../../../packages/flashpdf/test/fixtures/tailwind-invoice.css");
+
+#[test]
+fn given_a_tailwind_v4_build_of_invoice_utilities_when_resolving_styles_then_spacing_borders_type_and_width_utilities_apply(
+) {
+    validate(INVOICE).unwrap();
+    let at = |class: &'static str, width: f64| {
+        resolve_at(&[e("main", "", class, vec![])], &[INVOICE], width)
+            .unwrap()
+            .remove(0)
+            .1
+    };
+    let used = |class| at(class, 523.0);
+    let card = used("p-4 border border-gray-200 bg-gray-100 text-sm text-right");
+    let boxed_card = boxed(&card, 12.0).unwrap().unwrap();
+    assert_eq!(boxed_card.padding, [12.0; 4]);
+    assert_eq!(boxed_card.border, [0.75; 4]);
+    assert_eq!(
+        Ok(boxed_card.border_color[0]),
+        color(&"oklch(92.8% 0.006 264.531)".into())
+    );
+    assert_eq!(
+        boxed_card.background,
+        Some(color(&"oklch(96.7% 0.003 264.542)".into()).unwrap())
+    );
+    assert_eq!(
+        card.get(&Key::Prop(Prop::of("fontSize"))),
+        Some(&Value::Number(10.5))
+    );
+    assert_eq!(text(&card, "lineHeight"), Some("1.428571"));
+    assert_eq!(text(&card, "textAlign"), Some("right"));
+    let spaced = boxed(&used("px-4 py-2 mt-4 m-2"), 12.0).unwrap().unwrap();
+    assert_eq!(spaced.padding, [6.0, 12.0, 6.0, 12.0]);
+    let bottom = boxed(&used("border-b"), 12.0).unwrap().unwrap();
+    assert_eq!(bottom.border, [0.0, 0.0, 0.75, 0.0]);
+    for (class, width) in [("w-1/2", "50%"), ("w-32", "96pt"), ("w-[120px]", "120px")] {
+        assert_eq!(text(&used(class), "width"), Some(width), "{class}");
+    }
+    let column = used("flex flex-col gap-4");
+    assert_eq!(
+        ["display", "flexDirection", "gap"].map(|name| text(&column, name)),
+        [Some("flex"), Some("column"), Some("12pt")]
+    );
+    let padding = |width| {
+        boxed(&at("p-4 md:p-8", width), 12.0)
+            .unwrap()
+            .unwrap()
+            .padding[0]
+    };
+    assert_eq!(padding(523.0), 12.0);
+    assert_eq!(padding(595.0), 24.0);
+    let leading = resolve(
+        &[e(
+            "main",
+            "",
+            "leading-6",
+            vec![e("p", "", "text-sm", vec![])],
+        )],
+        &[INVOICE],
+    )
+    .unwrap();
+    assert_eq!(text(&leading[0].1, "lineHeight"), Some("18pt"));
+    assert_eq!(
+        text(&leading[1].1, "lineHeight"),
+        Some("1.428571"),
+        "--tw-leading does not inherit"
+    );
+}
+
+#[test]
+fn given_tailwinds_first_last_odd_even_space_y_and_divide_y_utilities_when_resolving_a_list_of_divs_and_a_table_then_each_applies_to_the_elements_a_browser_applies_it_to(
+) {
+    let cell = |id| {
+        e(
+            "div",
+            id,
+            "p-4 first:pt-0 last:pb-0 odd:bg-gray-100 even:bg-white",
+            vec![N::T(id)],
+        )
+    };
+    let list = resolve(
+        &[e(
+            "div",
+            "",
+            "space-y-4 divide-y divide-gray-200",
+            ["a", "b", "c", "d"].map(cell).into(),
+        )],
+        &[INVOICE],
+    )
+    .unwrap();
+    let boxes: Vec<style::Box> = list[1..]
+        .iter()
+        .map(|(_, child)| boxed(child, 12.0).unwrap().unwrap())
+        .collect();
+    let all = |field: fn(&style::Box) -> f64| boxes.iter().map(field).collect::<Vec<_>>();
+    assert_eq!(
+        all(|b| b.padding[0] + b.padding[2]),
+        [12.0, 24.0, 24.0, 12.0],
+        "first:pt-0 and last:pb-0"
+    );
+    assert_eq!(
+        all(|b| b.margin[2]),
+        [12.0, 12.0, 12.0, 0.0],
+        "space-y-4 puts 4 rem-quarters below every child but the last"
+    );
+    let line = [0.0, 0.0, 0.75, 0.0];
+    assert_eq!(
+        boxes.iter().map(|b| b.border).collect::<Vec<_>>(),
+        [line, line, line, [0.0; 4]],
+        "divide-y draws 1px under every child but the last"
+    );
+    assert_eq!(
+        Ok(boxes[0].border_color[2]),
+        color(&"oklch(92.8% 0.006 264.531)".into())
+    );
+    let gray = color(&"oklch(96.7% 0.003 264.542)".into()).ok();
+    let white = color(&"#fff".into()).ok();
+    assert_eq!(
+        boxes.iter().map(|b| b.background).collect::<Vec<_>>(),
+        [gray, white, gray, white],
+        "odd:bg-gray-100 and even:bg-white"
+    );
+    let row = |id| {
+        e(
+            "tr",
+            id,
+            "odd:bg-gray-100",
+            vec![e("td", "", "", vec![N::T(id)])],
+        )
+    };
+    let table = resolve(
+        &[e(
+            "table",
+            "",
+            "",
+            vec![e("tbody", "", "", ["a", "b", "c"].map(row).into())],
+        )],
+        &[INVOICE],
+    )
+    .unwrap();
+    let rows: Vec<bool> = table
+        .iter()
+        .filter(|(id, _)| id.is_some())
+        .map(|(_, style)| text(style, "backgroundColor").is_some())
+        .collect();
+    assert_eq!(rows, [true, false, true]);
 }

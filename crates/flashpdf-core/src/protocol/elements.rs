@@ -1,6 +1,6 @@
 //! Element records: the host's JSX tree, which the compiler styles and lowers to layout records.
 //!
-//! Order: Family and Stylesheet records, one Setup, document records (Metadata, PdfA,
+//! Order: Family and Stylesheet (or StrictStylesheet) records, one Setup, document records (Metadata, PdfA,
 //! Attachment), then a Block record per header or footer and one for the body, each followed
 //! by its elements, then End.
 
@@ -16,7 +16,7 @@ use crate::compile::{
 use crate::css::page::{page_setup, Format, Margin};
 use crate::css::style::{FontSlots, HELVETICA};
 use crate::css::TAGS;
-use crate::css::{pages, property_key, resolver, Cascaded, Value};
+use crate::css::{pages, property_key, resolver, stylesheet, Cascaded, Value};
 use crate::BUILT_IN;
 
 /// Element levels, as tree.ts counts them: a root is depth 0.
@@ -130,11 +130,14 @@ impl Decoder {
                 }
                 Ok(())
             }
-            Opcode::Stylesheet if before_setup => {
+            Opcode::Stylesheet | Opcode::StrictStylesheet if before_setup => {
                 let Some(bytes) = chunk(elements, code, payload)? else {
                     return Ok(());
                 };
                 let source = String::from_utf8(bytes).map_err(|_| ProtocolError::InvalidUtf8)?;
+                if matches!(code, Opcode::StrictStylesheet) {
+                    stylesheet(&source).map_err(ProtocolError::Message)?;
+                }
                 elements.sheets.push(source);
                 Ok(())
             }

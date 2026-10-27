@@ -328,9 +328,7 @@ pub fn point(value: &str, parent: f64, positive: bool) -> Result<f64, String> {
 }
 
 /// `stylesheet()`: every declaration of every rule that can match, validated up front where
-/// `render` validates only the rules that match. The source is returned by the caller.
-// ponytail: css.ts `stylesheet()` still validates in TypeScript; the next change calls this instead.
-#[allow(dead_code)]
+/// `render` validates only the rules that match. The decoder runs it on StrictStylesheet records.
 pub fn stylesheet(source: &str) -> Result<(), String> {
     let mut sheet = Stylesheet::default();
     parse(source, None, &mut sheet)?;
@@ -359,7 +357,6 @@ pub fn stylesheet(source: &str) -> Result<(), String> {
 }
 
 /// `/\b(?:var|calc|min|max|clamp|color-mix)\(/i`.
-#[allow(dead_code)]
 fn deferred(value: &Value) -> bool {
     let text = value.to_string().to_ascii_lowercase();
     let bytes = text.as_bytes();

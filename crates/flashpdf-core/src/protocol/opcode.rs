@@ -33,6 +33,8 @@ pub(super) enum Opcode {
     Text = 31,
     Close = 32,
     Drawing = 33,
+    /// A Stylesheet that `stylesheet()` declared: checked in full before it joins the cascade.
+    StrictStylesheet = 34,
     End = 255,
 }
 
@@ -71,6 +73,7 @@ impl TryFrom<u8> for Opcode {
             31 => Self::Text,
             32 => Self::Close,
             33 => Self::Drawing,
+            34 => Self::StrictStylesheet,
             255 => Self::End,
             _ => return Err(ProtocolError::UnknownOpcode),
         })
