@@ -1,4 +1,7 @@
 mod command;
+// Not wired yet: the next change decodes element records and compiles them through it.
+#[allow(dead_code)]
+mod css;
 mod document;
 mod font;
 mod geometry;
