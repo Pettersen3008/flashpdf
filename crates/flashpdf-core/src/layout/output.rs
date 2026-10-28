@@ -71,6 +71,8 @@ pub(crate) struct PositionedBox {
 /// around it, ordered by `z` and then as laid out.
 #[derive(Clone)]
 pub(crate) struct Layer {
+    /// Grid instance and source child, so fragmented rows retain source paint order.
+    pub(crate) order: Option<(u32, usize)>,
     pub(crate) z: i32,
     /// A flow layer paints at these buffer indices, rather than at page end.
     pub(crate) flow: Option<Marks>,

@@ -144,7 +144,7 @@ test("given invalid PDF/UA inputs, when rendering, then rejects missing metadata
 
 test("given layered mixed colors and painted transformed links in PDF/UA, when rendering, then preserves effects and semantic annotations", async () => {
 	const source =
-		'<main style="font-family:UA"><h1>Combined</h1><div class="card"><a href="https://example.com">Linked text</a><div style="position:absolute;left:10pt;top:2pt">Positioned</div></div></main>';
+		'<main style="font-family:UA"><h1>Combined</h1><section style="display:grid;grid-template-columns:200pt 1fr"><div class="card"><a href="https://example.com">Linked text</a><div style="position:absolute;left:10pt;top:2pt">Positioned</div></div><p>Second cell</p></section></main>';
 	const settings = {
 		...options,
 		pdfa: "2u",

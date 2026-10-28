@@ -29,6 +29,107 @@ fn record(opcode: u8, payload: &[u8]) -> Vec<u8> {
     bytes
 }
 
+#[test]
+fn given_grid_flow_and_boxed_flags_when_round_tripping_then_preserves_each_combination() {
+    for flags in 0..=3 {
+        let mut payload = [0; 28];
+        payload[8] = flags;
+        let (grid, items) = super::grid::decode(&mut super::Cursor::new(&payload)).unwrap();
+        assert_eq!(grid.column_flow, flags & 1 != 0);
+        assert_eq!(grid.boxed, flags & 2 != 0);
+        let mut encoded = Vec::new();
+        super::grid::encode(&grid, &items, &mut encoded);
+        assert_eq!(encoded, payload);
+    }
+}
+
+#[test]
+fn given_malformed_grid_records_when_decoding_then_rejects_them_at_the_boundary() {
+    use crate::{Grid, GridBreadth, GridItem, GridLine, GridTrack};
+
+    let grid = Grid {
+        columns: vec![],
+        rows: vec![],
+        auto_columns: vec![],
+        auto_rows: vec![],
+        column_flow: false,
+        boxed: false,
+        justify_items: 0,
+        align_items: 0,
+        justify_content: 0,
+        align_content: 0,
+        column_gap: 0.0,
+        row_gap: 0.0,
+        min_height: 0.0,
+        max_height: None,
+    };
+    let item = GridItem {
+        column: [GridLine::Auto; 2],
+        row: [GridLine::Auto; 2],
+        justify: 0,
+        align: 0,
+    };
+    let mut payload = Vec::new();
+    super::grid::encode(&grid, &[], &mut payload);
+    let mut decoder = Decoder::default();
+    decoder.push(&header(VERSION, 120.0, 60.0, 10.0)).unwrap();
+    decoder.push(&record(37, &payload)).unwrap();
+    assert!(matches!(
+        decoder.commands.frames.last(),
+        Some(super::Frame::Grid { cells: 0, done: 0 })
+    ));
+
+    let mut malformed = vec![];
+    for (min, max) in [
+        (GridBreadth::Fr(1.0), GridBreadth::Auto),
+        (GridBreadth::Auto, GridBreadth::Length(f32::NAN)),
+        (GridBreadth::Auto, GridBreadth::Percent(-0.1)),
+        (GridBreadth::Auto, GridBreadth::Fr(f32::INFINITY)),
+    ] {
+        let mut invalid = grid.clone();
+        invalid.columns.push(GridTrack { min, max });
+        let mut bytes = vec![];
+        super::grid::encode(&invalid, &[], &mut bytes);
+        malformed.push(bytes);
+    }
+    for line in [
+        GridLine::Line(0),
+        GridLine::Line(-257),
+        GridLine::Span(0),
+        GridLine::Span(257),
+    ] {
+        let mut invalid = item;
+        invalid.column[0] = line;
+        let mut bytes = vec![];
+        super::grid::encode(&grid, &[invalid], &mut bytes);
+        malformed.push(bytes);
+    }
+    malformed.push(257_u16.to_le_bytes().to_vec());
+    for (offset, bytes) in [
+        (8, vec![4]),                               // flow flags
+        (9, vec![6]),                               // item alignment
+        (11, vec![7]),                              // content alignment
+        (13, (-1.0_f32).to_le_bytes().to_vec()),    // gap
+        (21, f32::INFINITY.to_le_bytes().to_vec()), // minimum height
+        (26, 257_u16.to_le_bytes().to_vec()),       // item count
+    ] {
+        let mut invalid = payload.clone();
+        invalid[offset..offset + bytes.len()].copy_from_slice(&bytes);
+        malformed.push(invalid);
+    }
+    let mut invalid = grid.clone();
+    invalid.min_height = 2.0;
+    invalid.max_height = Some(1.0);
+    let mut bytes = vec![];
+    super::grid::encode(&invalid, &[], &mut bytes);
+    malformed.push(bytes);
+    for payload in malformed {
+        let mut decoder = Decoder::default();
+        decoder.push(&header(VERSION, 120.0, 60.0, 10.0)).unwrap();
+        assert!(decoder.push(&record(37, &payload)).is_err());
+    }
+}
+
 fn text(value: &[u8]) -> Vec<u8> {
     let mut bytes = (value.len() as u32).to_le_bytes().to_vec();
     bytes.extend(value);

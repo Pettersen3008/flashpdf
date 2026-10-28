@@ -8,6 +8,7 @@ mod boxes;
 mod color;
 mod decoration;
 mod font;
+pub mod grid;
 mod length;
 mod list;
 mod normalize;
@@ -246,6 +247,7 @@ const KEYWORDS: [(Prop, &[&str]); 5] = [
         prop!("justifyContent"),
         &[
             "normal",
+            "stretch",
             "flex-start",
             "start",
             "flex-end",
@@ -333,8 +335,12 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
         || (*prop == prop!("overflow") && value.is("visible")))
     });
     effects(&result, 12.0)?;
-    if !absent_or(result.get(prop!("display")), &["block", "flex"]) {
-        return Err("invalid display".into());
+    if !absent_or(result.get(prop!("display")), &["block", "flex", "grid"]) {
+        return Err(format!(
+            "invalid display: {} (use block, flex, or grid)",
+            result.get(prop!("display")).unwrap()
+        )
+        .into());
     }
     if !absent_or(result.get(prop!("flexDirection")), &["row", "column"]) {
         return Err("invalid flex direction".into());
@@ -613,6 +619,12 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
             0.0,
             [0; 3],
         )?;
+    }
+    if result.0.iter().any(|(key, _)| {
+        key.name().starts_with("grid") || matches!(key.name(), "justifyItems" | "justifySelf")
+    }) {
+        grid::container(&result, 12.0)?;
+        grid::item(&result)?;
     }
     Ok(result)
 }

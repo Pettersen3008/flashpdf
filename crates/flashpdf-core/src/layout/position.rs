@@ -46,6 +46,7 @@ fn collect<'e, 'a>(
             },
             Element::Stack(stack) => collect(&stack.children, clips, found),
             Element::Flex(node) => collect(&node.children, clips, found),
+            Element::Grid(node) => collect(&node.children, clips, found),
             Element::Table(table) => collect(&table.rows, clips, found),
             Element::Row(row) => {
                 for cell in &row.cells {
@@ -81,7 +82,7 @@ fn clip_effect(
 
 /// Adds `buffer` as a layer. Under `z-index: auto` the box makes no stacking context, so the
 /// layers inside it join the parent's, after it.
-fn push_layer(
+pub(super) fn push_layer(
     output: &mut LayoutBuffer,
     z: Option<i32>,
     offset: Point,
@@ -97,6 +98,7 @@ fn push_layer(
         Vec::new()
     };
     output.layers.push(Layer {
+        order: None,
         z: z.unwrap_or(0),
         flow: None,
         effects: None,
@@ -119,6 +121,7 @@ impl LayoutEngine<'_> {
         &self,
         node: &BoxNode<'_>,
         position: Position,
+        frame: (crate::BoxSize, crate::BoxStyle),
         area: LayoutArea,
         width: Option<Pt>,
         output: &mut LayoutBuffer,
@@ -129,7 +132,7 @@ impl LayoutEngine<'_> {
         }
         let before = self.absolutes.get();
         let mut buffer = LayoutBuffer::default();
-        let (height, rect) = self.block(node, node.size, area, width, &mut buffer)?;
+        let (height, rect) = self.block(node, frame, area, width, &mut buffer)?;
         if self.absolutes.get() != before {
             self.place_absolutes(&node.children, Some(padding_box(node, rect)), &mut buffer)?;
         }
@@ -178,6 +181,7 @@ impl LayoutEngine<'_> {
                     clip_effect(output, source, Point::ZERO).ok_or(LayoutError::InvalidBox)?;
                 for layer in output.layers.split_off(first) {
                     output.layers.push(Layer {
+                        order: layer.order,
                         z: layer.z,
                         offset: Point::ZERO,
                         page: false,
@@ -268,7 +272,13 @@ impl LayoutEngine<'_> {
         };
         let before = self.absolutes.get();
         let mut buffer = LayoutBuffer::default();
-        let (height, rect) = self.block(node, size, area, Some(Pt(width)), &mut buffer)?;
+        let (height, rect) = self.block(
+            node,
+            (size, node.style.clone()),
+            area,
+            Some(Pt(width)),
+            &mut buffer,
+        )?;
         if self.absolutes.get() != before {
             self.place_absolutes(&node.children, Some(padding_box(node, rect)), &mut buffer)?;
         }

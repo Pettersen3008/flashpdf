@@ -485,7 +485,13 @@ impl LayoutEngine<'_> {
             .translated(Pt(x), Pt::ZERO)
             .with_width(Pt(border + frame.margins(false)));
         Ok(match child {
-            Element::Box(node) => self.layout_box(node, place, Some(Pt(border)), output)?,
+            Element::Box(node) => self.layout_box(
+                node,
+                (node.size, node.style.clone()),
+                place,
+                Some(Pt(border)),
+                output,
+            )?,
             _ => self.layout(child, place, output)?,
         }
         .get())
@@ -502,7 +508,7 @@ impl LayoutEngine<'_> {
     }
 
     /// Min-content and max-content widths of the element's margin box.
-    fn intrinsic(&self, element: &Element<'_>) -> Result<(f32, f32), LayoutError> {
+    pub(super) fn intrinsic(&self, element: &Element<'_>) -> Result<(f32, f32), LayoutError> {
         Ok(match element {
             Element::Paragraph(paragraph) => {
                 let mut scratch = LayoutBuffer::default();
@@ -578,6 +584,7 @@ impl LayoutEngine<'_> {
                 (min + margins, max + margins)
             }
             Element::Stack(stack) => self.contents(&stack.children)?,
+            Element::Grid(node) => self.grid_intrinsic(node)?,
             Element::Table(table) => match table.width {
                 ColumnWidth::Fixed(width) => (width.get(), width.get()),
                 _ => self.contents(&table.rows)?,

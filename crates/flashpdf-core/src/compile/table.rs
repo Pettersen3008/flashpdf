@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use super::{
-    element_column, get, inherit, is, p, row_only, sizeless, static_only, Box, CellPaint, Column,
-    Compiler, Ctx, Error, Result, Sink, Slot, Styled, StyledNode, BLACK,
+    element_column, get, grid_applicability, inherit, is, p, sizeless, static_only, Box, CellPaint,
+    Column, Compiler, Ctx, Error, Result, Sink, Slot, Styled, StyledNode, BLACK,
 };
 use crate::css::style::{border_spacing, box_style, Rgb};
 
@@ -252,7 +252,7 @@ impl<S: Sink> Compiler<S> {
                 let state = match group.group {
                     None => inner.clone(),
                     Some(element) => (|| {
-                        row_only(&element.style, false)?;
+                        grid_applicability(element, &inner)?;
                         static_only(&element.style, &element.el.tag)?;
                         if is(&element.style, p!("breakBefore"), "page")
                             || is(&element.style, p!("breakAfter"), "page")
@@ -281,7 +281,7 @@ impl<S: Sink> Compiler<S> {
                 let count = group.rows.len();
                 for (index, tr) in group.rows.iter().enumerate() {
                     let row = (|| {
-                        row_only(&tr.style, false)?;
+                        grid_applicability(tr, &state)?;
                         static_only(&tr.style, "tr")?;
                         if is(&tr.style, p!("breakBefore"), "page")
                             || is(&tr.style, p!("breakAfter"), "page")

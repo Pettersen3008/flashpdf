@@ -6,6 +6,7 @@
 mod cursor;
 mod elements;
 mod error;
+pub(crate) mod grid;
 mod opcode;
 
 #[cfg(test)]
@@ -22,8 +23,8 @@ use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::{Attachment, PdfA};
 use crate::{
-    Align, BoxSize, Edges, Flex, FlexItem, FontId, Justify, LineStyle, Marker, OwnedCommand, Pt,
-    Radii, RunDecoration, TextRun, BUILT_IN, OPAQUE,
+    Align, BoxSize, Edges, Flex, FlexItem, FontId, GridItem, GridTrack, Justify, LineStyle, Marker,
+    OwnedCommand, Pt, Radii, RunDecoration, TextRun, BUILT_IN, OPAQUE,
 };
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
@@ -39,7 +40,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 6;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 26;
+const VERSION: u16 = 27;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -107,6 +108,7 @@ enum Frame {
     Box(bool),
     Row { cells: usize, done: usize },
     Flex { cells: usize, done: usize },
+    Grid { cells: usize, done: usize },
     Table { head: Option<usize> },
 }
 
@@ -476,6 +478,15 @@ impl Commands {
             Opcode::FlexEnd => {
                 cursor.done()?;
                 self.close(OwnedCommand::FlexEnd)
+            }
+            Opcode::GridStart => {
+                let (style, items) = grid::decode(&mut cursor)?;
+                cursor.done()?;
+                self.feed(OwnedCommand::GridStart(style, items))
+            }
+            Opcode::GridEnd => {
+                cursor.done()?;
+                self.feed(OwnedCommand::GridEnd)
             }
             Opcode::RowEnd => {
                 cursor.done()?;
@@ -1008,6 +1019,14 @@ impl Commands {
             OwnedCommand::BoxStart(_, _, effects) => {
                 effects.as_ref().map_or(0, |effects| effects.capacity())
             }
+            OwnedCommand::GridStart(style, items) => {
+                (style.columns.len()
+                    + style.rows.len()
+                    + style.auto_columns.len()
+                    + style.auto_rows.len())
+                    * size_of::<GridTrack>()
+                    + items.len() * size_of::<GridItem>()
+            }
             OwnedCommand::Image(_, _, _, _, _, link, alt, _, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
@@ -1043,6 +1062,14 @@ impl Commands {
                 cells: items.len(),
                 done: 0,
             },
+            OwnedCommand::GridStart(style, items) => {
+                style.validate()?;
+                grid::validate_items(items)?;
+                Frame::Grid {
+                    cells: items.len(),
+                    done: 0,
+                }
+            }
             OwnedCommand::TableStart(header_rows, footer_rows, _) => Frame::Table {
                 head: self
                     .placing()
@@ -1052,6 +1079,7 @@ impl Commands {
             | OwnedCommand::BoxEnd
             | OwnedCommand::RowEnd
             | OwnedCommand::FlexEnd
+            | OwnedCommand::GridEnd
             | OwnedCommand::TableEnd => return self.close(command),
             OwnedCommand::Paragraph(..)
             | OwnedCommand::Spacer(_)
@@ -1125,8 +1153,10 @@ impl Commands {
             | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
             (OwnedCommand::RowEnd, Frame::Row { cells, done })
             | (OwnedCommand::FlexEnd, Frame::Flex { cells, done })
+            | (OwnedCommand::GridEnd, Frame::Grid { cells, done })
                 if cells == done => {}
-            (OwnedCommand::RowEnd, Frame::Row { .. }) => {
+            (OwnedCommand::RowEnd, Frame::Row { .. })
+            | (OwnedCommand::GridEnd, Frame::Grid { .. }) => {
                 return Err(ProtocolError::RowCellCountMismatch)
             }
             _ => return Err(ProtocolError::InvalidNesting),
@@ -1135,8 +1165,9 @@ impl Commands {
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {
-        if let Some(Frame::Row { cells, done } | Frame::Flex { cells, done }) =
-            self.frames.last_mut()
+        if let Some(
+            Frame::Row { cells, done } | Frame::Flex { cells, done } | Frame::Grid { cells, done },
+        ) = self.frames.last_mut()
         {
             *done += 1;
             if *done > *cells {
@@ -1291,6 +1322,15 @@ mod effect_regressions {
             );
             let pdf = compile(&format!("<div style='transform:translateX(20pt);transform-origin:0 0'><div style='transform:scale(2);transform-origin:0 0;{style}'></div></div>"));
             assert_eq!(patterns(&pdf), [vec![2.0, 0.0, 0.0, 2.0, 30.0, 110.0]]);
+            let pdf = compile(&format!("<div style='display:grid;grid-template-columns:100pt 100pt'><div style='transform:translateX(20pt);clip-path:inset(0);box-shadow:1pt 1pt #0008;{style}'></div><div style='transform:translateX(40pt);{style}'></div></div>"));
+            assert_eq!(
+                patterns(&pdf),
+                [
+                    vec![1.0, 0.0, 0.0, 1.0, 30.0, 130.0],
+                    vec![1.0, 0.0, 0.0, 1.0, 150.0, 130.0]
+                ]
+            );
+            assert!(content(&pdf).contains("W\nn"));
         }
     }
 

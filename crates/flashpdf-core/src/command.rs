@@ -1,12 +1,12 @@
 use std::mem::discriminant;
 
 use crate::document::{
-    Block, BoxNode, Cell, Document, Element, FlexNode, ImageNode, Paragraph, Row, Spacer, Stack,
-    Table,
+    Block, BoxNode, Cell, Document, Element, FlexNode, GridNode, ImageNode, Paragraph, Row, Spacer,
+    Stack, Table,
 };
 use crate::{
-    BoxSize, BoxStyle, Direction, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign,
-    TextRun, TextStyle, VerticalAlign,
+    BoxSize, BoxStyle, Direction, Flex, FlexItem, Fraction, Grid, GridItem, ImageSize, Percent, Pt,
+    TextAlign, TextRun, TextStyle, VerticalAlign,
 };
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
@@ -57,6 +57,11 @@ pub enum Command<'a> {
         items: &'a [FlexItem],
     },
     FlexEnd,
+    GridStart {
+        style: &'a Grid,
+        items: &'a [GridItem],
+    },
+    GridEnd,
     /// The first `header_rows` children repeat at the top of every page the table continues on,
     /// the next `footer_rows` after the last body row of every page. Body rows follow them.
     TableStart {
@@ -124,6 +129,8 @@ pub(crate) enum OwnedCommand {
     RowEnd,
     FlexStart(Flex, Vec<FlexItem>),
     FlexEnd,
+    GridStart(Grid, Vec<GridItem>),
+    GridEnd,
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
     Image(
@@ -176,6 +183,8 @@ impl OwnedCommand {
                 items,
             },
             Self::FlexEnd => Command::FlexEnd,
+            Self::GridStart(style, items) => Command::GridStart { style, items },
+            Self::GridEnd => Command::GridEnd,
             Self::TableStart(header_rows, footer_rows, width) => Command::TableStart {
                 header_rows: *header_rows,
                 footer_rows: *footer_rows,
@@ -427,6 +436,28 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     children,
                 }))
             }
+            Command::GridStart { style, items } => {
+                self.check_depth(depth)?;
+                style
+                    .validate()
+                    .map_err(|_| CommandParseError::InvalidRow)?;
+                crate::protocol::grid::validate_items(items)
+                    .map_err(|_| CommandParseError::InvalidRow)?;
+                let children = self.parse_children(Command::GridEnd, depth + 1)?;
+                if children
+                    .iter()
+                    .filter(|child| !matches!(child, Element::Anchor(_)))
+                    .count()
+                    != items.len()
+                {
+                    return Err(CommandParseError::InvalidRow);
+                }
+                Ok(Element::Grid(GridNode {
+                    style,
+                    items,
+                    children,
+                }))
+            }
             Command::TableStart {
                 header_rows,
                 footer_rows,
@@ -453,6 +484,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             | Command::StackEnd
             | Command::RowEnd
             | Command::FlexEnd
+            | Command::GridEnd
             | Command::TableEnd
             | Command::PageBreak
             | Command::Avoid => Err(CommandParseError::UnexpectedCommand),
@@ -524,6 +556,7 @@ pub(crate) fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -
         | Element::Table(_)
         | Element::Image(_)
         | Element::Anchor(_)
-        | Element::Flex(_) => false,
+        | Element::Flex(_)
+        | Element::Grid(_) => false,
     }
 }

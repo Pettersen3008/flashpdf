@@ -58,6 +58,7 @@ pub struct Renderer {
     /// The open page's positioned layers with the origin of the block they belong to; they
     /// paint over its content by z-index, those below zero under it.
     overlays: Vec<(Layer, Point, bool)>,
+    grid_order: u32,
     metadata: Metadata,
     /// Anchors with no line yet, waiting for the next one painted.
     pending: Vec<u16>,
@@ -168,6 +169,7 @@ impl Renderer {
             footer: Default::default(),
             fixed: Vec::new(),
             overlays: Vec::new(),
+            grid_order: 0,
             metadata: Metadata::default(),
             pending: Vec::new(),
             table: None,
@@ -424,6 +426,44 @@ impl Renderer {
                 self.page.validate_block(spacer.height)?;
                 return self.hold(Held::Space(spacer.height));
             }
+            Element::Grid(node)
+                if node.style.min_height == 0.0 && node.style.max_height.is_none() =>
+            {
+                let rows = LayoutEngine::new(&self.fonts, &self.images, self.page.page())
+                    .grid_rows(node, self.column.width)?;
+                if rows.rows.is_empty() {
+                    for child in &node.children {
+                        self.render_element(child)?;
+                    }
+                    return Ok(());
+                }
+                self.grid_order += 1;
+                let mut end = 0.0;
+                for row in &rows.rows {
+                    let gap = Pt(row.start - end);
+                    if gap > Pt::ZERO {
+                        self.page.validate_block(gap)?;
+                        self.hold(Held::Space(gap))?;
+                    }
+                    self.begin(false)?;
+                    self.layout.clear();
+                    let height = LayoutEngine::new(&self.fonts, &self.images, self.page.page())
+                        .layout_grid_root_row(
+                            node,
+                            &rows,
+                            row,
+                            self.column,
+                            &mut self.layout,
+                            self.grid_order,
+                        )?;
+                    let layout = std::mem::take(&mut self.layout);
+                    self.mark_used(&layout);
+                    self.place(element, layout, height)?;
+                    self.chained = false;
+                    end = row.end;
+                }
+                return Ok(());
+            }
             // Without a height to share out, a wrapping row is its rows stacked, so it breaks
             // between them.
             Element::Flex(node)
@@ -678,7 +718,18 @@ impl Renderer {
         let mut fragments = std::mem::replace(&mut self.fragments, next);
         fragments.retain(|fragment| fragment.height > Pt::ZERO && painted(&fragment.style));
         let mut overlays = std::mem::take(&mut self.overlays);
-        overlays.sort_by_key(|(layer, ..)| layer.z);
+        let mut groups = std::collections::BTreeMap::new();
+        for (index, (layer, ..)) in overlays.iter().enumerate() {
+            if let Some((group, _)) = layer.order {
+                groups.entry(group).or_insert(index);
+            }
+        }
+        for (index, (layer, ..)) in overlays.iter_mut().enumerate() {
+            layer.order = Some(layer.order.map_or((index as u32, 0), |(group, item)| {
+                (groups[&group] as u32, item)
+            }));
+        }
+        overlays.sort_by_key(|(layer, ..)| (layer.z, layer.order));
         let below = overlays.partition_point(|(layer, ..)| layer.z < 0);
         let page = self.page.page();
         let mut underlay = Vec::new();

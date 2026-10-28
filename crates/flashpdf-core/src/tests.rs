@@ -3486,3 +3486,176 @@ fn given_a_radial_aspect_ratio_beyond_pdf_numbers_when_rendering_then_rejects_in
         Err(RenderError::InvalidGradientGeometry)
     );
 }
+
+#[test]
+fn given_an_absolute_descendant_in_a_grid_when_its_outer_box_is_relative_then_it_paints_once_in_that_padding_box(
+) {
+    let grid = crate::Grid {
+        columns: vec![],
+        rows: vec![],
+        auto_columns: vec![],
+        auto_rows: vec![],
+        column_flow: false,
+        boxed: false,
+        justify_items: 1,
+        align_items: 1,
+        justify_content: 0,
+        align_content: 0,
+        column_gap: 0.0,
+        row_gap: 0.0,
+        min_height: 0.0,
+        max_height: None,
+    };
+    let items = [crate::GridItem {
+        column: [crate::GridLine::Auto; 2],
+        row: [crate::GridLine::Auto; 2],
+        justify: 0,
+        align: 0,
+    }];
+    let pdf = parsed(&[
+        Command::BoxStart {
+            style: crate::BoxStyle {
+                padding: Edges::all(Pt(2.0)),
+                background: None,
+                ..bordered()
+            },
+            size: crate::BoxSize {
+                height: Some(Pt(24.0)),
+                position: Some(crate::Position {
+                    kind: crate::PositionKind::Relative,
+                    inset: Edges::all(crate::Inset::Auto),
+                    z: None,
+                }),
+                ..crate::BoxSize::AUTO
+            },
+        },
+        Command::GridStart {
+            style: &grid,
+            items: &items,
+        },
+        red_box(),
+        placed(
+            crate::PositionKind::Absolute,
+            [Some(0.0), None, None, Some(0.0)],
+            None,
+            None,
+        ),
+        text("a"),
+        Command::BoxEnd,
+        Command::BoxEnd,
+        Command::GridEnd,
+        Command::BoxEnd,
+    ]);
+    let content = content(&pdf);
+    assert_eq!(page_text(&pdf, 1), "a");
+    assert!(
+        content.contains("11 37.500977 5.561 11.499023 re"),
+        "{content}"
+    );
+}
+
+#[test]
+fn given_overlapping_grid_items_in_reversed_rows_when_painted_then_source_order_wins() {
+    let style = crate::css::style::Style(vec![
+        (
+            crate::css::Key::Prop(crate::css::Prop::of("gridTemplateColumns")),
+            "100pt".into(),
+        ),
+        (
+            crate::css::Key::Prop(crate::css::Prop::of("gridTemplateRows")),
+            "20pt 20pt".into(),
+        ),
+    ]);
+    let grid = crate::css::style::grid::container(&style, 12.0).unwrap();
+    let items = [2, 1].map(|row| crate::GridItem {
+        column: [crate::GridLine::Line(1), crate::GridLine::Auto],
+        row: [crate::GridLine::Line(row), crate::GridLine::Auto],
+        justify: 0,
+        align: 0,
+    });
+    let Command::BoxStart { style: red, .. } = red_box() else {
+        panic!()
+    };
+    let pdf = parsed(&[
+        Command::GridStart {
+            style: &grid,
+            items: &items,
+        },
+        placed(
+            crate::PositionKind::Relative,
+            [Some(-20.0), None, None, None],
+            None,
+            Some((20.0, 20.0)),
+        ),
+        text("a"),
+        Command::BoxEnd,
+        Command::BoxStart {
+            style: red,
+            size: crate::BoxSize {
+                position: Some(crate::Position {
+                    kind: crate::PositionKind::Relative,
+                    inset: Edges::all(crate::Inset::Auto),
+                    z: None,
+                }),
+                ..crate::BoxSize::AUTO
+            },
+        },
+        Command::BoxEnd,
+        Command::GridEnd,
+    ]);
+    let content = content(&pdf);
+    assert!(
+        content.find("(a)").unwrap() < content.find("10 30 100 20 re").expect(&content),
+        "{content}"
+    );
+}
+
+#[test]
+fn given_a_relative_grid_item_with_a_percent_inset_when_painted_then_it_resolves_against_the_grid_area(
+) {
+    let grid = crate::css::style::grid::container(
+        &crate::css::style::Style(vec![(
+            crate::css::Key::Prop(crate::css::Prop::of("gridTemplateColumns")),
+            "100pt".into(),
+        )]),
+        12.0,
+    )
+    .unwrap();
+    let items = [crate::GridItem {
+        column: [crate::GridLine::Auto; 2],
+        row: [crate::GridLine::Auto; 2],
+        justify: 0,
+        align: 0,
+    }];
+    let pdf = parsed(&[
+        Command::GridStart {
+            style: &grid,
+            items: &items,
+        },
+        Command::BoxStart {
+            style: bordered(),
+            size: crate::BoxSize {
+                width: crate::ImageSize::Fixed(Pt(20.0)),
+                position: Some(crate::Position {
+                    kind: crate::PositionKind::Relative,
+                    inset: Edges {
+                        left: crate::Inset::Percent(50.0),
+                        ..Edges::all(crate::Inset::Auto)
+                    },
+                    z: None,
+                }),
+                ..crate::BoxSize::AUTO
+            },
+        },
+        text("a"),
+        Command::BoxEnd,
+        Command::GridEnd,
+    ]);
+    let content = content(&pdf);
+    assert!(
+        text_positions(&content)
+            .iter()
+            .any(|position| position.starts_with("61 ")),
+        "{content}"
+    );
+}
