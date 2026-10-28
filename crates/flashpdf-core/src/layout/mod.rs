@@ -243,10 +243,15 @@ impl<'a> LayoutEngine<'a> {
         // CSS 2.1 §10.4 and §10.7: a max clamps its own axis; only an auto axis follows the ratio.
         let (width, height) = match (requested, node.height) {
             (None, None) => {
-                let scale = (available.min(max_width) / natural_width)
+                let max_width = available.min(max_width);
+                let scale = (max_width / natural_width)
                     .min(max_height / natural_height)
                     .min(1.0);
-                (natural_width * scale, natural_height * scale)
+                // `natural * (max / natural)` can round a few ulps past `max`, and a max never yields.
+                (
+                    (natural_width * scale).min(max_width),
+                    (natural_height * scale).min(max_height),
+                )
             }
             (None, Some(height)) => {
                 let height = height.get().min(max_height);
