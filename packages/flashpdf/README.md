@@ -64,6 +64,19 @@ const logo = new Uint8Array(await readFile('logo.png'));
 
 PNG at 8 bits per channel (greyscale, RGB, palette, and alpha variants) and baseline or progressive JPEG (greyscale, RGB, CMYK) embed without re-encoding. Other depths, interlaced PNGs, and other formats reject naming the feature; see [CSS.md](https://github.com/pettersen3008/flashpdf/blob/main/CSS.md).
 
+## Element trees as data
+
+`render` also takes the plain `{ type, props }` objects that JSX compiles to, so a tree can come from JSON without a build step. `type` is a tag name, and `props` holds the same attributes as JSX, with `children` as one child or an array of elements, strings, and numbers. The tree goes through the same checks as JSX: an unknown tag or attribute rejects with its element path, and nesting stops at 64 levels. The `ElementData` type describes one element.
+
+```ts
+import { render, type ElementData } from "@pettersen3008/flashpdf";
+
+const tree: ElementData = JSON.parse(
+  '{"type":"main","props":{"children":[{"type":"h1","props":{"children":"Invoice"}}]}}',
+);
+const pdf = await render(tree);
+```
+
 ## Install
 
 Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
