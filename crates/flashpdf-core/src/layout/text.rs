@@ -5,7 +5,7 @@ use crate::font::{Font, FontBook, NO_KERNING, NO_LIGATURES, RTL};
 use crate::geometry::{LayoutArea, Point};
 use crate::layout::output::{Gap, LayoutBuffer, Lift, PositionedLine, Segment, MARKER_SLOT};
 use crate::layout::LayoutError;
-use crate::{FontId, Marker, Pt, RenderError, Rgb, TextAlign, Typography};
+use crate::{Direction, FontId, Marker, Pt, RenderError, Rgb, TextAlign, Typography};
 
 #[derive(Clone)]
 struct RunMetrics<'a> {
@@ -100,6 +100,8 @@ pub(crate) struct ParagraphLayouter<'a> {
     fallbacks: Vec<(usize, FontId, usize)>,
     /// UAX #9 level per byte of the paragraph text, empty when it has no right-to-left text.
     levels: Vec<u8>,
+    /// The paragraph's base direction is right to left, so start is right.
+    rtl: bool,
     /// The level of the character being read.
     level: u8,
     /// The level of each segment on the current line.
@@ -183,7 +185,8 @@ impl<'a> ParagraphLayouter<'a> {
             runs,
             unshaped: String::new(),
             fallbacks: Vec::new(),
-            levels: levels(paragraph.text),
+            levels: Vec::new(),
+            rtl: false,
             level: 0,
             line_levels: Vec::new(),
             continues: false,
@@ -205,6 +208,7 @@ impl<'a> ParagraphLayouter<'a> {
             marker: None,
             widest: Pt::ZERO,
         };
+        (state.levels, state.rtl) = levels(paragraph.text, paragraph.direction);
         let mut breaks = unicode_linebreak::linebreaks(paragraph.text)
             .map(|(at, _)| at)
             .peekable();
@@ -832,6 +836,18 @@ impl<'a> ParagraphLayouter<'a> {
         if wrapped && self.align == TextAlign::Justify {
             self.justify(output);
         }
+        let (start, end) = if self.rtl {
+            (TextAlign::Right, TextAlign::Left)
+        } else {
+            (TextAlign::Left, TextAlign::Right)
+        };
+        let align = match self.align {
+            TextAlign::Start => start,
+            TextAlign::End => end,
+            // A justified paragraph's last line and a line ending in a hard break align to the start.
+            TextAlign::Justify if !wrapped => start,
+            align => align,
+        };
         if self.line_levels.iter().any(|level| level % 2 == 1) {
             self.reorder(output);
         }
@@ -848,12 +864,12 @@ impl<'a> ParagraphLayouter<'a> {
             bottom: top + height,
             available_width: self.area.width,
             text_width: self.used,
-            align: self.align,
+            align,
         });
         // The marker follows the first line with the same extent, so the page splitter never parts them.
         if let Some((segment, width, inside)) = self.marker.take() {
             let (x, align, available_width, text_width) = if inside {
-                (origin.x, self.align, self.area.width, self.used)
+                (origin.x, align, self.area.width, self.used)
             } else {
                 (origin.x - width, TextAlign::Left, width, width)
             };
@@ -879,9 +895,9 @@ impl<'a> ParagraphLayouter<'a> {
     }
 }
 
-/// UAX #9 levels per byte, with the base direction from the first strong character,
-/// or none when nothing in `text` reads right to left.
-fn levels(text: &str) -> Vec<u8> {
+/// UAX #9 levels per byte and whether the base level is right to left; no levels when
+/// the base is left to right and nothing in `text` reads right to left.
+fn levels(text: &str, direction: Direction) -> (Vec<u8>, bool) {
     use unicode_bidi::BidiClass::{AL, AN, R, RLE, RLI, RLO};
     let rtl = text.chars().any(|character| {
         !character.is_ascii()
@@ -890,11 +906,25 @@ fn levels(text: &str) -> Vec<u8> {
                 R | AL | AN | RLE | RLO | RLI
             )
     });
-    if !rtl {
-        return Vec::new();
+    if !rtl && direction != Direction::Rtl {
+        return (Vec::new(), false);
     }
-    let info = unicode_bidi::BidiInfo::new(text, None);
-    info.levels.iter().map(|level| level.number()).collect()
+    let base = match direction {
+        Direction::Ltr => Some(unicode_bidi::Level::ltr()),
+        Direction::Rtl => Some(unicode_bidi::Level::rtl()),
+        Direction::Auto => None,
+    };
+    let info = unicode_bidi::BidiInfo::new(text, base);
+    let rtl = info
+        .paragraphs
+        .first()
+        .map_or(direction == Direction::Rtl, |paragraph| {
+            paragraph.level.is_rtl()
+        });
+    (
+        info.levels.iter().map(|level| level.number()).collect(),
+        rtl,
+    )
 }
 
 /// Byte ranges of `text` that keep together in one font: a character with the

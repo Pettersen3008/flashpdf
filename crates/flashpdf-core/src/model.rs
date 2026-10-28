@@ -180,8 +180,20 @@ pub enum TextAlign {
     Center,
     Right,
     /// Stretches the spaces of every wrapped line; the last line and a line
-    /// ending in a hard break stay left-aligned.
+    /// ending in a hard break align to the start.
     Justify,
+    /// Left in a left-to-right paragraph, right in a right-to-left one.
+    Start,
+    End,
+}
+
+/// A paragraph's base direction: CSS `direction`, or the first strong character for `dir="auto"`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+    Auto,
 }
 
 /// Where a table cell's content sits when its row is taller than the content.

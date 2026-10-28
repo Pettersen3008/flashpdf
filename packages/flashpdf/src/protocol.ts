@@ -34,6 +34,9 @@ const flag = {
 	raster: 1024,
 	styleText: 2048,
 	styleObject: 4096,
+	ltr: 8192,
+	rtl: 16384,
+	auto: 32768,
 } as const;
 const TAGS = new Map<string, number>(tags.map((tag, index) => [tag, index]));
 /** The core's cap; checked here because `stage_image` copies the bytes into WASM memory. */
@@ -164,7 +167,8 @@ export class ProtocolWriter {
 			(node.rowSpan !== undefined ? flag.rowSpan : 0) |
 			(raster !== undefined ? flag.raster : 0) |
 			(typeof style === "string" ? flag.styleText : 0) |
-			(typeof style === "object" ? flag.styleObject : 0);
+			(typeof style === "object" ? flag.styleObject : 0) |
+			(node.dir !== undefined ? flag[node.dir] : 0);
 		const binary = this.binary;
 		binary.record(opcode.open, () => {
 			binary.u8(TAGS.get(node.tag)!);

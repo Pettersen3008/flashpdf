@@ -213,7 +213,7 @@ impl<S: Sink> Compiler<S> {
             ));
         }
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, &self.fonts)?;
+        let next = inherit(s, context, &self.fonts, node.el.dir)?;
         let paint = box_style(s, next.size, next.opacity)?;
         if paint.is_some_and(|paint| {
             paint.margin[1] != 0.0
@@ -263,7 +263,7 @@ impl<S: Sink> Compiler<S> {
                                 element.el.tag
                             )));
                         }
-                        inherit(&element.style, &inner, &self.fonts)
+                        inherit(&element.style, &inner, &self.fonts, element.el.dir)
                     })()
                     .map_err(|error| error.locate(&element.at))?,
                 };
@@ -279,7 +279,7 @@ impl<S: Sink> Compiler<S> {
                         {
                             return Err(Error::new(PAGE_BREAKS));
                         }
-                        let own = inherit(&tr.style, &state, &self.fonts)?;
+                        let own = inherit(&tr.style, &state, &self.fonts, tr.el.dir)?;
                         let paint = box_style(&tr.style, own.size, own.opacity)?;
                         let mut row = GridRow {
                             node: tr,
@@ -413,9 +413,10 @@ impl<S: Sink> Compiler<S> {
             for row in &rows {
                 let mut line = Vec::with_capacity(row.cells.len());
                 for cell in &row.cells {
-                    let paint = inherit(&cell.node.style, &row.state, &self.fonts)
-                        .and_then(|own| Ok(box_style(&cell.node.style, own.size, 1.0)?))
-                        .map_err(|error| error.locate(&cell.node.at))?;
+                    let paint =
+                        inherit(&cell.node.style, &row.state, &self.fonts, cell.node.el.dir)
+                            .and_then(|own| Ok(box_style(&cell.node.style, own.size, 1.0)?))
+                            .map_err(|error| error.locate(&cell.node.at))?;
                     line.push(paint);
                 }
                 boxes.push(line);

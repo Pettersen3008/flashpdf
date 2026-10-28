@@ -19,7 +19,7 @@ fn first_header(renderer: &mut Renderer) {
             false,
             true,
             vec![OwnedCommand::Paragraph(
-                TextAlign::Left,
+                (TextAlign::Left, crate::Direction::Ltr),
                 [2, 2],
                 "ab".into(),
                 vec![run(true), run(false)],
@@ -178,7 +178,7 @@ fn given_a_smaller_later_body_when_an_atomic_block_fits_neither_remaining_nor_la
             false,
             false,
             vec![OwnedCommand::Paragraph(
-                TextAlign::Left,
+                (TextAlign::Left, crate::Direction::Ltr),
                 [2, 2],
                 "later".into(),
                 vec![TextRun {

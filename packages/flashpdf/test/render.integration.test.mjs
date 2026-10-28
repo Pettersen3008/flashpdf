@@ -83,6 +83,19 @@ test("given a spread before key, when TypeScript compiles the JSX, then its crea
 	assert.match(string(await render(document)), /\(Spread\) Tj/);
 });
 
+test("given dir rtl, when rendering, then start-aligned text moves to the right edge and direction ltr brings it back", async () => {
+	const x = async (props) =>
+		Number(
+			string(await render(jsx("p", { ...props, children: "Hello" }))).match(
+				/([\d.]+) [\d.]+ Td/,
+			)[1],
+		);
+	const left = await x({});
+	assert.ok((await x({ dir: "rtl" })) > left + 100);
+	assert.equal(await x({ dir: "rtl", style: { direction: "ltr" } }), left);
+	assert.equal(await x({ style: { direction: "rtl", textAlign: "end" } }), left);
+});
+
 test("given the rendering entry point, when following its imports, then it has no build-tool dependencies", () => {
 	const seen = new Set();
 	const visit = (url) => {

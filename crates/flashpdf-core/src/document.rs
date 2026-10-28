@@ -1,5 +1,5 @@
 use crate::{
-    BoxSize, BoxStyle, ColumnWidth, Flex, FlexItem, ImageSize, Pt, TextAlign, TextRun,
+    BoxSize, BoxStyle, ColumnWidth, Direction, Flex, FlexItem, ImageSize, Pt, TextAlign, TextRun,
     VerticalAlign,
 };
 
@@ -28,6 +28,7 @@ pub(crate) enum Element<'a> {
 
 pub(crate) struct Paragraph<'a> {
     pub(crate) align: TextAlign,
+    pub(crate) direction: Direction,
     /// Lines a page break leaves before it and after it, at least 1.
     pub(crate) orphans: u16,
     pub(crate) widows: u16,

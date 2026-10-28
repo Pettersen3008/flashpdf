@@ -1,6 +1,7 @@
 use crate::win_ansi::valid;
 use crate::{
-    Align, Fraction, ImageSize, Marker, Percent, Pt, Rgb, TextAlign, Typography, VerticalAlign,
+    Align, Direction, Fraction, ImageSize, Marker, Percent, Pt, Rgb, TextAlign, Typography,
+    VerticalAlign,
 };
 
 /// Letter and word spacing in points, either sign; the largest page side.
@@ -47,14 +48,25 @@ impl<'a> Cursor<'a> {
         nonnegative_f32(self.take(4)?, name)
     }
 
-    pub(super) fn align(&mut self) -> Result<TextAlign, ProtocolError> {
-        Ok(match self.take(1)?[0] {
+    /// Bits 0 to 2 are the alignment and bits 3 and 4 the base direction.
+    pub(super) fn align(&mut self) -> Result<(TextAlign, Direction), ProtocolError> {
+        let byte = self.take(1)?[0];
+        let align = match byte & 7 {
             0 => TextAlign::Left,
             1 => TextAlign::Center,
             2 => TextAlign::Right,
             3 => TextAlign::Justify,
+            4 => TextAlign::Start,
+            5 => TextAlign::End,
             _ => return Err(ProtocolError::InvalidTextAlignment),
-        })
+        };
+        let direction = match byte >> 3 {
+            0 => Direction::Ltr,
+            1 => Direction::Rtl,
+            2 => Direction::Auto,
+            _ => return Err(ProtocolError::InvalidTextAlignment),
+        };
+        Ok((align, direction))
     }
 
     /// Run flag bit 5 slants the face, 6, 7, and 11 mean an f32 letter spacing, word spacing, and

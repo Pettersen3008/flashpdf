@@ -116,7 +116,9 @@ export type Style = {
 	letterSpacing?: "normal" | SignedLength;
 	/** Added after every space and no-break space. */
 	wordSpacing?: "normal" | SignedLength;
-	textAlign?: "left" | "center" | "right" | "justify";
+	textAlign?: "left" | "center" | "right" | "justify" | "start" | "end";
+	/** A paragraph's base direction, which `start` and `end` follow. */
+	direction?: "ltr" | "rtl";
 	textTransform?: "none" | "uppercase" | "lowercase" | "capitalize";
 	/** Lines, optionally followed by a colour, as in `underline red`. */
 	textDecoration?: TextDecorationLine | `${TextDecorationLine} ${string}`;
@@ -159,6 +161,8 @@ export type CommonProps = {
 	key?: string | number | undefined;
 	id?: string | undefined;
 	className?: string | undefined;
+	/** The base direction; `auto` takes it from the first strong character, and CSS `direction` overrides it. */
+	dir?: "ltr" | "rtl" | "auto" | undefined;
 	style?: StyleInput | undefined;
 };
 export type BlockProps = CommonProps & { children?: PdfNode | undefined };

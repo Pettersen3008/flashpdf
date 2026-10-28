@@ -634,9 +634,9 @@ fn slant(oblique: bool, x: f32, y: f32) -> [f32; 6] {
 fn aligned(x: Pt, align: TextAlign, available_width: Pt, text_width: Pt) -> Pt {
     match align {
         // A wrapped justified line fills its width, and its last line starts left.
-        TextAlign::Left | TextAlign::Justify => x,
+        TextAlign::Left | TextAlign::Justify | TextAlign::Start => x,
         TextAlign::Center => x + Pt((available_width - text_width).get() / 2.0),
-        TextAlign::Right => x + available_width - text_width,
+        TextAlign::Right | TextAlign::End => x + available_width - text_width,
     }
 }
 

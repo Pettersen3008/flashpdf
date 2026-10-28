@@ -410,7 +410,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     assert_eq!(push_error(&late_marker), "invalid marker run");
 
     let mut bad_align = header(VERSION, 120.0, 60.0, 10.0);
-    bad_align.extend(paragraph(4, &[(0, 10.0, [0, 0, 0], 0, b"x")]));
+    bad_align.extend(paragraph(6, &[(0, 10.0, [0, 0, 0], 0, b"x")]));
     assert_eq!(push_error(&bad_align), "invalid text alignment");
 
     let mut unknown_font = header(VERSION, 120.0, 60.0, 10.0);

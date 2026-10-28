@@ -1536,3 +1536,28 @@ fn given_page_breaks_past_10000_pages_when_compiling_then_rejects_before_the_eng
         rejects(pages).starts_with("document exceeds 10000 pages; split it across several renders")
     );
 }
+
+#[test]
+fn given_dir_and_direction_when_compiling_then_paragraphs_carry_the_base_direction_and_start_and_end_resolve(
+) {
+    let align = |nodes: Vec<Node>| match records(nodes).last() {
+        Some(Record::Paragraph { align, .. }) => *align,
+        other => panic!("{other:?}"),
+    };
+    let dir = |value| move |element: &mut Element| element.dir = Some(value);
+    // Bits 3 and 4 hold the direction; right to left, start is the right edge.
+    let rtl = with(el("div", "", vec![text("a")]), dir(Direction::Rtl));
+    assert_eq!(align(vec![rtl]), 2 | 1 << 3);
+    let styled = node("div", "direction: rtl; text-align: end", vec![text("a")]);
+    assert_eq!(align(vec![styled]), 1 << 3);
+    // CSS `direction` wins over the attribute, as over a presentational hint.
+    let both = with(
+        el("div", "direction: ltr", vec![text("a")]),
+        dir(Direction::Rtl),
+    );
+    assert_eq!(align(vec![both]), 0);
+    // `auto` leaves start for the engine, which knows the first strong character.
+    let auto = with(el("div", "", vec![text("a")]), dir(Direction::Auto));
+    assert_eq!(align(vec![auto]), 4 | 2 << 3);
+    assert!(rejects(vec![node("div", "direction: up", vec![text("a")])]).contains("direction"));
+}

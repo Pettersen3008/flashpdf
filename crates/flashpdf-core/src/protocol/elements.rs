@@ -17,7 +17,7 @@ use crate::css::page::{page_setup, Format, Margin};
 use crate::css::style::{FontSlots, HELVETICA};
 use crate::css::TAGS;
 use crate::css::{pages, property_key, resolver, stylesheet, Cascaded, Value};
-use crate::BUILT_IN;
+use crate::{Direction, BUILT_IN};
 
 /// Element levels, as tree.ts counts them: a root is depth 0.
 const MAX_DEPTH: usize = 65;
@@ -348,6 +348,9 @@ const ROW_SPAN: u16 = 1 << 9;
 const RASTER: u16 = 1 << 10;
 const STYLE_TEXT: u16 = 1 << 11;
 const STYLE_OBJECT: u16 = 1 << 12;
+const DIR_LTR: u16 = 1 << 13;
+const DIR_RTL: u16 = 1 << 14;
+const DIR_AUTO: u16 = 1 << 15;
 
 /// An Open record: tag, flags naming the attributes that follow, id, classes, style, attributes.
 fn open(payload: &[u8], staged: usize) -> Result<Element, ProtocolError> {
@@ -359,6 +362,9 @@ fn open(payload: &[u8], staged: usize) -> Result<Element, ProtocolError> {
     let allowed = ID
         | STYLE_TEXT
         | STYLE_OBJECT
+        | DIR_LTR
+        | DIR_RTL
+        | DIR_AUTO
         | match tag {
             "img" => ALT | RASTER,
             "svg" => ALT,
@@ -370,7 +376,11 @@ fn open(payload: &[u8], staged: usize) -> Result<Element, ProtocolError> {
             _ => 0,
         };
     let both = |pair: u16| flags & pair == pair;
-    if flags & !allowed != 0 || both(TITLE | NO_BOOKMARK) || both(STYLE_TEXT | STYLE_OBJECT) {
+    if flags & !allowed != 0
+        || both(TITLE | NO_BOOKMARK)
+        || both(STYLE_TEXT | STYLE_OBJECT)
+        || (flags & (DIR_LTR | DIR_RTL | DIR_AUTO)).count_ones() > 1
+    {
         return Err(ProtocolError::InvalidValue("element attributes"));
     }
     let has = |flag: u16| flags & flag != 0;
@@ -423,6 +433,14 @@ fn open(payload: &[u8], staged: usize) -> Result<Element, ProtocolError> {
         element.start = Some(integer()?);
     }
     element.reversed = has(REVERSED);
+    element.dir = [
+        (DIR_LTR, Direction::Ltr),
+        (DIR_RTL, Direction::Rtl),
+        (DIR_AUTO, Direction::Auto),
+    ]
+    .into_iter()
+    .find(|(flag, _)| has(*flag))
+    .map(|(_, direction)| direction);
     if has(VALUE) {
         element.value = Some(integer()?);
     }

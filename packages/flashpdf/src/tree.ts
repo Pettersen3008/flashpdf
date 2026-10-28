@@ -15,7 +15,7 @@ const supported = new Set(
 	borderBottomStyle borderLeftStyle borderRadius borderTopLeftRadius borderTopRightRadius
 	borderBottomRightRadius borderBottomLeftRadius opacity marginInline marginBlock paddingInline
 	paddingBlock background backgroundColor gap fontSize fontFamily fontWeight fontStyle
-	fontKerning textAlign textTransform textDecoration textDecorationColor whiteSpace verticalAlign
+	fontKerning textAlign direction textTransform textDecoration textDecorationColor whiteSpace verticalAlign
 	listStyle listStyleType listStylePosition color lineHeight letterSpacing wordSpacing
 	breakBefore breakAfter breakInside borderCollapse borderSpacing orphans widows`
 		.trim()
@@ -117,6 +117,7 @@ export type ElementNode = {
 	readonly value?: number | undefined;
 	readonly colSpan?: number | undefined;
 	readonly rowSpan?: number | undefined;
+	readonly dir?: "ltr" | "rtl" | "auto" | undefined;
 };
 export type Node = TextNode | ElementNode;
 
@@ -410,7 +411,17 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 								: cell
 									? ["colSpan", "rowSpan"]
 									: [];
-	const input = props(element.props, ["children", "id", "className", "style", "ref", ...own]);
+	const input = props(element.props, [
+		"children",
+		"id",
+		"className",
+		"style",
+		"ref",
+		"dir",
+		...own,
+	]);
+	if (input.dir !== undefined && input.dir !== "ltr" && input.dir !== "rtl" && input.dir !== "auto")
+		throw new Error(`dir must be "ltr", "rtl", or "auto"${where}`);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
 		throw new Error(`<${element.type}> has no children${where}`);
 	if (input.id !== undefined && typeof input.id !== "string")
@@ -443,6 +454,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		classes:
 			typeof input.className === "string" ? input.className.split(/\s+/).filter(Boolean) : [],
 		style: input.style as Style | string | undefined,
+		...(input.dir !== undefined ? { dir: input.dir as "ltr" | "rtl" | "auto" } : {}),
 		children: [],
 		...(element.type === "img" ? image(input, where, chain, depth) : {}),
 		...(element.type === "a" ? { href: href(input.href, where) } : {}),
