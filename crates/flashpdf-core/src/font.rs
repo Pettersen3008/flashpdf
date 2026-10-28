@@ -1,3 +1,4 @@
+mod cff;
 mod cmap;
 mod shape;
 mod standard;
@@ -261,7 +262,7 @@ pub(crate) struct EmbeddedRefs {
     pub(crate) to_unicode: Ref,
 }
 
-/// Type0 over a CIDFontType2 with Identity-H, so show strings are glyph ids;
+/// Type0 over a CIDFontType2, or a CIDFontType0 for CFF outlines, with Identity-H, so show strings are glyph ids;
 /// `/W` lists only used glyphs and `/ToUnicode` maps them back for extraction.
 /// `program` is the subset's length and its deflated bytes.
 pub(crate) fn write_embedded(
@@ -278,15 +279,20 @@ pub(crate) fn write_embedded(
         .descendant_font(refs.descendant)
         .to_unicode(refs.to_unicode);
     let mut cid = pdf.cid_font(refs.descendant);
-    cid.subtype(CidFontType::Type2)
-        .base_font(name)
-        .system_info(SystemInfo {
-            registry: Str(b"Adobe"),
-            ordering: Str(b"Identity"),
-            supplement: 0,
-        })
-        .font_descriptor(refs.descriptor)
-        .default_width(0.0);
+    let cff = font.cff.is_some();
+    cid.subtype(if cff {
+        CidFontType::Type0
+    } else {
+        CidFontType::Type2
+    })
+    .base_font(name)
+    .system_info(SystemInfo {
+        registry: Str(b"Adobe"),
+        ordering: Str(b"Identity"),
+        supplement: 0,
+    })
+    .font_descriptor(refs.descriptor)
+    .default_width(0.0);
     let used: Vec<u16> = font.used.iter().copied().collect();
     let mut widths = cid.widths();
     let mut start = 0;
@@ -304,10 +310,13 @@ pub(crate) fn write_embedded(
         start = end + 1;
     }
     widths.finish();
-    cid.cid_to_gid_map_predefined(Name(b"Identity"));
+    if !cff {
+        cid.cid_to_gid_map_predefined(Name(b"Identity"));
+    }
     cid.finish();
 
-    pdf.font_descriptor(refs.descriptor)
+    let mut descriptor = pdf.font_descriptor(refs.descriptor);
+    descriptor
         .name(name)
         .flags(FontFlags::SYMBOLIC)
         .bbox(font.bbox)
@@ -315,12 +324,20 @@ pub(crate) fn write_embedded(
         .ascent(font.ascent)
         .descent(font.descent)
         .cap_height(font.cap_height)
-        .stem_v(font.stem_v)
-        .font_file2(refs.file);
-    pdf.stream(refs.file, program)
-        .filter(Filter::FlateDecode)
-        .pair(Name(b"Length1"), *length as i32)
-        .finish();
+        .stem_v(font.stem_v);
+    if cff {
+        descriptor.font_file3(refs.file);
+        descriptor.finish();
+        pdf.stream(refs.file, program)
+            .filter(Filter::FlateDecode)
+            .pair(Name(b"Subtype"), Name(b"CIDFontType0C"));
+    } else {
+        descriptor.font_file2(refs.file);
+        descriptor.finish();
+        pdf.stream(refs.file, program)
+            .filter(Filter::FlateDecode)
+            .pair(Name(b"Length1"), *length as i32);
+    }
 
     let mut cmap = UnicodeCmap::new(
         Name(b"Adobe-Identity-UCS"),

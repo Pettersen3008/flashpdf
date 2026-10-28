@@ -1319,6 +1319,70 @@ fn abel_text(text: &str) -> Result<Vec<u8>, RenderError> {
     renderer.finish()
 }
 
+/// `text` in a registered font from the fixtures, the PDF and its font file's dictionary.
+fn fixture_text(name: &str, text: &str) -> (lopdf::Document, lopdf::Dictionary) {
+    let bytes = std::fs::read(format!("../../packages/flashpdf/test/fixtures/{name}")).unwrap();
+    let font = super::EmbeddedFont::parse(bytes).unwrap();
+    let mut renderer = super::Renderer::with_fonts(Page::A4, vec![font]);
+    renderer
+        .push(&[Command::Text {
+            text,
+            style: TextStyle {
+                font: super::FontId::new(12),
+                ..TextStyle::plain(Pt(12.0))
+            },
+        }])
+        .unwrap();
+    let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
+    let page = *pdf.get_pages().values().next().unwrap();
+    let font = &pdf.get_page_fonts(page).unwrap()[b"F5".as_slice()];
+    let descendant = font.get(b"DescendantFonts").unwrap().as_array().unwrap()[0]
+        .as_reference()
+        .unwrap();
+    let descendant = pdf.get_dictionary(descendant).unwrap();
+    assert_eq!(
+        descendant.get(b"Subtype").unwrap().as_name().unwrap(),
+        b"CIDFontType0"
+    );
+    assert!(descendant.get(b"CIDToGIDMap").is_err());
+    let descriptor = descendant
+        .get(b"FontDescriptor")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let file = pdf
+        .get_dictionary(descriptor)
+        .unwrap()
+        .get(b"FontFile3")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let file = pdf
+        .get_object(file)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .dict
+        .clone();
+    (pdf, file)
+}
+
+#[test]
+fn given_name_keyed_and_cid_keyed_cff_fonts_when_rendered_then_each_embeds_a_cidfonttype0c_subset_whose_text_round_trips(
+) {
+    for (name, text) in [
+        ("TestSansCFF-subset.otf", "Have a fine visit"),
+        ("NotoSansJP-subset.otf", "日本語のテキスト"),
+    ] {
+        let (pdf, file) = fixture_text(name, text);
+        assert_eq!(page_text(&pdf, 1), text, "{name}");
+        assert_eq!(
+            file.get(b"Subtype").unwrap().as_name().unwrap(),
+            b"CIDFontType0C"
+        );
+    }
+}
+
 #[test]
 fn given_abel_and_text_outside_winansi_when_rendered_then_emits_a_subset_type0_font_whose_text_round_trips(
 ) {
