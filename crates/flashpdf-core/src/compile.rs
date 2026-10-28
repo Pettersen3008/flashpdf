@@ -1,7 +1,9 @@
 //! Element tree to protocol records: the port of compile.ts, css/cascade.ts `styleResolver`,
 //! and the error helpers of tree.ts and fonts.ts. Messages match the TypeScript ones.
 
+mod structure;
 mod table;
+pub use structure::StructureNode;
 mod text;
 mod writer;
 
@@ -66,6 +68,8 @@ pub enum Bookmark {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Element {
     pub tag: String,
+    pub lang: Option<String>,
+    pub scope: Option<String>,
     pub id: Option<String>,
     pub classes: Vec<String>,
     pub style: InlineStyle,
@@ -371,6 +375,8 @@ fn inline_key(value: &InlineStyle, key: &mut String) {
 /// Inherited text state, plus the layout flags that do not inherit.
 #[derive(Clone)]
 struct Ctx {
+    structure: u32,
+    label: u32,
     size: f64,
     /// 0 left, 1 center, 2 right, 3 justify, 4 start, 5 end.
     align: u8,
@@ -430,6 +436,8 @@ struct CellPaint {
 }
 
 const ROOT: Ctx = Ctx {
+    structure: 0,
+    label: 0,
     size: 12.0,
     align: 4,
     direction: Direction::Ltr,
@@ -817,6 +825,8 @@ fn inherit(
                 Some(value) if !vertical_box_align(value) => vertical_align(value, current.size)?,
                 _ => 0.0,
             },
+        structure: current.structure,
+        label: current.label,
         background: current.background,
         link: current.link.clone(),
         opacity: match s.get(p!("opacity")) {
@@ -838,6 +848,7 @@ fn inherit(
 fn run(state: &Ctx, text: impl Into<String>, hard_break: bool) -> Run {
     let decorated = state.underline || state.line_through;
     Run {
+        structure: state.structure,
         font: state.face,
         size: state.size,
         line_height: match state.line_height {
@@ -872,7 +883,8 @@ fn run(state: &Ctx, text: impl Into<String>, hard_break: bool) -> Run {
 /// Appends a run, merging it into the previous one when nothing about its paint differs.
 fn push(runs: &mut Vec<Run>, next: Run) {
     if let Some(last) = runs.last_mut() {
-        if !last.hard_break
+        if last.structure == next.structure
+            && !last.hard_break
             && last.font == next.font
             && last.size == next.size
             && last.line_height == next.line_height
@@ -1169,6 +1181,7 @@ pub struct Compiler<S> {
     page_tokens: bool,
     /// Set while compiling a `position: fixed` box.
     fixed: bool,
+    structure: Vec<StructureNode>,
 }
 
 impl<S: Sink> Compiler<S> {
@@ -1180,6 +1193,7 @@ impl<S: Sink> Compiler<S> {
             nav: None,
             page_tokens: false,
             fixed: false,
+            structure: Vec::new(),
         }
     }
 
@@ -1217,7 +1231,29 @@ impl<S: Sink> Compiler<S> {
         let mut nav = link_targets(&styled)?;
         nav.outline = outline;
         self.nav = Some(nav);
-        self.compile(&styled, &ROOT, 0)?;
+        let mut context = ROOT;
+        if self.writer.sink.pdfua() {
+            context.structure = self.structure_node("Document", 0);
+        }
+        self.compile(&styled, &context, 0)?;
+        // Headers and footers compile first for streaming; the footer reads last.
+        let roles: Vec<_> = self.structure.iter().map(|node| node.role).collect();
+        for node in &mut self.structure {
+            if node.role == "Table" {
+                node.children
+                    .sort_by_key(|id| match roles[*id as usize - 1] {
+                        "THead" => 0,
+                        "TFoot" => 2,
+                        _ => 1,
+                    });
+            }
+        }
+        if !self.structure.is_empty() {
+            self.validate_headings()?;
+        }
+        self.writer
+            .sink
+            .structure(std::mem::take(&mut self.structure));
         let nav = self.nav.take().unwrap();
         for (index, (id, owner)) in nav.targets.iter().enumerate() {
             if !nav.anchored.contains(&index) {
@@ -1247,6 +1283,20 @@ impl<S: Sink> Compiler<S> {
     }
 
     fn compile_element(&mut self, el: &Styled, context: &Ctx, depth: usize) -> Result<()> {
+        let structured;
+        let context = if context.structure != 0 {
+            structured = if is(&el.style, p!("position"), "fixed") {
+                Ctx {
+                    structure: 0,
+                    ..context.clone()
+                }
+            } else {
+                self.structure_context(el, context)?
+            };
+            &structured
+        } else {
+            context
+        };
         let result = if out_of_flow(&el.style) {
             self.out_of_flow(el, context, depth)
         } else {
@@ -1367,6 +1417,9 @@ impl<S: Sink> Compiler<S> {
             if let Some(href) = &node.el.href {
                 next.link = Some(href.as_str().into());
             }
+            if next.structure != 0 {
+                next = self.structure_context(node, &next)?;
+            }
             self.collect(&node.children, &next)
         })()
         .map_err(|error| error.locate(&node.at))
@@ -1411,12 +1464,16 @@ impl<S: Sink> Compiler<S> {
             })
             .collect();
         let mut shown = preserve(transformed);
+        self.structure_paragraph(&mut shown, state.structure);
         // The first paragraph of a list item takes its marker, which hangs before that paragraph's first line.
         if let Some(marker) = state
             .marker
             .as_ref()
             .and_then(|marker| marker.borrow_mut().take())
         {
+            if marker.structure != 0 {
+                self.structure[marker.structure as usize - 1].alt = marker.text.trim().into();
+            }
             shown.insert(0, marker);
         }
         self.writer.paragraph(
@@ -1738,6 +1795,7 @@ impl<S: Sink> Compiler<S> {
                 link: None,
                 background: None,
                 rise: 0.0,
+                structure: next.label,
                 marker: if inside { 2 } else { 1 },
                 white_space: WhiteSpace::Normal,
                 transform: Transform::None,
@@ -2064,6 +2122,11 @@ impl<S: Sink> Compiler<S> {
 
     fn picture(&mut self, node: &Styled, s: &Style, context: &Ctx, depth: usize) -> Result<()> {
         let tag = node.el.tag.as_str();
+        if self.writer.sink.pdfua() && node.el.alt.is_none() {
+            return Err(Error::new(
+                r#"PDF/UA requires explicit alt on images; use alt="" for decoration"#,
+            ));
+        }
         row_only(s, context.in_row)?;
         sizeless(s, tag, &["width", "height", "maxWidth", "maxHeight"])?;
         for prop in [p!("height"), p!("maxHeight")] {
@@ -2118,6 +2181,7 @@ impl<S: Sink> Compiler<S> {
                 };
                 let alt = node.el.alt.as_deref().unwrap_or("");
                 this.writer.image(
+                    context.structure,
                     slot,
                     width,
                     height,

@@ -1664,3 +1664,326 @@ fn given_an_axis_the_selected_font_lacks_when_compiling_then_rejects_naming_the_
         "fontStyle: oblique -10deg needs a font with a slnt axis; without one, use oblique, which slants by 14deg on <p> in <main>"
     );
 }
+
+fn ua_document(source: &str, pdfa: Option<u8>) -> Result<Vec<u8>, String> {
+    let mut decoder = Decoder::default();
+    let font = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
+    decoder.add_font(font.to_vec()).unwrap();
+    let mut bytes = MAGIC.to_vec();
+    bytes.extend(VERSION.to_le_bytes());
+    bytes.extend(record(26, &[text(b"UA"), vec![12, 12, 12, 12]].concat()));
+    bytes.extend(record(35, &[&[0, 0], source.as_bytes()].concat()));
+    bytes.extend(record(27, &[&[0][..], b"@page { size: 200pt 180pt; margin: 12pt } main {font-family:UA;font-size:10pt} p {margin:0}"].concat()));
+    bytes.extend(record(28, &[0, 0, 0, 0]));
+    let mut metadata = vec![2];
+    for value in ["UA test", "", "", "", "en"] {
+        metadata.extend(text(value.as_bytes()));
+    }
+    bytes.extend(record(14, &metadata));
+    if let Some(pdfa) = pdfa {
+        bytes.extend(record(20, &[pdfa]));
+    }
+    bytes.extend(record(29, &[0]));
+    bytes.extend(record(255, &[]));
+    decoder.push(&bytes).map_err(|error| error.to_string())?;
+    decoder.finish().map_err(|error| error.to_string())
+}
+
+fn structure_elements<'a>(
+    pdf: &'a lopdf::Document,
+    role: &[u8],
+) -> Vec<(lopdf::ObjectId, &'a lopdf::Dictionary)> {
+    pdf.objects
+        .iter()
+        .filter_map(|(id, object)| {
+            let dict = object.as_dict().ok()?;
+            (dict.get(b"S").ok()?.as_name().ok()? == role).then_some((*id, dict))
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_ua_paragraph_spanning_pages_when_rendering_then_one_p_owns_mcids_on_each_page() {
+    let bytes = ua_document(
+        &format!("<main><p>{}</p></main>", "Many words to wrap. ".repeat(120)),
+        None,
+    )
+    .unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    assert!(pdf.get_pages().len() > 1);
+    let paragraphs = structure_elements(&pdf, b"P");
+    assert_eq!(paragraphs.len(), 1);
+    let kids = paragraphs[0].1.get(b"K").unwrap().as_array().unwrap();
+    let pages: std::collections::BTreeSet<_> = kids
+        .iter()
+        .map(|kid| {
+            kid.as_dict()
+                .unwrap()
+                .get(b"Pg")
+                .unwrap()
+                .as_reference()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(pages.len(), pdf.get_pages().len());
+    let root = pdf
+        .catalog()
+        .unwrap()
+        .get(b"StructTreeRoot")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    assert_eq!(
+        structure_elements(&pdf, b"Document")[0]
+            .1
+            .get(b"P")
+            .unwrap()
+            .as_reference()
+            .unwrap(),
+        root
+    );
+}
+
+#[test]
+fn given_ua_lists_tables_and_links_when_rendering_then_structure_preserves_roles_scope_language_and_annotation_references(
+) {
+    let rows = "<tr><th scope='row'>Row</th><td>Value</td></tr>".repeat(15);
+    let bytes = ua_document(&format!("<main><h1>Report</h1><p>Before <a href='https://example.com'>link</a> after <span lang='nb'>Hei</span>.</p><ul><li>Item</li></ul><table><thead><tr><th>Head</th><th>Other</th></tr></thead><tbody>{rows}</tbody><tfoot><tr><td>Total</td><td>15</td></tr></tfoot></table></main>"), Some(0)).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    for role in [
+        b"H1".as_slice(),
+        b"L",
+        b"LI",
+        b"Lbl",
+        b"LBody",
+        b"Table",
+        b"THead",
+        b"TBody",
+        b"TFoot",
+        b"TR",
+        b"TH",
+        b"TD",
+        b"Link",
+    ] {
+        assert!(
+            !structure_elements(&pdf, role).is_empty(),
+            "missing {}",
+            String::from_utf8_lossy(role)
+        );
+    }
+    let table = structure_elements(&pdf, b"Table")[0].1;
+    let groups: Vec<_> = table
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kid| {
+            pdf.get_dictionary(kid.as_reference().unwrap())
+                .unwrap()
+                .get(b"S")
+                .unwrap()
+                .as_name()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(groups, [b"THead".as_slice(), b"TBody", b"TFoot"]);
+    let header = structure_elements(&pdf, b"THead")[0].0;
+    let head_cells: Vec<_> = structure_elements(&pdf, b"TH")
+        .into_iter()
+        .filter(|(_, th)| {
+            let row = pdf
+                .get_dictionary(th.get(b"P").unwrap().as_reference().unwrap())
+                .unwrap();
+            row.get(b"P").unwrap().as_reference().unwrap() == header
+        })
+        .collect();
+    for (_, th) in head_cells {
+        assert_eq!(
+            th.get(b"A")
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(b"Scope")
+                .unwrap()
+                .as_name()
+                .unwrap(),
+            b"Column"
+        );
+        let p = pdf
+            .get_dictionary(
+                th.get(b"K").unwrap().as_array().unwrap()[0]
+                    .as_reference()
+                    .unwrap(),
+            )
+            .unwrap();
+        let pages: std::collections::BTreeSet<_> = p
+            .get(b"K")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|kid| {
+                kid.as_dict()
+                    .unwrap()
+                    .get(b"Pg")
+                    .unwrap()
+                    .as_reference()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(pages.len(), 1, "repeated header must be an artifact");
+    }
+    assert!(structure_elements(&pdf, b"Span")
+        .iter()
+        .any(|(_, span)| span.get(b"Lang").is_ok()));
+    let paragraph = structure_elements(&pdf, b"P")
+        .into_iter()
+        .find(|(_, p)| {
+            p.get(b"K").unwrap().as_array().unwrap().iter().any(|kid| {
+                kid.as_reference().ok().is_some_and(|id| {
+                    pdf.get_dictionary(id)
+                        .unwrap()
+                        .get(b"S")
+                        .unwrap()
+                        .as_name()
+                        .unwrap()
+                        == b"Link"
+                })
+            })
+        })
+        .unwrap()
+        .1;
+    let roles: Vec<_> = paragraph
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kid| {
+            pdf.get_dictionary(kid.as_reference().unwrap())
+                .unwrap()
+                .get(b"S")
+                .unwrap()
+                .as_name()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        roles,
+        [b"Span".as_slice(), b"Link", b"Span", b"Span", b"Span"]
+    );
+    let link = structure_elements(&pdf, b"Link")[0].1;
+    let objr = link
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|kid| kid.as_dict().ok().filter(|kid| kid.get(b"Obj").is_ok()))
+        .unwrap();
+    let annotation = pdf
+        .get_dictionary(objr.get(b"Obj").unwrap().as_reference().unwrap())
+        .unwrap();
+    assert!(annotation.get(b"StructParent").is_ok());
+    assert!(annotation.get(b"Contents").is_ok());
+    for (_, page) in pdf.get_pages() {
+        let page = pdf.get_dictionary(page).unwrap();
+        if page.get(b"Annots").is_ok() {
+            assert_eq!(page.get(b"Tabs").unwrap().as_name().unwrap(), b"S");
+        }
+    }
+}
+
+#[test]
+fn given_ua_input_with_skipped_headings_when_rendering_then_rejects() {
+    assert!(ua_document("<main><h2>Skipped</h2></main>", None)
+        .unwrap_err()
+        .contains("cannot skip a level"));
+}
+
+#[test]
+fn given_a_ua_block_link_when_paragraphs_surround_a_block_then_all_children_keep_reading_order() {
+    let bytes = ua_document(
+        "<main><a href='https://example.com'>Before<div>Middle</div>After</a></main>",
+        None,
+    )
+    .unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let link = structure_elements(&pdf, b"Link")[0].1;
+    let children: Vec<_> = link
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|kid| kid.as_reference().ok())
+        .map(|id| {
+            pdf.get_dictionary(id)
+                .unwrap()
+                .get(b"S")
+                .unwrap()
+                .as_name()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(children, [b"P".as_slice(), b"Div", b"P"]);
+    assert_eq!(structure_elements(&pdf, b"P").len(), 3);
+}
+
+#[test]
+fn given_a_ua_table_with_an_empty_cell_when_rendering_then_keeps_both_column_positions() {
+    let bytes = ua_document("<main><table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td></td><td>Value in B</td></tr></tbody></table></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let body = structure_elements(&pdf, b"TBody")[0].1;
+    let row = pdf
+        .get_dictionary(
+            body.get(b"K").unwrap().as_array().unwrap()[0]
+                .as_reference()
+                .unwrap(),
+        )
+        .unwrap();
+    let cells = row.get(b"K").unwrap().as_array().unwrap();
+    assert_eq!(cells.len(), 2);
+    assert!(pdf
+        .get_dictionary(cells[0].as_reference().unwrap())
+        .unwrap()
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!pdf
+        .get_dictionary(cells[1].as_reference().unwrap())
+        .unwrap()
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn given_ua_table_group_and_row_languages_when_rendering_then_preserves_each_language() {
+    let bytes = ua_document("<main><table><thead><tr><th>Greeting</th></tr></thead><tbody lang='nb'><tr lang='fr'><td>Bonjour</td></tr></tbody></table></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let body = structure_elements(&pdf, b"TBody")[0].1;
+    assert_eq!(body.get(b"Lang").unwrap().as_str().unwrap(), b"nb");
+    let row = pdf
+        .get_dictionary(
+            body.get(b"K").unwrap().as_array().unwrap()[0]
+                .as_reference()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(row.get(b"Lang").unwrap().as_str().unwrap(), b"fr");
+}
+
+#[test]
+fn given_ua_table_body_and_footer_headings_when_rendering_then_checks_levels_in_reading_order() {
+    let bytes = ua_document("<main><h1>Report</h1><table><thead><tr><th>Section</th></tr></thead><tbody><tr><td><h2>Body</h2></td></tr></tbody><tfoot><tr><td><h3>Footer</h3></td></tr></tfoot></table></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    for role in [b"H1".as_slice(), b"H2", b"H3"] {
+        assert_eq!(structure_elements(&pdf, role).len(), 1);
+    }
+}

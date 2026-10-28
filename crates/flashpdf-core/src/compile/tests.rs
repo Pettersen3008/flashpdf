@@ -73,6 +73,7 @@ fn rejects(nodes: Vec<Node>) -> String {
 /// compile.unit.test.mjs `run`: a 12pt black run in a font slot.
 fn r(font: u32, value: &str) -> Run {
     Run {
+        structure: 0,
         font,
         size: 12.0,
         line_height: 0.0,
@@ -278,6 +279,7 @@ fn given_a_link_around_an_image_when_compiling_then_emits_the_image_record_with_
     assert_eq!(
         records(vec![link]),
         [Record::Image {
+            structure: 0,
             slot: 7,
             width: Some(Dimension {
                 kind: 2,

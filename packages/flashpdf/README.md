@@ -147,7 +147,9 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element`                                                                           | Resolves to the current page number inside a header or footer.                                        |
 | `TotalPages` | `() => Element`                                                                           | Resolves to the final page count inside a header or footer.                                           |
 
-`RenderOptions` accepts page format, margin, stylesheets, embedded fonts, a one-line repeating `header` and `footer`, `metadata`, and `tagged`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. Tagged mode requires a language and writes paragraph-line and figure tags with image `alt` text; it is not PDF/UA conformant.
+`RenderOptions` accepts page format, margin, stylesheets, embedded fonts, repeating `header` and `footer`, `metadata`, `tagged`, and `pdfua`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. `tagged: true` requires a language and writes basic paragraph-line and figure tags.
+
+`pdfua: true` enables PDF/UA-1 semantic tags for headings, paragraphs across pages, lists, tables, links, figures, and inline language changes. It requires a nonempty `metadata.title`, `metadata.language`, embedded fonts selected with `fontFamily`, and explicit image `alt`. An empty `alt` marks a decorative image. Headings start at `h1` and cannot skip levels. Use `lang="nb"` for a language change and `scope="row"`, `"col"`, or `"both"` on a `th`, defaulting to `"col"`. Headers, footers, page numbers, and repeated table headers and footers are artifacts. Combine it with `pdfa: "2u"` or `"3b"`; 3b also supports attachments. Authors must check the document's reading order and the meaning of its headings, table headers, and alt text.
 
 ```tsx
 import { PageNumber, TotalPages } from "@pettersen3008/flashpdf";

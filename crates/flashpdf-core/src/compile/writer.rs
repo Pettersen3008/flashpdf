@@ -48,6 +48,7 @@ pub struct FlexItem {
 /// One styled stretch of a paragraph; `hard_break` ends the line after it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
+    pub structure: u32,
     pub font: u32,
     pub size: f64,
     /// Points; 0 is `normal`.
@@ -100,6 +101,7 @@ pub enum Record {
     TableStart(u16, u16, Column),
     TableEnd,
     Image {
+        structure: u32,
         slot: u16,
         width: Option<Dimension>,
         height: Option<f64>,
@@ -122,6 +124,10 @@ pub enum Record {
 
 /// Where records go: the decoder's `read_record(record.opcode(), payload)` in a render.
 pub trait Sink {
+    fn pdfua(&self) -> bool {
+        false
+    }
+    fn structure(&mut self, _nodes: Vec<super::StructureNode>) {}
     fn record(&mut self, record: &Record, payload: &[u8]) -> Result<(), String>;
     /// Registers a drawing's encoded bytes and returns its image slot.
     fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, String>;
@@ -231,6 +237,7 @@ impl Record {
                 link,
                 alt,
                 opacity,
+                ..
             } => {
                 b.u16(f64::from(*slot));
                 for width in [width, max_width] {
@@ -559,6 +566,7 @@ impl<S: Sink> Writer<S> {
     #[allow(clippy::too_many_arguments)]
     pub fn image(
         &mut self,
+        structure: u32,
         slot: u16,
         width: Option<Dimension>,
         height: Option<f64>,
@@ -569,6 +577,7 @@ impl<S: Sink> Writer<S> {
         opacity: f64,
     ) -> Result<(), Error> {
         self.record(Record::Image {
+            structure,
             slot,
             width,
             height,

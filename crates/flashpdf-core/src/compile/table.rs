@@ -534,6 +534,26 @@ impl<S: Sink> Compiler<S> {
         repeated: bool,
         wheres: &mut Vec<(Rc<str>, bool)>,
     ) -> Result<()> {
+        let structure = group
+            .rows
+            .first()
+            .map_or(0, |row| table.rows[*row].state.structure);
+        let structure = if structure == 0 {
+            0
+        } else {
+            self.structure_node(
+                match group.group.map(|group| group.el.tag.as_str()) {
+                    Some("thead") => "THead",
+                    Some("tfoot") => "TFoot",
+                    _ => "TBody",
+                },
+                structure,
+            )
+        };
+        if structure != 0 {
+            self.structure[structure as usize - 1].lang =
+                group.group.and_then(|group| group.el.lang.clone());
+        }
         let style = group.group.map(|group| &*group.style);
         let says = |prop, value| style.is_some_and(|style| is(style, prop, value));
         if !repeated && says(p!("breakBefore"), "avoid") {
@@ -562,7 +582,7 @@ impl<S: Sink> Compiler<S> {
                 self.writer.stack_start(0.0, false)?;
             }
             for &row in &rows[start..end] {
-                self.row(table, row, joined)?;
+                self.row(table, row, joined, structure)?;
             }
             if joined {
                 self.writer.stack_end(false)?;
@@ -578,8 +598,16 @@ impl<S: Sink> Compiler<S> {
         Ok(())
     }
 
-    fn row(&mut self, table: &Table, index: usize, joined: bool) -> Result<()> {
+    fn row(&mut self, table: &Table, index: usize, joined: bool, parent: u32) -> Result<()> {
         let item = &table.rows[index];
+        let structure = if parent == 0 {
+            0
+        } else {
+            self.structure_node("TR", parent)
+        };
+        if structure != 0 {
+            self.structure[structure as usize - 1].lang = item.node.el.lang.clone();
+        }
         (|| {
             if is(&item.node.style, p!("breakBefore"), "avoid") {
                 self.writer.avoid()?;
@@ -620,6 +648,7 @@ impl<S: Sink> Compiler<S> {
                         paint.background = background;
                     }
                     let context = Ctx {
+                        structure,
                         in_row: true,
                         cell: Some(paint),
                         ..item.state.clone()
