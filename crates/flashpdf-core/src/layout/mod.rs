@@ -371,6 +371,7 @@ impl<'a> LayoutEngine<'a> {
             // Nested layers keep indices into boxes, so retain the unpainted slot.
             let style = &mut buffer.boxes[0].style;
             style.background = None;
+            style.effects = None;
             style.border = crate::Edges::all(Pt::ZERO);
             style.radius = None;
         }

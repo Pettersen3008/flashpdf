@@ -1335,6 +1335,19 @@ mod effect_regressions {
     }
 
     #[test]
+    fn given_overflow_on_bordered_gradients_and_shadows_when_painted_then_only_the_owner_and_each_child_paint_once(
+    ) {
+        for (child, count) in [("", 1), ("<div style='width:10pt;height:10pt;background-image:linear-gradient(white,blue);box-shadow:1pt 1pt green'></div>", 2)] {
+            for effect in ["", "overflow:hidden", "overflow:hidden;transform:translateX(20pt)"] {
+                let pdf = compile(&format!("<div style='width:100pt;height:40pt;border:10pt solid black;background-image:linear-gradient(to right,red,blue);box-shadow:2pt 3pt #0008;{effect}'>{child}</div>"));
+                let content = content(&pdf);
+                assert_eq!(content.matches(" scn").count(), count, "{effect}: {content}");
+                assert_eq!(content.matches("W*\nn").count(), count, "{effect}: {content}");
+            }
+        }
+    }
+
+    #[test]
     fn given_painted_overflow_with_a_nested_flow_layer_when_compiled_then_keeps_box_marks_valid() {
         let pdf = compile(
             "<div style='overflow:hidden;background-color:red;border:1pt solid red;border-radius:3pt'>\
