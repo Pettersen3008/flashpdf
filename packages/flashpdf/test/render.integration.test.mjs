@@ -1413,6 +1413,26 @@ test("given images larger than their box, when max-width and max-height bound th
 	);
 });
 
+test("given an image capped at exactly the page height, when rendering, then it fills the page without overflowing", async () => {
+	// 1 by 8000 px is 0.75 by 6000 pt; scaling 6000 into 842 rounds a few ulps past the cap.
+	const tall = png(
+		1,
+		8000,
+		0,
+		Array.from({ length: 2 * 8000 }, () => 0),
+	);
+	const pdf = string(
+		await render(
+			jsx("main", {
+				children: jsx("img", { src: tall, alt: "", style: { maxWidth: "100%", maxHeight: 842 } }),
+			}),
+			{ pageFormat: "A4", margin: 0 },
+		),
+	);
+	assert.match(pdf, /[\d.]+ 0 0 842 [\d.]+ [\d.]+ cm/);
+	assert.match(pdf, /\/Count 1\b/);
+});
+
 test("given an svg with a viewBox, when rendering, then paints a tagged form fitted to its box, as the same file in an img does", async () => {
 	const options = { tagged: true, metadata: { language: "en" } };
 	const box = { width: 60, height: 60 };

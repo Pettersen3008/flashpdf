@@ -32,6 +32,9 @@
 - Each font's deflated subset is kept with its shaping cache, at most four glyph sets per font, so a render that shows the same glyphs as an earlier one skips subsetting and deflating the font. A cold subset marks kept glyphs in a bit set instead of a tree and copies each table once, which cuts its time on Inter from about 80 µs to 33 µs, and `/ToUnicode` finds each glyph's code point in about a quarter of the time. On the 80-line benchmark invoice in Bun with the native addon, a warm render drops from about 2.5 ms to 2.25 ms untagged and 2.85 ms to 2.6 ms tagged. The bytes do not change; the WASM grows 2.4 KB raw and 0.4 KB gzipped.
 - Tagged output is about a third of its old size: the structure tree goes compact into one Flate object stream, each element names its marked content as `/K <mcid>`, and a cross-reference stream replaces the xref table. The 80-line invoice drops from 52.3 KB to 17.2 KB. Untagged output is unchanged.
 
+### Fixed
+- An `<img>` with auto width and height and a `maxHeight` equal to the page height no longer throws PageOverflow. Scaling into a max now clamps the result to the max, so `maxHeight: 842` on an A4 page without margins draws the image exactly 842 pt tall.
+
 ### Internal
 - FlashPDF's own GPOS and `kern` table reader is gone; HarfRust kerns embedded fonts. HarfRust and `read-fonts` build with `opt-level = "z"`, about 100 KB less WASM, since the word cache keeps shaping off the warm path.
 
