@@ -4,9 +4,8 @@ use std::hash::{BuildHasherDefault, Hasher};
 
 use super::whitespace;
 
-/// Every element tag, in the order `tree.ts` lists them.
 /// The attributes an element can carry, as JSX props or HTML attributes.
-const CARRIED: [&str; 16] = [
+const CARRIED: &[&str] = &[
     "id",
     "class",
     "classname",
@@ -22,9 +21,37 @@ const CARRIED: [&str; 16] = [
     "value",
     "data-bookmark",
     "tw",
+    "width",
+    "height",
+    "viewbox",
+    "preserveaspectratio",
+    "arialabel",
+    "aria-label",
+    "fill",
+    "stroke",
+    "opacity",
+    "fillopacity",
+    "fill-opacity",
+    "strokeopacity",
+    "stroke-opacity",
+    "fillrule",
+    "fill-rule",
+    "strokelinecap",
+    "stroke-linecap",
+    "strokelinejoin",
+    "stroke-linejoin",
+    "strokewidth",
+    "stroke-width",
+    "strokemiterlimit",
+    "stroke-miterlimit",
+    "strokedasharray",
+    "stroke-dasharray",
+    "strokedashoffset",
+    "stroke-dashoffset",
     "",
 ];
 
+/// Every element tag, in the order `tree.ts` lists them.
 pub const TAGS: &[&str] = &[
     "main",
     "div",
@@ -640,15 +667,11 @@ impl Parser<'_> {
                 }
                 Some(b'[') => {
                     let end = bracket_end(self.bytes(), index).ok_or_else(|| parse.bad())?;
-                    let name = self.source[index + 1..end]
-                        .trim_start()
-                        .split(|c: char| "=~|^$*]".contains(c) || c.is_whitespace())
-                        .next()
-                        .unwrap_or("")
-                        .to_ascii_lowercase();
+                    let attribute = self.source[index + 1..end].trim_start();
+                    let name = unescape(&attribute[..name_end(attribute, 0)]).to_ascii_lowercase();
                     // An attribute no element carries, such as Tailwind preflight's `[hidden]`,
                     // never matches; one it may carry is not implemented.
-                    if CARRIED.contains(&name.as_str()) {
+                    if attribute.contains('|') || CARRIED.contains(&name.as_str()) {
                         parse.why(|| "attribute selectors (match a class or id instead)".into());
                     } else {
                         never = true;

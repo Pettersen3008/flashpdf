@@ -31,7 +31,8 @@ pub(super) fn declarations(source: &str, context: &str) -> Result<Declarations, 
         let name = item[..colon].trim();
         // A vendor-prefixed property targets one browser engine; the standard one beside it counts.
         if ["-webkit-", "-moz-", "-ms-", "-o-"].iter().any(|prefix| {
-            name.len() > prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix)
+            name.len() > prefix.len()
+                && name.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
         }) {
             continue;
         }
@@ -362,12 +363,10 @@ pub struct Rule {
     /// Set for a rule in an `@media` query outside the subset: `declarations()` returns it as the
     /// error, so a render reports it where the rule matches.
     pub blocked: Option<Rc<str>>,
-    /// The cascade layer's rank in first-declaration order; `UNLAYERED` beats every layer.
-    pub layer: u16,
+    /// First-declaration ranks from outermost to innermost layer, ending in the implicit sublayer.
+    pub layer: Vec<usize>,
     body: Rc<Body>,
 }
-
-pub const UNLAYERED: u16 = u16::MAX;
 
 impl Rule {
     pub fn declarations(&self) -> Result<Rc<Declarations>, Message> {
@@ -416,25 +415,59 @@ struct Scope {
 
 impl Context<'_> {
     /// Layer `name` inside `scope`, dotted when nested, registered on first sight.
-    fn layer(&mut self, scope: &Scope, name: &str) -> Rc<str> {
+    fn layer(&mut self, scope: &Scope, name: &str) -> Result<Rc<str>, Message> {
+        if !name.starts_with('\0')
+            && !name.split('.').all(|part| {
+                !part.is_empty()
+                    && !part.contains('\\')
+                    && super::selector::name_end(part, 0) == part.len()
+                    && !part.as_bytes()[0].is_ascii_digit()
+                    && !["initial", "inherit", "unset", "revert", "revert-layer"]
+                        .contains(&part.to_ascii_lowercase().as_str())
+            })
+        {
+            return Err(format!("unsupported CSS layer name: {name}").into());
+        }
         let full: Rc<str> = match &scope.layer {
             Some(outer) => format!("{outer}.{name}").into(),
             None => name.into(),
         };
-        if !self.sheet.layers.contains(&full) {
-            self.sheet.layers.push(full.clone());
+        if full.split('.').count() > MAX_MEDIA_DEPTH {
+            return Err(format!("CSS layers nest deeper than {MAX_MEDIA_DEPTH} levels").into());
         }
-        full
+        for end in full
+            .match_indices('.')
+            .map(|(at, _)| at)
+            .chain(std::iter::once(full.len()))
+        {
+            let prefix: Rc<str> = full[..end].into();
+            if !self.sheet.layers.contains(&prefix) {
+                self.sheet.layers.push(prefix);
+            }
+        }
+        Ok(full)
     }
 
-    fn rank(&self, scope: &Scope) -> u16 {
-        scope.layer.as_ref().map_or(UNLAYERED, |layer| {
-            self.sheet
-                .layers
-                .iter()
-                .position(|own| own == layer)
-                .unwrap() as u16
-        })
+    fn rank(&self, scope: &Scope) -> Vec<usize> {
+        let mut rank = Vec::new();
+        if let Some(layer) = &scope.layer {
+            for end in layer
+                .match_indices('.')
+                .map(|(at, _)| at)
+                .chain(std::iter::once(layer.len()))
+            {
+                rank.push(
+                    self.sheet
+                        .layers
+                        .iter()
+                        .position(|own| **own == layer[..end])
+                        .unwrap(),
+                );
+            }
+        }
+        // Each layer's own declarations follow all of its sublayers.
+        rank.push(usize::MAX);
+        rank
     }
 
     /// The scope inside the block at-rule at `index`, or None when its block does not apply.
@@ -476,14 +509,14 @@ impl Context<'_> {
                     })
                 }
             },
-            "supports" if !supports(prelude) => return Ok(None),
+            "supports" if !supports(prelude, 0)? => return Ok(None),
             "supports" => {}
             // An anonymous layer is its own, unnamed in the source.
             _ if prelude.is_empty() => {
                 let anonymous = format!("\0{}", self.sheet.layers.len());
-                inner.layer = Some(self.layer(scope, &anonymous));
+                inner.layer = Some(self.layer(scope, &anonymous)?);
             }
-            _ => inner.layer = Some(self.layer(scope, prelude)),
+            _ => inner.layer = Some(self.layer(scope, prelude)?),
         }
         Ok(Some(inner))
     }
@@ -531,7 +564,7 @@ impl Context<'_> {
                 } else if !brace && name == "layer" {
                     // `@layer theme, base;` fixes the order before any block.
                     for layer in clean[index + 6..open].split(',') {
-                        self.layer(scope, layer.trim());
+                        self.layer(scope, layer.trim())?;
                     }
                 } else if brace {
                     if let Some(inner) = self.at_rule(index, open, depth, scope)? {
@@ -556,8 +589,7 @@ impl Context<'_> {
     }
 
     /// A style rule: `selectors` at `index`, its body `open..end`. Nested rules (`&:hover { }`,
-    /// `.b { }`) and nested `@media`, `@supports`, and `@layer` blocks come after the rule's own
-    /// declarations, as CSS nesting orders them.
+    /// `.b { }`) and nested conditional blocks retain declaration source order.
     fn style(
         &mut self,
         selectors: &str,
@@ -572,14 +604,34 @@ impl Context<'_> {
             return self.rules(selectors, index, clean.clone(), open + 1..end - 1, scope);
         }
         let mut own = String::new();
-        let mut nested = Vec::new();
         let mut at = open + 1;
         while at < end - 1 {
             match prelude_end(&clean, at).ok().filter(|stop| *stop < end - 1) {
                 Some(brace) if clean.as_bytes()[brace] == b'{' => {
                     let close = closing(&clean, brace)?;
                     let start = at + clean[at..brace].len() - clean[at..brace].trim_start().len();
-                    nested.push((start, brace, close));
+                    let length = own.len();
+                    self.rules(
+                        selectors,
+                        index,
+                        std::mem::take(&mut own).into(),
+                        0..length,
+                        scope,
+                    )?;
+                    if clean.as_bytes()[start] == b'@' {
+                        if let Some(inner) = self.at_rule(start, brace, depth, scope)? {
+                            self.style(selectors, start, brace, close, depth + 1, &inner)?;
+                        }
+                    } else if depth >= MAX_MEDIA_DEPTH {
+                        return Err(format!(
+                            "nested rules go deeper than {MAX_MEDIA_DEPTH} levels at {}",
+                            position(&clean, start)
+                        )
+                        .into());
+                    } else {
+                        let inner = nest(selectors, clean[start..brace].trim())?;
+                        self.style(&inner, start, brace, close, depth + 1, scope)?;
+                    }
                     at = close;
                 }
                 Some(semicolon) => {
@@ -593,24 +645,7 @@ impl Context<'_> {
             }
         }
         let length = own.len();
-        self.rules(selectors, index, own.into(), 0..length, scope)?;
-        for (start, brace, close) in nested {
-            if clean.as_bytes()[start] == b'@' {
-                if let Some(inner) = self.at_rule(start, brace, depth, scope)? {
-                    self.style(selectors, start, brace, close, depth + 1, &inner)?;
-                }
-            } else if depth >= MAX_MEDIA_DEPTH {
-                return Err(format!(
-                    "nested rules go deeper than {MAX_MEDIA_DEPTH} levels at {}",
-                    position(&clean, start)
-                )
-                .into());
-            } else {
-                let inner = nest(selectors, clean[start..brace].trim());
-                self.style(&inner, start, brace, close, depth + 1, scope)?;
-            }
-        }
-        Ok(())
+        self.rules(selectors, index, own.into(), 0..length, scope)
     }
 
     /// Adds a rule per selector in `selectors`, all sharing the body `source[range]`.
@@ -641,7 +676,7 @@ impl Context<'_> {
                 order: self.sheet.rules.len(),
                 at,
                 blocked: scope.blocked.clone(),
-                layer,
+                layer: layer.clone(),
                 body: body.clone(),
             });
         }
@@ -651,53 +686,97 @@ impl Context<'_> {
 
 /// A nested selector list resolved against its parent's: `&` stands for the parent, and a
 /// selector without one is its descendant.
-fn nest(parent: &str, nested: &str) -> String {
+fn nest(parent: &str, nested: &str) -> Result<String, Message> {
     let parent = parent.trim();
-    let single = split(parent).len() == 1;
+    const MAX_EXPANSION: usize = 64 * 1024;
+    if parent.len() > MAX_EXPANSION || nested.len() > MAX_EXPANSION {
+        return Err("nested selector expansion exceeds 64 KiB".into());
+    }
     let is = format!(":is({parent})");
-    split(nested)
-        .iter()
-        .map(|item| {
-            let item = item.trim();
-            match item.strip_prefix('&') {
-                // A leading `&` before a compound may stand for one complex parent as written.
-                Some(rest) if single => format!("{parent}{}", rest.replace('&', &is)),
-                _ if item.contains('&') => item.replace('&', &is),
-                _ => format!("{is} {item}"),
+    let mut result = String::new();
+    for item in split(nested) {
+        if !result.is_empty() {
+            result.push_str(", ");
+        }
+        let item = item.trim();
+        let mut replaced = String::new();
+        let mut start = 0;
+        let mut index = 0;
+        while index < item.len() {
+            match item.as_bytes()[index] {
+                b'\\' => index += 1,
+                b'"' | b'\'' => index = quoted(item.as_bytes(), index),
+                b'&' => {
+                    replaced.push_str(&item[start..index]);
+                    replaced.push_str(&is);
+                    start = index + 1;
+                }
+                _ => {}
             }
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+            if replaced.len() > MAX_EXPANSION {
+                return Err("nested selector expansion exceeds 64 KiB".into());
+            }
+            index += 1;
+        }
+        if start == 0 {
+            replaced.push_str(&is);
+            replaced.push(' ');
+        }
+        replaced.push_str(&item[start..]);
+        result.push_str(&replaced);
+        if result.len() > MAX_EXPANSION {
+            return Err("nested selector expansion exceeds 64 KiB".into());
+        }
+    }
+    Ok(result)
 }
 
 /// Whether FlashPDF renders what an `@supports` condition tests: a declaration holds when its
 /// property is supported and its value renders, `not`, `and`, `or`, and parentheses combine
 /// them, and any other test, such as `selector()`, does not hold.
-fn supports(condition: &str) -> bool {
-    let condition = condition.trim();
-    if let Some(rest) = condition.strip_prefix("not") {
-        if rest.starts_with(|c: char| c.is_whitespace() || c == '(') {
-            return !supports(rest);
-        }
+fn supports(condition: &str, nesting: usize) -> Result<bool, Message> {
+    if nesting >= MAX_MEDIA_DEPTH {
+        return Err(
+            format!("@supports condition nests deeper than {MAX_MEDIA_DEPTH} levels").into(),
+        );
     }
+    let condition = condition.trim();
     let bytes = condition.as_bytes();
     let mut depth = 0usize;
     let mut terms = Vec::new();
     let mut operator = None;
     let mut start = 0;
-    for (index, &byte) in bytes.iter().enumerate() {
-        match byte {
+    let mut index = 0;
+    let mut first_close = None;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 1,
+            b'"' | b'\'' => {
+                index = quoted(bytes, index);
+                if index == bytes.len() {
+                    return Ok(false);
+                }
+            }
             b'(' => depth += 1,
-            b')' => depth = depth.saturating_sub(1),
-            _ if depth == 0 && whitespace(byte) => {
+            b')' => {
+                let Some(next) = depth.checked_sub(1) else {
+                    return Ok(false);
+                };
+                depth = next;
+                if depth == 0 && first_close.is_none() {
+                    first_close = Some(index);
+                }
+            }
+            byte if depth == 0 && whitespace(byte) && index >= start => {
                 let after = condition[index + 1..].trim_start();
                 for word in ["and", "or"] {
-                    let joined = after.strip_prefix(word).is_some_and(|rest| {
-                        rest.starts_with(|c: char| c.is_whitespace() || c == '(')
-                    });
-                    if joined && index >= start {
+                    let joined = after
+                        .get(..word.len())
+                        .is_some_and(|text| text.eq_ignore_ascii_case(word))
+                        && after[word.len()..].starts_with(|c: char| c.is_whitespace() || c == '(');
+                    if joined {
                         if operator.is_some_and(|own| own != word) {
-                            return false;
+                            return Ok(false);
                         }
                         operator = Some(word);
                         terms.push(&condition[start..index]);
@@ -707,27 +786,55 @@ fn supports(condition: &str) -> bool {
             }
             _ => {}
         }
+        index += 1;
+    }
+    if depth != 0 {
+        return Ok(false);
+    }
+    let not = condition
+        .get(..3)
+        .is_some_and(|text| text.eq_ignore_ascii_case("not"))
+        && condition[3..].starts_with(char::is_whitespace);
+    if not {
+        return if operator.is_some() {
+            Ok(false)
+        } else {
+            supports(&condition[3..], nesting + 1).map(|value| !value)
+        };
     }
     if let Some(operator) = operator {
         terms.push(&condition[start..]);
-        return match operator {
-            "and" => terms.iter().all(|term| supports(term)),
-            _ => terms.iter().any(|term| supports(term)),
-        };
+        let mut result = operator == "and";
+        for term in terms {
+            let value = supports(term, nesting + 1)?;
+            if operator == "and" {
+                result &= value;
+            } else {
+                result |= value;
+            }
+        }
+        return Ok(result);
+    }
+    if first_close != bytes.len().checked_sub(1) {
+        return Ok(false);
     }
     let Some(inner) = condition
         .strip_prefix('(')
         .and_then(|rest| rest.strip_suffix(')'))
         .map(str::trim)
     else {
-        return false;
+        return Ok(false);
     };
-    if inner.starts_with('(') || inner.starts_with("not") {
-        return supports(inner);
+    if inner.starts_with('(')
+        || inner
+            .get(..3)
+            .is_some_and(|text| text.eq_ignore_ascii_case("not"))
+    {
+        return supports(inner, nesting + 1);
     }
-    inner
+    Ok(inner
         .split_once(':')
-        .is_some_and(|(name, value)| super::renders(name.trim(), value.trim()))
+        .is_some_and(|(name, value)| super::renders(name.trim(), value.trim())))
 }
 
 /// Adds the rules, `@page` declarations, and `@property` registrations of `source` to `sheet`.

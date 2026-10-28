@@ -415,6 +415,8 @@ fn given_selectors_outside_the_subset_when_validating_then_rejects_each_with_rea
         ("p:nth-child(n+) { color: red }", &[":nth-child(n+)"]),
         ("p:nth-of-type() { color: red }", &[":nth-of-type()"]),
         (":is(.a, [dir]) { color: red }", &["attribute selectors"]),
+        (r"a[h\72 ef] { color: red }", &["attribute selectors"]),
+        ("svg[width] { color: red }", &["attribute selectors"]),
         (":not(.a:has(.b)) { color: red }", &[":has()"]),
         (
             "@media print { .a[alt] { color: red } }",
@@ -602,6 +604,60 @@ fn given_layers_nesting_and_supports_when_resolving_then_orders_layers_and_appli
     assert_eq!(text(&one(sheet, "e").unwrap(), "color"), Some("red"));
     assert_eq!(text(&one(sheet, "f").unwrap(), "color"), Some("lime"));
     validate(sheet).unwrap();
+}
+
+#[test]
+fn given_nested_layers_when_resolving_then_keeps_sublayers_before_their_parent_and_reverses_important(
+) {
+    let sheet = r#"@layer a, z;
+@layer a { .a { color:red; line-height:2!important }
+  @layer b { .a { color:blue; line-height:3!important } }
+}
+@layer z { .b { color:green } }
+@layer a.c { .b { color:red } }"#;
+    let a = one(sheet, "a").unwrap();
+    assert_eq!(text(&a, "color"), Some("red"));
+    assert_eq!(text(&a, "lineHeight"), Some("3"));
+    assert_eq!(text(&one(sheet, "b").unwrap(), "color"), Some("green"));
+}
+
+#[test]
+fn given_nested_rules_when_resolving_then_retains_declaration_order_escaped_ampersands_and_bounds_expansion(
+) {
+    let sheet = r".a { @media print { color:red } color:blue; .\& { color:green } }";
+    let tree = vec![e("main", "a", "a", vec![e("p", "b", "&", vec![])])];
+    let resolved = resolve(&tree, &[sheet]).unwrap();
+    assert_eq!(text(&resolved[0].1, "color"), Some("blue"));
+    assert_eq!(text(&resolved[1].1, "color"), Some("green"));
+    let large = format!(
+        ".a {{{}color:red;{}}}",
+        "& & & & {".repeat(10),
+        "}".repeat(10)
+    );
+    assert!(validate(&large)
+        .unwrap_err()
+        .contains("expansion exceeds 64 KiB"));
+}
+
+#[test]
+fn given_quoted_and_uppercase_supports_conditions_when_resolving_then_checks_capabilities_and_bounds_recursion(
+) {
+    let sheet = r#".a { color:blue }
+@supports (--x:"(") and (display:grid) { .a { color:red } }
+@supports NOT (display:grid) { .b { color:green } }
+@supports (display:block) AND (color:red) { .c { color:navy } }"#;
+    assert_eq!(text(&one(sheet, "a").unwrap(), "color"), Some("blue"));
+    assert_eq!(text(&one(sheet, "b").unwrap(), "color"), Some("green"));
+    assert_eq!(text(&one(sheet, "c").unwrap(), "color"), Some("navy"));
+    let deep = format!(
+        "@supports {}display:block{} {{ .a {{ color:red }} }}",
+        "(".repeat(100),
+        ")".repeat(100)
+    );
+    assert!(validate(&deep)
+        .unwrap_err()
+        .contains("condition nests deeper than 16"));
+    validate(".a { --aaaaaé:1 }").unwrap();
 }
 
 #[test]

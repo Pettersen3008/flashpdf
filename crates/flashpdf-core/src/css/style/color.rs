@@ -117,12 +117,12 @@ fn hsl(hue: f64, saturation: f64, lightness: f64) -> [f64; 3] {
     let a = saturation * min(lightness, 1.0 - lightness);
     let channel = |n: f64| {
         let k = (n + h / 30.0) % 12.0;
-        byte(lightness - a * max(-1.0, min(min(k - 3.0, 9.0 - k), 1.0)))
+        255.0 * (lightness - a * max(-1.0, min(min(k - 3.0, 9.0 - k), 1.0)))
     };
     [channel(0.0), channel(8.0), channel(4.0)]
 }
 
-/// OKLab to sRGB bytes, clipped per channel to the gamut; see https://bottosson.github.io/posts/oklab/.
+/// OKLab to extended sRGB channels; clip and round only after mixing.
 /// libm, not the platform's, keeps the bytes identical everywhere.
 fn oklab(lightness: f64, a: f64, b: f64) -> [f64; 3] {
     let cube = |value: f64| libm::pow(value, 3.0);
@@ -130,11 +130,12 @@ fn oklab(lightness: f64, a: f64, b: f64) -> [f64; 3] {
     let m = cube(lightness - 0.1055613458 * a - 0.0638541728 * b);
     let s = cube(lightness - 0.0894841775 * a - 1.291485548 * b);
     let encode = |linear: f64| {
-        byte(if linear <= 0.0031308 {
-            12.92 * linear
-        } else {
-            1.055 * libm::pow(linear, 1.0 / 2.4) - 0.055
-        })
+        255.0
+            * if linear.abs() <= 0.0031308 {
+                12.92 * linear
+            } else {
+                linear.signum() * (1.055 * libm::pow(linear.abs(), 1.0 / 2.4) - 0.055)
+            }
     };
     [
         encode(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
@@ -152,7 +153,7 @@ fn hue(token: &str) -> f64 {
     js_parse(token.strip_suffix("deg").unwrap_or(token))
 }
 
-fn functional(source: &str) -> Result<Option<Rgb>, Message> {
+fn functional(source: &str) -> Result<Option<[f64; 3]>, Message> {
     let Some(open) = source.find('(') else {
         return Ok(None);
     };
@@ -179,7 +180,7 @@ fn functional(source: &str) -> Result<Option<Rgb>, Message> {
         opaque(fraction(alpha, 1.0))?;
     }
     let rgb = if kind.starts_with("rgb") {
-        [first, second, third].map(|token| byte(fraction(token, 255.0)))
+        [first, second, third].map(|token| fraction(token, 255.0).clamp(0.0, 1.0) * 255.0)
     } else if kind.starts_with("hsl") {
         hsl(hue(first), fraction(second, 100.0), fraction(third, 100.0))
     } else if kind == "oklab" {
@@ -192,17 +193,17 @@ fn functional(source: &str) -> Result<Option<Rgb>, Message> {
             axis(second) * libm::sin(angle),
         )
     };
-    Ok((!rgb.iter().any(|channel| channel.is_nan())).then(|| rgb.map(|channel| channel as u8)))
+    Ok((!rgb.iter().any(|channel| channel.is_nan())).then_some(rgb))
 }
 
-/// sRGB bytes to OKLab; see https://bottosson.github.io/posts/oklab/.
-fn to_oklab(rgb: Rgb) -> [f64; 3] {
+/// Extended sRGB channels to OKLab; see https://bottosson.github.io/posts/oklab/.
+fn to_oklab(rgb: [f64; 3]) -> [f64; 3] {
     let [r, g, b] = rgb.map(|channel| {
-        let value = f64::from(channel) / 255.0;
-        if value <= 0.04045 {
+        let value = channel / 255.0;
+        if value.abs() <= 0.04045 {
             value / 12.92
         } else {
-            libm::pow((value + 0.055) / 1.055, 2.4)
+            value.signum() * libm::pow((value.abs() + 0.055) / 1.055, 2.4)
         }
     });
     let l = libm::cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
@@ -217,7 +218,10 @@ fn to_oklab(rgb: Rgb) -> [f64; 3] {
 
 /// `color-mix(in srgb | oklab, <color> [<percentage>], <color> [<percentage>])` of opaque
 /// colours, or `transparent` at 0%. A mix that keeps any transparency rejects, as alpha does.
-fn mix(source: &str) -> Result<Option<Rgb>, Message> {
+fn mix(source: &str, nesting: usize) -> Result<Option<[f64; 3]>, Message> {
+    if nesting >= 16 {
+        return Err("color-mix nests deeper than 16 levels".into());
+    }
     let Some(inner) = source["color-mix(".len()..].strip_suffix(')') else {
         return Ok(None);
     };
@@ -242,7 +246,7 @@ fn mix(source: &str) -> Result<Option<Rgb>, Message> {
         _ => return Err(format!("unsupported color-mix space: {space}; use srgb or oklab").into()),
     };
     // A colour and an optional percentage, either first.
-    let part = |text: &str| -> Result<(Option<Rgb>, Option<f64>), Message> {
+    let part = |text: &str| -> Result<(Option<[f64; 3]>, Option<f64>), Message> {
         let (head, tail) = match text.rfind(|c: char| js_space(c)) {
             Some(at) if text.ends_with('%') && !text[at..].contains(')') => {
                 (&text[..at], Some(&text[at + 1..]))
@@ -252,13 +256,19 @@ fn mix(source: &str) -> Result<Option<Rgb>, Message> {
                 _ => (text, None),
             },
         };
-        let amount = tail.map(|amount| fraction(amount, 1.0));
+        let amount = tail.map(|amount| {
+            amount
+                .strip_suffix('%')
+                .and_then(|number| number.parse::<f64>().ok())
+                .unwrap_or(f64::NAN)
+                / 100.0
+        });
         if amount.is_some_and(|amount| !(0.0..=1.0).contains(&amount)) {
             return Err(format!("invalid color-mix percentage: {text}").into());
         }
         let head = js_trim(head);
         let rgb = (head != "transparent")
-            .then(|| color(&Value::Text(head.into())))
+            .then(|| channels(head, nesting + 1))
             .transpose()?;
         Ok((rgb, amount))
     };
@@ -274,7 +284,7 @@ fn mix(source: &str) -> Result<Option<Rgb>, Message> {
         return Err(format!("invalid color-mix percentages: {source}").into());
     }
     // Percentages summing under 100% scale the alpha down too.
-    let alpha = |rgb: Option<Rgb>| f64::from(u8::from(rgb.is_some()));
+    let alpha = |rgb: Option<[f64; 3]>| f64::from(u8::from(rgb.is_some()));
     opaque((p1 * alpha(one) + p2 * alpha(two)) / total * total.min(1.0))?;
     let (weight, one, two) = match (one, two) {
         (Some(one), Some(two)) => (p2 / total, one, two),
@@ -287,9 +297,9 @@ fn mix(source: &str) -> Result<Option<Rgb>, Message> {
         let (a, b) = (to_oklab(one), to_oklab(two));
         self::oklab(blend(a[0], b[0]), blend(a[1], b[1]), blend(a[2], b[2]))
     } else {
-        [0, 1, 2].map(|i| byte(blend(f64::from(one[i]), f64::from(two[i])) / 255.0))
+        [0, 1, 2].map(|i| blend(one[i], two[i]))
     };
-    Ok(Some(rgb.map(|channel| channel as u8)))
+    Ok(Some(rgb))
 }
 
 pub fn color(value: &Value) -> Result<Rgb, Message> {
@@ -297,15 +307,19 @@ pub fn color(value: &Value) -> Result<Rgb, Message> {
         return Err(format!("invalid color: {value}").into());
     };
     let source = js_trim(text).to_lowercase();
-    let rgb = match NAMED.binary_search_by(|(name, _)| name.cmp(&source.as_str())) {
+    channels(&source, 0).map(|rgb| rgb.map(|channel| byte(channel / 255.0) as u8))
+}
+
+fn channels(source: &str, nesting: usize) -> Result<[f64; 3], Message> {
+    let rgb = match NAMED.binary_search_by(|(name, _)| name.cmp(&source)) {
         Ok(index) => {
             let [_, red, green, blue] = NAMED[index].1.to_be_bytes();
-            Some([red, green, blue])
+            Some([red, green, blue].map(f64::from))
         }
-        Err(_) => match hex(&source)? {
-            Some(rgb) => Some(rgb),
-            None if source.starts_with("color-mix(") => mix(&source)?,
-            None => functional(&source)?,
+        Err(_) => match hex(source)? {
+            Some(rgb) => Some(rgb.map(f64::from)),
+            None if source.starts_with("color-mix(") => mix(source, nesting)?,
+            None => functional(source)?,
         },
     };
     rgb.ok_or_else(|| {

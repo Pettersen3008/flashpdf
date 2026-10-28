@@ -437,7 +437,7 @@ impl Resolver {
             .windows(2)
             .any(|pair| pair[0].layer != pair[1].layer)
         {
-            important.sort_by_key(|rule| std::cmp::Reverse(rule.layer));
+            important.sort_by(|a, b| b.layer.cmp(&a.layer));
         }
         for rule in &important {
             cascade(&mut result, &rule.declarations()?.important);

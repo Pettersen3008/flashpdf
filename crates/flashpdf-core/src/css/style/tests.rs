@@ -149,6 +149,16 @@ fn given_oklch_and_oklab_colours_when_resolving_them_then_converts_to_clipped_sr
 #[test]
 fn given_color_mix_when_resolving_then_mixes_opaque_colours_and_rejects_any_transparency() {
     assert_eq!(
+        color(&t("color-mix(in srgb, rgb(0.49 0 0), rgb(1.49 0 0) 25%)")),
+        Ok([1, 0, 0])
+    );
+    assert_eq!(
+        color(&t(
+            "color-mix(in oklab, oklab(0.5 0.4 0), oklab(0.5 -0.4 0))"
+        )),
+        Ok([99, 99, 99])
+    );
+    assert_eq!(
         color(&t("color-mix(in srgb, red, blue)")),
         Ok([128, 0, 128])
     );
@@ -180,6 +190,13 @@ fn given_color_mix_when_resolving_then_mixes_opaque_colours_and_rejects_any_tran
         color(&t("color-mix(in lab, red, blue)")),
         Err("unsupported color-mix space: in lab; use srgb or oklab".into())
     );
+    assert!(color(&t("color-mix(in srgb, red 50garbage%, blue)")).is_err());
+    let nested = format!(
+        "{}red{}",
+        "color-mix(in srgb, red, ".repeat(17),
+        ")".repeat(17)
+    );
+    assert!(color(&t(&nested)).unwrap_err().contains("deeper than 16"));
 }
 
 #[test]
