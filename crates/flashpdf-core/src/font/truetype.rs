@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use pdf_writer::Rect;
 
+use super::cff::Cff;
 use super::shape::{Program, Shaping};
 use super::variable::{self, Axis, Instance};
 use super::{cmap, subset, Stroke};
@@ -42,13 +43,24 @@ pub(crate) struct EmbeddedFont {
     pub(crate) axes: Vec<Axis>,
     /// Normalized F2Dot14 coordinates of an instance; empty for the default one.
     pub(crate) coords: Box<[i16]>,
+    /// Where an OpenType font's `CFF ` table sits; `None` for TrueType outlines.
+    pub(crate) cff: Option<Range<usize>>,
 }
 
 impl EmbeddedFont {
     pub(crate) fn parse(bytes: Vec<u8>) -> Result<Self, String> {
-        if !bytes.starts_with(&[0, 1, 0, 0]) {
+        let cff = if bytes.starts_with(b"OTTO") {
+            if table_range(&bytes, b"CFF2").is_ok() {
+                return Err("CFF2 outlines are not supported; use a TrueType or CFF font".into());
+            }
+            let range = table_range(&bytes, b"CFF ")?;
+            Cff::parse(&bytes[range.clone()]).ok_or(INVALID)?;
+            Some(range)
+        } else if bytes.starts_with(&[0, 1, 0, 0]) {
+            None
+        } else {
             return Err(INVALID.into());
-        }
+        };
         let head = ttf_table(&bytes, b"head")?;
         let hhea = ttf_table(&bytes, b"hhea")?;
         let hmtx = ttf_table(&bytes, b"hmtx")?;
@@ -158,6 +170,7 @@ impl EmbeddedFont {
             scale,
             axes,
             coords: Box::default(),
+            cff,
         })
     }
 
@@ -285,6 +298,12 @@ impl EmbeddedFont {
     // ponytail: an instance with malformed variation data embeds the default outlines;
     // reject such fonts at registration if one turns up.
     pub(crate) fn program(&self) -> Vec<u8> {
+        if let Some(range) = &self.cff {
+            let table = &self.bytes[range.clone()];
+            // `parse` checked the table, so this always subsets.
+            return Cff::parse(table)
+                .map_or_else(|| table.to_vec(), |cff| cff.subset(Some(&self.used)));
+        }
         let instance = (!self.coords.is_empty())
             .then(|| Instance::new(&self.bytes, &self.coords))
             .flatten();
@@ -587,5 +606,21 @@ mod tests {
         let values = [(*b"wght", 700.0), (*b"wdth", 75.0)];
         let bold = font.instance(font.coordinates(&values), &values);
         assert_eq!(bold.advance(font.glyph('A').unwrap()), 634);
+    }
+
+    #[test]
+    fn given_cff2_outlines_when_parsing_then_rejects_naming_them() {
+        let mut bytes =
+            include_bytes!("../../../../packages/flashpdf/test/fixtures/TestSansCFF-subset.otf")
+                .to_vec();
+        let record = (0..usize::from(be_u16(&bytes, 4).unwrap()))
+            .map(|index| 12 + index * 16)
+            .find(|record| &bytes[*record..record + 4] == b"CFF ")
+            .unwrap();
+        bytes[record + 3] = b'2';
+        assert_eq!(
+            EmbeddedFont::parse(bytes).err().unwrap(),
+            "CFF2 outlines are not supported; use a TrueType or CFF font"
+        );
     }
 }
