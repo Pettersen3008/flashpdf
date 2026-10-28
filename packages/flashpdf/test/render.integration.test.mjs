@@ -136,7 +136,7 @@ test("given native JSX components and fragments, when rendering, then preserves 
 		children: [jsx("h1", { children: "One" }), jsx("p", { children: "Two" })],
 	});
 	assert.match(shown(await render(siblings)), /\(Two\)/);
-	await assert.rejects(render("bare text"), /expected element or props/);
+	await assert.rejects(render("bare text"), /text outside an element; wrap it in one at 1:1/);
 });
 
 test("given a parsed JSON element tree, when rendering, then matches the same tree from JSX and rejects unknown tags and deep nesting by path", async () => {
@@ -158,6 +158,51 @@ test("given a parsed JSON element tree, when rendering, then matches the same tr
 	let deep = { type: "div", props: {} };
 	for (let level = 0; level < 70; level++) deep = { type: "div", props: { children: deep } };
 	await assert.rejects(render(deep), /nesting exceeds 64/);
+});
+
+test("given an HTML string with a style element, named images, and an HTML header, when rendering, then matches the same tree from JSX", async () => {
+	const logo = png(1, 1, 2, [0, 255, 0, 0]);
+	const mark = new TextEncoder().encode(
+		'<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
+	);
+	const html = `<!DOCTYPE html>
+<style>.total { font-weight: bold }</style>
+<main>
+  <img src="logo" alt="Acme" style="width: 40pt">
+  <img src=mark style="width: 20pt">
+  <p class="total">Total &euro;&nbsp;42</p>
+  <table>
+    <tr><td>a<td>b
+  </table>
+</main>`;
+	const cells = [jsx("td", { children: "a" }), jsx("td", { children: "b" })];
+	const jsxTree = jsxs("main", {
+		children: [
+			jsx("img", { src: logo, alt: "Acme", style: "width: 40pt" }),
+			jsx("img", { src: mark, style: "width: 20pt" }),
+			jsx("p", { className: "total", children: "Total € 42" }),
+			jsx("table", { children: jsx("tbody", { children: jsx("tr", { children: cells }) }) }),
+		],
+	});
+	assert.deepEqual(
+		await render(html, { images: { logo, mark }, header: "<p>Acme <b>Supply</b></p>" }),
+		await render(jsxTree, {
+			stylesheets: [".total { font-weight: bold }"],
+			header: jsxs("p", { children: ["Acme ", jsx("b", { children: "Supply" })] }),
+		}),
+	);
+	await assert.rejects(
+		render("<main>\n  <div>\n</main>"),
+		/<\/main> while <div> from 2:3 is open; close it first at 3:1/,
+	);
+	await assert.rejects(
+		render("<main></main>", { footer: "<p>a &c</p>" }),
+		/& starts no character reference; write &amp; at 1:6 in the footer HTML/,
+	);
+	await assert.rejects(
+		render("<img src=chart>", { images: { logo } }),
+		/src "chart" names no entry in the images option on <img> at 1:1/,
+	);
 });
 
 test("given registered regular and bold fonts, when fontFamily selects them, then embeds both TTF files", async () => {

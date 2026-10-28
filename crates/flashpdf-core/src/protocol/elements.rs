@@ -37,6 +37,10 @@ pub(super) struct Elements {
     /// Kind of the block receiving elements; 5 is the body.
     block: Option<u8>,
     roots: Vec<Node>,
+    /// Each block's nodes from an Html record, by block kind less one.
+    html: [Option<Vec<Node>>; 5],
+    /// The `images` entries an HTML `<img src>` may name.
+    pictures: HashMap<String, Picture>,
     open: Vec<Element>,
     bytes: usize,
 }
@@ -66,7 +70,13 @@ impl Elements {
         let Some(kind) = self.block else {
             return Ok(());
         };
-        let roots = std::mem::take(&mut self.roots);
+        let mut roots = std::mem::take(&mut self.roots);
+        if let Some(html) = self.html[usize::from(kind - 1)].take() {
+            if !roots.is_empty() {
+                return Err(ProtocolError::InvalidNesting);
+            }
+            roots = html;
+        }
         let compiler = self.compiler.as_mut().unwrap();
         let result = match kind {
             5 => compiler.body(&roots, self.outline),
@@ -140,6 +150,54 @@ impl Decoder {
                         .map_err(|message| ProtocolError::Message(message.into()))?;
                 }
                 elements.sheets.push(source);
+                Ok(())
+            }
+            Opcode::NamedImage if before_setup => {
+                let Some(bytes) = chunk(elements, code, payload)? else {
+                    return Ok(());
+                };
+                let mut cursor = Cursor::new(&bytes);
+                let name = cursor.utf8()?.to_owned();
+                let picture = match cursor.take(1)?[0] {
+                    0 => {
+                        let handle = cursor.u16()?;
+                        cursor.done()?;
+                        if usize::from(handle) >= self.commands.staged.len() {
+                            return Err(ProtocolError::UnknownImage);
+                        }
+                        Picture::Image(handle)
+                    }
+                    1 => Picture::Drawing(drawing(&bytes[4 + name.len() + 1..])?),
+                    _ => return Err(ProtocolError::InvalidValue("image kind")),
+                };
+                if name.is_empty() || elements.pictures.insert(name, picture).is_some() {
+                    return Err(ProtocolError::InvalidValue("image name"));
+                }
+                Ok(())
+            }
+            Opcode::Html if before_setup => {
+                let Some(bytes) = chunk(elements, code, payload)? else {
+                    return Ok(());
+                };
+                count(elements, bytes.len())?;
+                let (&kind, source) = bytes.split_first().ok_or(ProtocolError::TruncatedRecord)?;
+                let slot = match kind {
+                    0 => 4,
+                    1..=4 => usize::from(kind - 1),
+                    _ => return Err(ProtocolError::InvalidValue("block")),
+                };
+                let source = std::str::from_utf8(source).map_err(|_| ProtocolError::InvalidUtf8)?;
+                let document =
+                    crate::html::parse(source, &elements.pictures).map_err(|message| {
+                        ProtocolError::Message(match BLOCKS.get(slot) {
+                            Some(option) => format!("{message} in the {option} HTML"),
+                            None => message,
+                        })
+                    })?;
+                if elements.html[slot].replace(document.nodes).is_some() {
+                    return Err(ProtocolError::InvalidNesting);
+                }
+                elements.sheets.extend(document.styles);
                 Ok(())
             }
             Opcode::Setup if before_setup && elements.partial.is_none() => self.setup(payload),

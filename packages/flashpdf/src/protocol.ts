@@ -17,6 +17,8 @@ const opcode = {
 	close: 32,
 	drawing: 33,
 	strictStylesheet: 34,
+	html: 35,
+	namedImage: 36,
 	end: 255,
 } as const;
 /** Open record flags: which attributes follow the classes. */
@@ -76,6 +78,30 @@ export class ProtocolWriter {
 	/** A strict sheet gets the core's full check, as `stylesheet()` promises. */
 	stylesheet(source: string, strict: boolean) {
 		this.long(strict ? opcode.strictStylesheet : opcode.stylesheet, source);
+	}
+
+	/** Kind 0 is the body, 1 to 4 the furniture, as in `block`. */
+	html(kind: number, source: string) {
+		const bytes = this.encoder.encode(source);
+		const value = new Uint8Array(bytes.length + 1);
+		value[0] = kind;
+		value.set(bytes, 1);
+		this.long(opcode.html, value);
+	}
+
+	/** An `images` entry: its name, then 0 and a staged raster handle or 1 and a drawing. */
+	image(name: string, picture: { src?: Uint8Array | undefined; drawing?: Drawing | undefined }) {
+		const label = this.encoder.encode(name);
+		const shape = picture.drawing && drawing(picture.drawing);
+		const value = new Uint8Array(5 + label.length + (shape ? shape.length : 2));
+		const view = new DataView(value.buffer);
+		view.setUint32(0, label.length, true);
+		value.set(label, 4);
+		if (shape) {
+			value[4 + label.length] = 1;
+			value.set(shape, 5 + label.length);
+		} else view.setUint16(5 + label.length, this.stage(picture.src!), true);
+		this.long(opcode.namedImage, value);
 	}
 
 	setup(outline: boolean, page: PageOptions) {

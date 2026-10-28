@@ -77,6 +77,27 @@ const tree: ElementData = JSON.parse(
 const pdf = await render(tree);
 ```
 
+## HTML
+
+A string passed to `render`, or to `header`, `footer`, `firstPageHeader`, and `firstPageFooter`, is HTML. The Rust core parses it into the same elements as JSX, so the same tags, CSS, and checks apply. Each `<style>` joins the cascade after `stylesheets`, and an `<img src>` names an entry in the `images` option, which holds PNG, JPEG, or SVG bytes. FlashPDF loads nothing from the network or the file system.
+
+```ts
+const pdf = await render(
+  `<!DOCTYPE html>
+  <style>.total { font-weight: bold }</style>
+  <main>
+    <img src="logo" alt="Acme" style="width: 90pt">
+    <table>
+      <tr><td>Consulting<td>EUR 1200.00
+      <tr class="total"><td>Total<td>EUR 1200.00
+    </table>
+  </main>`,
+  { images: { logo }, footer: "<p>Acme Supply Co. &middot; Oslo</p>" },
+);
+```
+
+The parser is strict. It accepts what HTML lets an author leave out: the end tags of `p`, `li`, `dt`, `dd`, table sections, rows, and cells, an implied `tbody`, the `html`, `head`, and `body` wrappers, comments, and `<meta charset="utf-8">`. Markup a browser would repair silently rejects with its line and column instead: a misnested or missing end tag, `<div/>`, a bare `&`, an unknown character reference, element, or attribute, and inline `<svg>` (pass the SVG in `images`). Attributes use their HTML names: `class`, `colspan`, `rowspan`, `start`, `reversed`, `value`, `dir`, `href`, `alt`, and `data-bookmark`, where an empty value leaves the heading out of the outline. `href` is used as written, so it must already be a normalised absolute `http`, `https`, or `mailto` URL, or `#id`. Named character references cover the common typographic set, such as `&nbsp;`, `&euro;`, and `&mdash;`; any other character takes a numeric reference.
+
 ## Install
 
 Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
@@ -121,7 +142,7 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 
 | Export       | Signature                                                                                 | Notes                                                                                                 |
 | ------------ | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `render`     | `(element: Element \| Iterable<Element>, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements. Loads the WASM module once per process. |
+| `render`     | `(element: Element \| Iterable<Element> \| string, options?: RenderOptions) => Promise<Uint8Array>` | The root component must resolve to one or more host elements; a string is HTML. Loads the engine once per process. |
 | `stylesheet` | `(source: string) => string`                                                              | Returns CSS unchanged; the first `render` that uses it checks every rule, matched or not.                          |
 | `PageNumber` | `() => Element`                                                                           | Resolves to the current page number inside a header or footer.                                        |
 | `TotalPages` | `() => Element`                                                                           | Resolves to the final page count inside a header or footer.                                           |

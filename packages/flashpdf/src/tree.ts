@@ -308,7 +308,7 @@ function bookmark(value: unknown, where: string): { bookmark?: string | false } 
 	return { bookmark: value as string | false };
 }
 
-function image(input: Record<string, unknown>, where: string, chain: string, depth: number) {
+export function image(input: Record<string, unknown>, where: string, chain: string, depth: number) {
 	const { src, alt } = input;
 	if (typeof src === "string")
 		throw new Error(

@@ -1,11 +1,11 @@
-import { props } from "./assert.js";
+import { object, props } from "./assert.js";
 import { asError, type Backend, Binary, type Engine } from "./binary.js";
 import { strict } from "./css.js";
 import type { Edges, Element, Length } from "./element.js";
 import { registerFonts } from "./fonts.js";
 import { pageOptions } from "./page.js";
 import { ProtocolWriter } from "./protocol.js";
-import { resolveTree, type Node } from "./tree.js";
+import { image, resolveTree, type Node } from "./tree.js";
 
 /** A family without an italic face for a weight slants its upright face instead. */
 export type EmbeddedFont = {
@@ -37,15 +37,17 @@ export type RenderOptions = {
 	/** One to four lengths in CSS shorthand order, or each side. */
 	margin?: Edges | { top: Length; right: Length; bottom: Length; left: Length } | undefined;
 	stylesheets?: readonly string[] | undefined;
+	/** PNG, JPEG, or SVG bytes by the name an HTML `<img src>` gives. */
+	images?: Readonly<Record<string, Uint8Array>> | undefined;
 	fonts?: readonly EmbeddedFont[] | undefined;
 	/** Paints on every page above the body; its height counts each page number as five digits. */
-	header?: Element | Iterable<Element> | undefined;
+	header?: Element | Iterable<Element> | string | undefined;
 	/** Paints on every page below the body; its height counts each page number as five digits. */
-	footer?: Element | Iterable<Element> | undefined;
+	footer?: Element | Iterable<Element> | string | undefined;
 	/** Replaces `header` on the first page; `null` leaves the first page without one. */
-	firstPageHeader?: Element | Iterable<Element> | null | undefined;
+	firstPageHeader?: Element | Iterable<Element> | string | null | undefined;
 	/** Replaces `footer` on the first page; `null` leaves the first page without one. */
-	firstPageFooter?: Element | Iterable<Element> | null | undefined;
+	firstPageFooter?: Element | Iterable<Element> | string | null | undefined;
 	metadata?: PdfMetadata | undefined;
 	tagged?: boolean | undefined;
 	/** Bookmarks every `h1` to `h6` in document order, nested by level, and opens the outline panel. */
@@ -73,7 +75,8 @@ const FURNITURE = ["header", "footer", "firstPageHeader", "firstPageFooter"] as 
 
 export function createRenderer(loadBackend: () => Promise<Backend>) {
 	return async function render(
-		document: Element | Iterable<Element>,
+		/** A string is HTML. */
+		document: Element | Iterable<Element> | string,
 		options?: RenderOptions,
 	): Promise<Uint8Array<ArrayBuffer>> {
 		const p = props(options ?? {}, [
@@ -81,6 +84,7 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 			"orientation",
 			"margin",
 			"stylesheets",
+			"images",
 			"fonts",
 			...FURNITURE,
 			"metadata",
@@ -126,18 +130,29 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 			writer.header();
 			writer.families(fonts);
 			for (const sheet of stylesheets) writer.stylesheet(sheet, strict.get(sheet) === false);
+			for (const [name, src] of Object.entries(object(p.images ?? {}))) {
+				if (!(src instanceof Uint8Array) || !src.byteLength)
+					throw new Error(
+						`images.${name} must be a non-empty Uint8Array of PNG, JPEG, or SVG bytes`,
+					);
+				writer.image(name, image({ src }, ` in images.${name}`, "", 0));
+			}
+			// HTML goes before setup, since its <style> sheets join the cascade.
+			for (const [index, option] of FURNITURE.entries())
+				if (typeof p[option] === "string") writer.html(index + 1, p[option]);
+			if (typeof document === "string") writer.html(0, document);
 			writer.setup(p.outline === true, page);
 			writer.metadata(metadata, p.tagged === true);
 			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 			writer.flush();
 			for (const sheet of stylesheets) if (strict.has(sheet)) strict.set(sheet, true);
-			const tree = await resolveTree(document);
+			const tree = typeof document === "string" ? [] : await resolveTree(document);
 			if (tree.some((node) => node.kind !== "element"))
 				throw new Error("expected element or props");
 			const blocks: [number, readonly Node[]][] = [];
 			for (const [index, option] of FURNITURE.entries()) {
 				if (p[option] === undefined) continue;
-				const nodes = await resolveTree(p[option]);
+				const nodes = typeof p[option] === "string" ? [] : await resolveTree(p[option]);
 				if (nodes.some((node) => node.kind !== "element"))
 					throw new Error(`${option} expects elements; wrap its text in one`);
 				blocks.push([index + 1, nodes]);
