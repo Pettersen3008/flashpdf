@@ -18,8 +18,10 @@ const BACKGROUND: Prop = prop!("background");
 const TEXT_DECORATION: Prop = prop!("textDecoration");
 const LIST_STYLE: Prop = prop!("listStyle");
 /// Each logical shorthand with its start and end sides, for horizontal left-to-right text:
-/// inline runs from left to right, block from top to bottom.
-const LOGICAL: [(Prop, [Prop; 2]); 4] = [
+/// inline runs from left to right, block from top to bottom. `gap` sets the row gap, then
+/// the column gap, the same way.
+const LOGICAL: [(Prop, [Prop; 2]); 5] = [
+    (prop!("gap"), [prop!("rowGap"), prop!("columnGap")]),
     (prop!("marginInline"), [MARGINS[3], MARGINS[1]]),
     (prop!("marginBlock"), [MARGINS[0], MARGINS[2]]),
     (prop!("paddingInline"), [PADDINGS[3], PADDINGS[1]]),

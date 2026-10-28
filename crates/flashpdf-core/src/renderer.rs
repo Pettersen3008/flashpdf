@@ -383,6 +383,36 @@ impl Renderer {
                 self.page.validate_block(spacer.height)?;
                 return self.hold(Held::Space(spacer.height));
             }
+            // Without a height to share out, a wrapping row is its rows stacked, so it breaks
+            // between them.
+            Element::Flex(node)
+                if node.style.wrap
+                    && node.style.min_height == Pt::ZERO
+                    && node.style.max_height.is_none() =>
+            {
+                let mut rows = LayoutEngine::new(&self.fonts, &self.images)
+                    .flex_rows(node, self.column.width)?;
+                for index in 0..rows.rows.len() {
+                    if index > 0 {
+                        self.page.validate_block(node.style.row_gap)?;
+                        self.hold(Held::Space(node.style.row_gap))?;
+                    }
+                    self.begin(false)?;
+                    self.layout.clear();
+                    let height = LayoutEngine::new(&self.fonts, &self.images).layout_flex_row(
+                        node,
+                        &mut rows,
+                        index,
+                        self.column,
+                        &mut self.layout,
+                    )?;
+                    let layout = std::mem::take(&mut self.layout);
+                    self.mark_used(&layout);
+                    self.place(element, layout, height)?;
+                    self.chained = false;
+                }
+                return Ok(());
+            }
             _ => {}
         }
         self.begin(false)?;

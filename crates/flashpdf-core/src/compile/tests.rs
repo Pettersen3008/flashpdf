@@ -1389,6 +1389,46 @@ fn given_more_than_10000_bookmarked_headings_when_compiling_the_body_then_reject
 }
 
 #[test]
+fn given_flex_wrap_and_a_two_value_gap_when_compiling_then_the_flex_record_wraps_with_the_row_gap_first(
+) {
+    let records = records(vec![node(
+        "div",
+        "display: flex; flex-wrap: wrap; gap: 4pt 8pt; align-content: center",
+        vec![node("p", "", vec![text("a")])],
+    )]);
+    let Record::FlexStart(flex, _) = &records[0] else {
+        panic!("{records:?}");
+    };
+    assert_eq!(
+        (flex.wrap, flex.row_gap, flex.gap, flex.align_content),
+        (true, 4.0, 8.0, 3)
+    );
+}
+
+#[test]
+fn given_wrap_reverse_or_a_wrapping_column_when_compiling_then_rejects_with_the_reason() {
+    let item = || vec![node("p", "", vec![text("a")])];
+    let reverse = rejects(vec![node(
+        "div",
+        "display: flex; flex-wrap: wrap-reverse",
+        item(),
+    )]);
+    assert!(
+        reverse.contains("flex-wrap: wrap-reverse is not supported"),
+        "{reverse}"
+    );
+    let column = rejects(vec![node(
+        "div",
+        "display: flex; flex-direction: column; flex-wrap: wrap",
+        item(),
+    )]);
+    assert!(
+        column.contains("wrap in a flex column is not supported"),
+        "{column}"
+    );
+}
+
+#[test]
 fn given_justify_content_on_a_row_when_compiling_then_emits_one_flex_record_and_keeps_each_items_width_on_its_own_box(
 ) {
     let records = records(vec![node(
@@ -1404,9 +1444,12 @@ fn given_justify_content_on_a_row_when_compiling_then_emits_one_flex_record_and_
         Record::FlexStart(
             Flex {
                 column: false,
+                wrap: false,
                 justify: 3,
                 align: 4,
+                align_content: 0,
                 gap: 0.0,
+                row_gap: 0.0,
                 min_height: 0.0,
                 max_height: None
             },

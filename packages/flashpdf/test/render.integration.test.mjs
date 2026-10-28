@@ -1171,7 +1171,7 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 			/unsupported border style: double \(only none, solid, dashed, and dotted are drawn\) on <main>/,
 		],
 		[{ opacity: "half" }, /invalid opacity: half on <main>/],
-		[{ flexWrap: "wrap" }, /flex-wrap: wrap is not supported; flex items stay on one line/],
+		[{ flexWrap: "wrap-reverse" }, /flex-wrap: wrap-reverse is not supported/],
 		[{ display: "flex", alignItems: "baseline" }, /alignItems: baseline is not supported/],
 		[
 			{ boxDecorationBreak: "clone" },
@@ -1186,7 +1186,7 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 		[{ display: "grid" }, /invalid display/],
 		[
 			{ justifyContent: "center" },
-			/justify-content and align-items apply only to a flex container on <main>/,
+			/justify-content, align-items, align-content, and flex-wrap apply only to a flex container on <main>/,
 		],
 	])
 		await assert.rejects(

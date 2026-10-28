@@ -374,25 +374,24 @@ impl Commands {
             }
             Opcode::FlexStart => {
                 let flags = cursor.take(1)?[0];
-                let justify = match cursor.take(1)?[0] {
-                    0 => Justify::Start,
-                    1 => Justify::End,
-                    2 => Justify::Center,
-                    3 => Justify::SpaceBetween,
-                    4 => Justify::SpaceAround,
-                    5 => Justify::SpaceEvenly,
-                    _ => return Err(ProtocolError::InvalidValue("justify-content")),
-                };
+                let justify = justify_code(cursor.take(1)?[0])?;
+                // Bit 0 is a column, bit 1 a wrapping row; a column never wraps.
+                if flags > 2 {
+                    return Err(ProtocolError::InvalidValue("flex flags"));
+                }
                 let style = Flex {
-                    column: match flags {
-                        0 | 1 => flags == 1,
-                        _ => return Err(ProtocolError::InvalidValue("flex flags")),
-                    },
+                    column: flags == 1,
+                    wrap: flags == 2,
                     justify,
                     align: cursor.alignment()?.unwrap_or(Align::Stretch),
                     gap: pt(cursor.nonnegative_f32("flex gap")?)?,
                     min_height: pt(cursor.nonnegative_f32("flex min height")?)?,
                     max_height: cursor.height()?,
+                    row_gap: pt(cursor.nonnegative_f32("flex row gap")?)?,
+                    align_content: match cursor.take(1)?[0] {
+                        0 => None,
+                        code => Some(justify_code(code - 1)?),
+                    },
                 };
                 let count = usize::from(cursor.u16()?);
                 if count == 0 || count > crate::command::MAX_COLUMNS {
@@ -1071,4 +1070,16 @@ fn valid_mime(value: &str) -> bool {
         && value
             .split_once('/')
             .is_some_and(|(kind, subtype)| token(kind) && token(subtype))
+}
+
+fn justify_code(code: u8) -> Result<Justify, ProtocolError> {
+    Ok(match code {
+        0 => Justify::Start,
+        1 => Justify::End,
+        2 => Justify::Center,
+        3 => Justify::SpaceBetween,
+        4 => Justify::SpaceAround,
+        5 => Justify::SpaceEvenly,
+        _ => return Err(ProtocolError::InvalidValue("justify-content")),
+    })
 }

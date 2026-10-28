@@ -202,7 +202,22 @@ const ALIGN: [&str; 7] = [
     "end",
     "center",
 ];
-const KEYWORDS: [(Prop, &[&str]); 4] = [
+const KEYWORDS: [(Prop, &[&str]); 5] = [
+    (
+        prop!("alignContent"),
+        &[
+            "normal",
+            "stretch",
+            "flex-start",
+            "start",
+            "flex-end",
+            "end",
+            "center",
+            "space-between",
+            "space-around",
+            "space-evenly",
+        ],
+    ),
     (
         prop!("justifyContent"),
         &[
@@ -346,16 +361,16 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
     if let Some(value) = result.get(prop!("borderSpacing")) {
         border_spacing(value)?;
     }
-    if let Some(value) = result
-        .get(prop!("flexWrap"))
-        .filter(|value| !value.is("nowrap"))
-    {
-        return Err(format!(
-            "flex-wrap: {value} is not supported; flex items stay on one line, so size them to fit"
-        )
-        .into());
+    match result.get(prop!("flexWrap")) {
+        Some(value) if value.is("wrap-reverse") => return Err(
+            "flex-wrap: wrap-reverse is not supported; put the last row's items first and use wrap"
+                .into(),
+        ),
+        // `nowrap` is the initial value, so it reads as absent.
+        Some(value) if value.is("nowrap") => result.remove(prop!("flexWrap")),
+        Some(value) if !value.is("wrap") => return Err(format!("invalid flexWrap: {value}").into()),
+        _ => {}
     }
-    result.remove(prop!("flexWrap"));
     for (prop, allowed) in KEYWORDS {
         if let Some(value) = result
             .get(prop)
@@ -400,8 +415,10 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
         }
     }
     let get = |name: Prop| result.get(name);
-    if let Some(value) = get(prop!("gap")) {
-        point(value, 12.0, false)?;
+    for prop in [prop!("rowGap"), prop!("columnGap")] {
+        if let Some(value) = get(prop) {
+            point(value, 12.0, false)?;
+        }
     }
     if let Some(value) = get(prop!("fontSize")) {
         point(value, 12.0, true)?;

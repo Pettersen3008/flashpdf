@@ -415,13 +415,19 @@ pub enum Align {
     Center,
 }
 
-/// A single-line CSS flex container.
+/// A CSS flex container. Only a row wraps.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Flex {
     pub column: bool,
+    pub wrap: bool,
     pub justify: Justify,
     pub align: Align,
+    /// `align-content`; `None` is `stretch` and `normal`.
+    pub align_content: Option<Justify>,
+    /// Between items along the main axis.
     pub gap: Pt,
+    /// Between the rows of a wrapping row.
+    pub row_gap: Pt,
     /// Bounds of the container's inner height; equal when the height is definite.
     pub min_height: Pt,
     pub max_height: Option<Pt>,

@@ -6,7 +6,7 @@ import { isMarkup, markup, vector, type Drawing } from "./svg.js";
 /** The style keys the core supports (css/properties.rs); it rejects any other key by name. */
 const supported = new Set(
 	`
-	display flexDirection flexWrap justifyContent alignItems alignSelf flex flexGrow flexShrink
+	display flexDirection flexWrap justifyContent alignItems alignSelf alignContent flex flexGrow flexShrink
 	flexBasis width minWidth maxWidth height minHeight maxHeight boxSizing margin marginTop
 	marginRight marginBottom marginLeft padding paddingTop paddingRight paddingBottom paddingLeft
 	border borderWidth borderColor borderTop borderRight borderBottom borderLeft borderStyle
@@ -14,7 +14,7 @@ const supported = new Set(
 	borderRightColor borderBottomColor borderLeftColor borderTopStyle borderRightStyle
 	borderBottomStyle borderLeftStyle borderRadius borderTopLeftRadius borderTopRightRadius
 	borderBottomRightRadius borderBottomLeftRadius opacity marginInline marginBlock paddingInline
-	paddingBlock background backgroundColor gap fontSize fontFamily fontWeight fontStyle
+	paddingBlock background backgroundColor gap rowGap columnGap fontSize fontFamily fontWeight fontStyle
 	fontKerning textAlign direction textTransform textDecoration textDecorationColor whiteSpace verticalAlign
 	listStyle listStyleType listStylePosition color lineHeight letterSpacing wordSpacing
 	breakBefore breakAfter breakInside borderCollapse borderSpacing orphans widows`
