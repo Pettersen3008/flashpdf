@@ -1,7 +1,9 @@
 use super::super::{Prop, Value};
 use super::color::{color, Rgb};
-use super::length::{corner, dimension, point, Dimension};
-use super::{Style, BORDER_COLORS, BORDER_STYLES, BORDER_WIDTHS, MARGINS, PADDINGS, RADII};
+use super::length::{corner, dimension, inset, point, Dimension};
+use super::{
+    z_index, Style, BORDER_COLORS, BORDER_STYLES, BORDER_WIDTHS, INSETS, MARGINS, PADDINGS, RADII,
+};
 use crate::css::Message;
 
 /// `margin` or `padding` in points, top first. An `auto` margin is zero here; `box_size` flags it.
@@ -22,7 +24,7 @@ pub fn edges(s: &Style, name: &str, parent: f64) -> Result<[f64; 4], Message> {
 
 /// Width-like sizes are points (kind 1) or percent of the container's width (kind 2). Heights
 /// are points, percents already resolved against the parent's fixed height.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Size {
     pub border_box: bool,
     /// One bit per `auto` margin: top 1, right 2, bottom 4, left 8.
@@ -33,6 +35,40 @@ pub struct Size {
     pub height: Option<f64>,
     pub min_height: Option<f64>,
     pub max_height: Option<f64>,
+    pub position: Option<Position>,
+}
+
+/// CSS `position` other than `static`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Position {
+    /// 1 relative, 2 absolute, 3 fixed.
+    pub kind: u8,
+    /// Top, right, bottom, left; None is `auto`.
+    pub inset: [Option<Dimension>; 4],
+    /// None is `auto`.
+    pub z: Option<i32>,
+}
+
+/// The element's `position`, insets, and `z-index`, or None when it is static, which ignores them.
+pub fn position(s: &Style, size: f64) -> Result<Option<Position>, Message> {
+    let kind = match s.get(prop!("position")) {
+        Some(value) if value.is("relative") => 1,
+        Some(value) if value.is("absolute") => 2,
+        Some(value) if value.is("fixed") => 3,
+        _ => return Ok(None),
+    };
+    let mut sides = [None; 4];
+    for (side, prop) in sides.iter_mut().zip(INSETS) {
+        if let Some(value) = s.get(prop) {
+            *side = inset(value, size, prop.name())?;
+        }
+    }
+    let z = s.get(prop!("zIndex")).map(z_index).transpose()?;
+    Ok(Some(Position {
+        kind,
+        inset: sides,
+        z,
+    }))
 }
 
 /// The box's sizes and auto margins, or None when it has none. `height` is the parent's
@@ -81,6 +117,7 @@ pub fn box_size(s: &Style, height: Option<f64>, width: bool) -> Result<Option<Si
         height: vertical(prop!("height"))?,
         min_height: vertical(prop!("minHeight"))?,
         max_height: vertical(prop!("maxHeight"))?,
+        position: None,
     };
     let sized = [size.width, size.min_width, size.max_width]
         .iter()

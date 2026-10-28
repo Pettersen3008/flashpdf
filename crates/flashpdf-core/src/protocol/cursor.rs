@@ -1,7 +1,7 @@
 use crate::win_ansi::valid;
 use crate::{
-    Align, Direction, Fraction, ImageSize, Marker, Percent, Pt, Rgb, TextAlign, Typography,
-    VerticalAlign,
+    Align, Direction, Edges, Fraction, ImageSize, Inset, Marker, Percent, Position, PositionKind,
+    Pt, Rgb, TextAlign, Typography, VerticalAlign,
 };
 
 /// Letter and word spacing in points, either sign; the largest page side.
@@ -214,6 +214,43 @@ impl<'a> Cursor<'a> {
             2 => ImageSize::Percent(Percent::new(self.positive_f32(name)?)?),
             _ => return Err(ProtocolError::InvalidValue(name)),
         })
+    }
+
+    /// A kind, a `z-index` behind a presence flag, and four insets, top first.
+    pub(super) fn position(&mut self) -> Result<Position, ProtocolError> {
+        let kind = match self.take(1)?[0] {
+            1 => PositionKind::Relative,
+            2 => PositionKind::Absolute,
+            3 => PositionKind::Fixed,
+            _ => return Err(ProtocolError::InvalidValue("position")),
+        };
+        let z = match self.take(1)?[0] {
+            0 => None,
+            1 => Some(i32::from_le_bytes(self.take(4)?.try_into().unwrap())),
+            _ => return Err(ProtocolError::InvalidValue("z-index")),
+        };
+        let mut side = || -> Result<Inset, ProtocolError> {
+            let kind = self.take(1)?[0];
+            if kind == 0 {
+                return Ok(Inset::Auto);
+            }
+            let value = f32::from_le_bytes(self.take(4)?.try_into().unwrap());
+            if !value.is_finite() || value.abs() > 14_400.0 {
+                return Err(ProtocolError::InvalidValue("inset"));
+            }
+            match kind {
+                1 => Ok(Inset::Points(value)),
+                2 => Ok(Inset::Percent(value)),
+                _ => Err(ProtocolError::InvalidValue("inset")),
+            }
+        };
+        let inset = Edges {
+            top: side()?,
+            right: side()?,
+            bottom: side()?,
+            left: side()?,
+        };
+        Ok(Position { kind, inset, z })
     }
 
     /// A height in points, read as a `size` that may not be a percent.

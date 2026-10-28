@@ -3034,3 +3034,190 @@ fn given_a_character_no_registered_font_has_when_rendered_then_rejects_naming_it
         RenderError::UnsupportedCharacter('\u{4e2d}')
     );
 }
+
+/// A filled box sized `width` by `height` with `position`, insets top first in points, and `z`.
+fn placed<'a>(
+    kind: super::PositionKind,
+    inset: [Option<f32>; 4],
+    z: Option<i32>,
+    size: Option<(f32, f32)>,
+) -> Command<'a> {
+    let side = |value: Option<f32>| value.map_or(super::Inset::Auto, super::Inset::Points);
+    Command::BoxStart {
+        style: super::BoxStyle {
+            border: Edges::all(Pt(0.0)),
+            background: Some(Rgb { r: 255, g: 0, b: 0 }),
+            ..bordered()
+        },
+        size: super::BoxSize {
+            width: size.map_or(super::ImageSize::Auto, |(width, _)| {
+                super::ImageSize::Fixed(Pt(width))
+            }),
+            height: size.map(|(_, height)| Pt(height)),
+            position: Some(super::Position {
+                kind,
+                inset: Edges {
+                    top: side(inset[0]),
+                    right: side(inset[1]),
+                    bottom: side(inset[2]),
+                    left: side(inset[3]),
+                },
+                z,
+            }),
+            ..super::BoxSize::AUTO
+        },
+    }
+}
+
+/// The text positioning operators of a content stream, in order.
+fn text_positions(content: &str) -> Vec<&str> {
+    content
+        .lines()
+        .filter(|line| line.ends_with("Td"))
+        .collect()
+}
+
+#[test]
+fn given_a_relative_box_when_rendered_then_it_paints_offset_after_the_flow_and_the_text_below_keeps_its_place(
+) {
+    use super::PositionKind::Relative;
+    let shifted = parsed(&[
+        placed(
+            Relative,
+            [Some(5.0), None, None, Some(7.0)],
+            None,
+            Some((20.0, 10.0)),
+        ),
+        Command::BoxEnd,
+        text("a"),
+    ]);
+    let still = parsed(&[
+        placed(Relative, [None; 4], None, Some((20.0, 10.0))),
+        Command::BoxEnd,
+        text("a"),
+    ]);
+    let (shifted, still) = (content(&shifted), content(&still));
+    // In flow the box spans y 40 to 50 from x 10; 7pt right and 5pt down moves it to 17, 35.
+    let rect = shifted.find("17 35 20 10 re").expect(&shifted);
+    assert!(rect > shifted.find("Td").unwrap(), "{shifted}");
+    assert_eq!(text_positions(&shifted), text_positions(&still));
+}
+
+#[test]
+fn given_absolute_boxes_in_a_relative_box_when_rendered_then_they_sit_against_its_padding_box() {
+    use super::PositionKind::{Absolute, Relative};
+    let pdf = parsed(&[
+        Command::BoxStart {
+            style: super::BoxStyle {
+                padding: Edges::all(Pt(2.0)),
+                background: None,
+                ..bordered()
+            },
+            size: super::BoxSize {
+                height: Some(Pt(24.0)),
+                position: Some(super::Position {
+                    kind: Relative,
+                    inset: Edges::all(super::Inset::Auto),
+                    z: None,
+                }),
+                ..super::BoxSize::AUTO
+            },
+        },
+        placed(
+            Absolute,
+            [None, Some(0.0), Some(0.0), None],
+            None,
+            Some((20.0, 10.0)),
+        ),
+        Command::BoxEnd,
+        placed(Absolute, [Some(0.0), None, None, Some(0.0)], None, None),
+        text("a"),
+        Command::BoxEnd,
+        Command::BoxEnd,
+    ]);
+    let content = content(&pdf);
+    // The 1pt border leaves a padding box from x 11 to 109 and y 49 down to 21; the second
+    // box shrinks to its text.
+    for rect in ["89 21 20 10 re", "11 37.500977 5.561 11.499023 re"] {
+        assert!(content.contains(rect), "{rect}: {content}");
+    }
+}
+
+#[test]
+fn given_an_absolute_box_without_a_positioned_ancestor_after_a_page_break_when_rendered_then_it_sits_in_the_page_area_of_that_page(
+) {
+    use super::PositionKind::Absolute;
+    let pdf = parsed(&[
+        text("a"),
+        Command::PageBreak,
+        text("b"),
+        placed(
+            Absolute,
+            [None, Some(0.0), Some(0.0), None],
+            None,
+            Some((20.0, 10.0)),
+        ),
+        Command::BoxEnd,
+    ]);
+    let pages: Vec<String> = pdf
+        .get_pages()
+        .values()
+        .map(|page| String::from_utf8(pdf.get_page_content(*page)).unwrap())
+        .collect();
+    assert!(!pages[0].contains(" re"), "{}", pages[0]);
+    assert!(pages[1].contains("90 10 20 10 re"), "{}", pages[1]);
+}
+
+#[test]
+fn given_positioned_boxes_with_z_indexes_when_rendered_then_they_paint_by_z_index_with_negative_ones_under_the_flow(
+) {
+    use super::PositionKind::Absolute;
+    let at = |left: f32, z: i32| {
+        [
+            placed(
+                Absolute,
+                [Some(0.0), None, None, Some(left)],
+                Some(z),
+                Some((10.0, 10.0)),
+            ),
+            Command::BoxEnd,
+        ]
+    };
+    let mut commands = vec![text("a")];
+    commands.extend(at(0.0, 2));
+    commands.extend(at(30.0, 1));
+    commands.extend(at(60.0, -1));
+    let content = content(&parsed(&commands));
+    let order: Vec<usize> = ["70 40 10 10 re", "Td", "40 40 10 10 re", "10 40 10 10 re"]
+        .iter()
+        .map(|needle| content.find(needle).expect(needle))
+        .collect();
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{content}");
+}
+
+#[test]
+fn given_a_fixed_box_when_rendered_across_two_pages_then_it_paints_in_the_page_area_of_each() {
+    use super::PositionKind::Fixed;
+    let Command::BoxStart { style, size } = placed(
+        Fixed,
+        [None, Some(0.0), Some(0.0), None],
+        None,
+        Some((10.0, 5.0)),
+    ) else {
+        unreachable!()
+    };
+    let mut renderer = super::Renderer::new(page());
+    renderer.add_fixed(vec![
+        crate::OwnedCommand::BoxStart(style, size),
+        crate::OwnedCommand::BoxEnd,
+    ]);
+    renderer
+        .push(&[text("a"), Command::PageBreak, text("b")])
+        .unwrap();
+    let pdf = lopdf::Document::load_mem(&renderer.finish().unwrap()).unwrap();
+    assert_eq!(pdf.get_pages().len(), 2);
+    for page in pdf.get_pages().values() {
+        let content = String::from_utf8(pdf.get_page_content(*page)).unwrap();
+        assert!(content.contains("100 10 10 5 re"), "{content}");
+    }
+}

@@ -1,25 +1,27 @@
 mod flex;
 mod output;
+mod position;
 mod row;
 mod text;
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use output::Marks;
 pub(crate) use output::{
-    Actual, Decoration, Gap, LayoutBuffer, Lift, PositionedBox, PositionedImage, Segment,
+    Actual, Decoration, Gap, Layer, LayoutBuffer, Lift, PositionedBox, PositionedImage, Segment,
     MARKER_SHAPE,
 };
 pub(crate) use row::table_width;
 
 use crate::document::{BoxNode, Element, ImageNode, Paragraph, Row, Table};
 use crate::font::FontBook;
-use crate::geometry::LayoutArea;
+use crate::geometry::{LayoutArea, Point};
 use crate::image::Image;
 use crate::layout::output::PositionedLine;
 use crate::{
-    BoxSize, BoxStyle, FontId, ImageSize, Pt, RenderError, Rgb, RunDecoration, TextAlign, TextRun,
-    VerticalAlign,
+    BoxSize, BoxStyle, FontId, ImageSize, Page, Pt, RenderError, Rgb, RunDecoration, TextAlign,
+    TextRun, VerticalAlign,
 };
 
 /// CSS reference pixels are 96 per inch; PDF points are 72.
@@ -71,11 +73,40 @@ impl From<LayoutError> for RenderError {
 pub(crate) struct LayoutEngine<'a> {
     fonts: &'a FontBook,
     images: &'a [Image],
+    /// The page area's width and height, the containing block of a box with no positioned ancestor.
+    page: (Pt, Pt),
+    /// Absolute and fixed boxes met in flow, so a containing block looks for its own only when
+    /// the count moved while its content laid out.
+    absolutes: Cell<usize>,
 }
 
 impl<'a> LayoutEngine<'a> {
-    pub(crate) fn new(fonts: &'a FontBook, images: &'a [Image]) -> Self {
-        Self { fonts, images }
+    pub(crate) fn new(fonts: &'a FontBook, images: &'a [Image], page: Page) -> Self {
+        Self {
+            fonts,
+            images,
+            page: (
+                page.width - page.margin.left - page.margin.right,
+                page.height - page.margin.top - page.margin.bottom,
+            ),
+            absolutes: Cell::new(0),
+        }
+    }
+
+    /// Lays out a block the page places, then the absolute and fixed boxes in it that have
+    /// no positioned ancestor, from the page area.
+    pub(crate) fn layout_root(
+        &self,
+        element: &Element<'_>,
+        area: LayoutArea,
+        output: &mut LayoutBuffer,
+    ) -> Result<Pt, LayoutError> {
+        let before = self.absolutes.get();
+        let height = self.layout(element, area, output)?;
+        if self.absolutes.get() != before {
+            self.place_absolutes(std::slice::from_ref(element), None, output)?;
+        }
+        Ok(height)
     }
 
     pub(crate) fn layout(
@@ -274,8 +305,22 @@ impl<'a> LayoutEngine<'a> {
         width: Option<Pt>,
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
+        match node.size.position {
+            None => Ok(self.block(node, node.size, area, width, output)?.0),
+            Some(position) => self.positioned(node, position, area, width, output),
+        }
+    }
+
+    /// Lays out a box with `size` for its own and returns its margin-box height and its border box.
+    fn block(
+        &self,
+        node: &BoxNode<'_>,
+        size: BoxSize,
+        area: LayoutArea,
+        width: Option<Pt>,
+        output: &mut LayoutBuffer,
+    ) -> Result<(Pt, Rect), LayoutError> {
         let style = node.style;
-        let size = node.size;
         let horizontal = style.margin.right
             + style.margin.left
             + style.padding.right
@@ -353,15 +398,23 @@ impl<'a> LayoutEngine<'a> {
         if overflows(height - content) {
             return Err(LayoutError::ContentOverflow);
         }
+        let origin = area.origin.translated(left, style.margin.top);
         if let Some(index) = paint {
             output.boxes[index] = PositionedBox {
-                origin: area.origin.translated(left, style.margin.top),
+                origin,
                 width,
                 height: Pt(height),
                 style,
             };
         }
-        Ok(style.margin.top + Pt(height) + style.margin.bottom)
+        Ok((
+            style.margin.top + Pt(height) + style.margin.bottom,
+            Rect {
+                origin,
+                width,
+                height: Pt(height),
+            },
+        ))
     }
 
     /// Lays out block children top to bottom. Rows among them share row spans,
@@ -425,7 +478,9 @@ impl<'a> LayoutEngine<'a> {
                 height: cell_height,
                 rows: cell.rows.saturating_sub(1),
                 align: cell.align,
-                painted: matches!(&cell.content, Element::Box(node) if painted(&node.style)),
+                // A positioned cell box paints in its own layer, which does not stretch.
+                painted: matches!(&cell.content, Element::Box(node)
+                    if painted(&node.style) && node.size.position.is_none()),
                 start,
                 end: output.marks(),
             };
@@ -485,6 +540,14 @@ impl<'a> LayoutEngine<'a> {
         }
         Ok(height)
     }
+}
+
+/// A box's border box in layout coordinates, y down.
+#[derive(Clone, Copy)]
+struct Rect {
+    origin: Point,
+    width: Pt,
+    height: Pt,
 }
 
 /// A cell laid out before its row height is known; `rows` counts the rows a span still covers.

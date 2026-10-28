@@ -920,6 +920,28 @@ function pageContents(pdf, name, count, ...flags) {
 	return parsed.stdout.split("\f");
 }
 
+test("given a fixed stamp and an absolute badge in a relative card, when rendering two pages, then the stamp paints on both and the badge once", async () => {
+	const pdf = await render(
+		jsx("main", {
+			children: [
+				jsx("div", {
+					style: { position: "fixed", right: 0, bottom: 0 },
+					children: jsx("p", { style: { margin: 0 }, children: "Draft" }),
+				}),
+				jsxs("div", {
+					style: { position: "relative", height: 40 },
+					children: [
+						"Card",
+						jsx("span", { style: { position: "absolute", top: 0, right: 0 }, children: "Paid" }),
+					],
+				}),
+				jsx("p", { style: { breakBefore: "page" }, children: "Next" }),
+			],
+		}),
+	);
+	assert.deepEqual(pageContents(pdf, "positioned", 2), ["Card\nPaid\nDraft", "Next\nDraft"]);
+});
+
 // A4 with 36pt margins has 770pt of body, and a 12pt Helvetica line is 11.1pt tall.
 const lines = (...texts) =>
 	jsx("p", { children: texts.flatMap((text, index) => (index ? [jsx("br", {}), text] : [text])) });
@@ -1249,6 +1271,14 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 		],
 		[{ orphans: 0 }, /invalid orphans: 0 \(use a whole number of lines from 1\) on <main>/],
 		[{ zoom: 2 }, /unsupported style property: zoom on <main>/],
+		[
+			{ position: "sticky" },
+			/position: sticky is not supported \(a PDF does not scroll; use relative or static\) on <main>/,
+		],
+		[
+			{ position: "absolute", top: 0 },
+			/an absolute or fixed box needs top or bottom, and left or right/,
+		],
 		[{ display: "grid" }, /invalid display/],
 		[
 			{ justifyContent: "center" },

@@ -380,6 +380,34 @@ pub struct BoxSize {
     pub border_box: bool,
     /// One bit per `auto` margin in `Edges` order: top 1, right 2, bottom 4, left 8.
     pub auto_margin: u8,
+    /// None is `position: static`.
+    pub position: Option<Position>,
+}
+
+/// A `top`, `right`, `bottom`, or `left` offset; `Percent` is of the containing block.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Inset {
+    Auto,
+    Points(f32),
+    Percent(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PositionKind {
+    /// Offset from its place in flow, which it keeps.
+    Relative,
+    /// Out of flow, in the padding box of the nearest positioned ancestor or the page area.
+    Absolute,
+    /// Out of flow, in the page area of every page.
+    Fixed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Position {
+    pub kind: PositionKind,
+    pub inset: Edges<Inset>,
+    /// None is `z-index: auto`.
+    pub z: Option<i32>,
 }
 
 impl BoxSize {
@@ -392,6 +420,7 @@ impl BoxSize {
         max_height: None,
         border_box: false,
         auto_margin: 0,
+        position: None,
     };
 }
 

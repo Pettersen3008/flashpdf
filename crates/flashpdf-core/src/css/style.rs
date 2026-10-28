@@ -12,15 +12,15 @@ mod length;
 mod list;
 mod normalize;
 
-pub use boxes::{box_size, box_style, radius_of, Box};
+pub use boxes::{box_size, box_style, position, radius_of, Box, Position, Size};
 pub use color::{color, Rgb};
 pub use decoration::{decoration, decoration_color};
 pub use font::{
     font, slant, stretch, variations, weight, Font, FontSlots, Slant, HELVETICA, OBLIQUE,
 };
 pub use length::{
-    corner, dimension, edge_values, flex_basis, line_height, opacity, point, spacing, Dimension,
-    LineHeight,
+    corner, dimension, edge_values, flex_basis, inset, line_height, opacity, point, spacing,
+    Dimension, LineHeight,
 };
 pub use list::{counter, list_style_position, list_style_type, SHAPES};
 
@@ -101,6 +101,7 @@ pub(crate) const BORDER_STYLES: [Prop; 4] = [
     prop!("borderBottomStyle"),
     prop!("borderLeftStyle"),
 ];
+pub(crate) const INSETS: [Prop; 4] = [prop!("top"), prop!("right"), prop!("bottom"), prop!("left")];
 /// Clockwise from the top left.
 pub(crate) const RADII: [Prop; 4] = [
     prop!("borderTopLeftRadius"),
@@ -180,6 +181,26 @@ pub fn transform(value: &Value) -> Result<Transform, Message> {
 }
 
 /// `border-spacing` as one or two lengths; true when either is nonzero.
+/// A `z-index` integer, capped to the engine's 32 bits.
+pub fn z_index(value: &Value) -> Result<i32, Message> {
+    let number = match value {
+        Value::Number(number) => *number,
+        Value::Text(text) => {
+            let digits = js_trim(text);
+            let unsigned = digits.strip_prefix(['-', '+']).unwrap_or(digits);
+            if unsigned.is_empty() || !unsigned.bytes().all(|b| b.is_ascii_digit()) {
+                f64::NAN
+            } else {
+                js_parse(digits)
+            }
+        }
+    };
+    if !number.is_finite() || number.trunc() != number {
+        return Err(format!("invalid zIndex: {value} (use auto or a whole number)").into());
+    }
+    Ok(number.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32)
+}
+
 pub fn border_spacing(value: &Value) -> Result<bool, Message> {
     let lengths = match value {
         Value::Number(_) => vec![value.clone()],
@@ -327,6 +348,34 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
             .into());
         } else if !absent_or(Some(value), allowed) {
             return Err(format!("invalid {}", prop.name()).into());
+        }
+    }
+    match result.get(prop!("position")) {
+        Some(value) if value.is("sticky") => {
+            return Err(
+                "position: sticky is not supported (a PDF does not scroll; use relative or static)"
+                    .into(),
+            )
+        }
+        // `static` is the initial value, so it reads as absent.
+        Some(value) if value.is("static") => result.remove(prop!("position")),
+        Some(value) if !absent_or(Some(value), &["relative", "absolute", "fixed"]) => {
+            return Err(format!("invalid position: {value}").into())
+        }
+        _ => {}
+    }
+    for prop in INSETS {
+        if let Some(value) = result.get(prop) {
+            if inset(value, 12.0, prop.name())?.is_none() {
+                result.remove(prop);
+            }
+        }
+    }
+    if let Some(value) = result.get(prop!("zIndex")) {
+        if value.is("auto") {
+            result.remove(prop!("zIndex"));
+        } else {
+            z_index(value)?;
         }
     }
     for prop in [prop!("orphans"), prop!("widows")] {

@@ -196,6 +196,7 @@ fn given_a_percent_height_when_sizing_a_box_then_resolves_it_against_the_parents
         height: Some(100.0),
         min_height: None,
         max_height: None,
+        position: None,
     };
     assert_eq!(box_size(&s, Some(200.0), true), Ok(Some(size)));
     assert_eq!(

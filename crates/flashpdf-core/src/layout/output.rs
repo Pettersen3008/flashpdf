@@ -8,6 +8,7 @@ use crate::{BoxStyle, FontId, Pt, Rgb, TextAlign};
 pub(crate) const MARKER_SLOT: f32 = 0.75;
 pub(crate) const MARKER_SHAPE: f32 = 0.3;
 
+#[derive(Clone)]
 pub(crate) struct PositionedLine {
     pub(crate) segments: Range<usize>,
     /// Baseline; `top..bottom` is the line box the page splitter measures.
@@ -66,8 +67,21 @@ pub(crate) struct PositionedBox {
     pub(crate) style: BoxStyle,
 }
 
+/// A positioned box, laid out in a buffer of its own, which paints after the normal flow
+/// around it, ordered by `z` and then as laid out.
+#[derive(Clone)]
+pub(crate) struct Layer {
+    pub(crate) z: i32,
+    /// How far right and down the buffer paints from where it was laid out.
+    pub(crate) offset: Point,
+    /// The buffer is laid out from the page area's top left corner, not the block's.
+    pub(crate) page: bool,
+    pub(crate) buffer: LayoutBuffer,
+}
+
 /// Paint attributes of the segment at the same index. The text layouter owns
 /// `Segment`, so these ride beside it instead of inside it. Strokes are in 1/1000 em.
+#[derive(Clone)]
 pub(crate) struct Decoration {
     pub(crate) underline: Option<Stroke>,
     pub(crate) line_through: Option<Stroke>,
@@ -81,6 +95,7 @@ pub(crate) struct Decoration {
     pub(crate) descent: Pt,
 }
 
+#[derive(Clone)]
 pub(crate) struct PositionedImage {
     pub(crate) origin: Point,
     pub(crate) width: Pt,
@@ -93,7 +108,7 @@ pub(crate) struct PositionedImage {
     pub(crate) line: usize,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct LayoutBuffer {
     pub(crate) lines: Vec<PositionedLine>,
     pub(crate) segments: Vec<Segment>,
@@ -111,14 +126,17 @@ pub(crate) struct LayoutBuffer {
     pub(crate) links: Vec<String>,
     /// Anchor slot and the index of the line it waits for; `lines.len()` when none follows.
     pub(crate) anchors: Vec<(u16, usize)>,
+    /// Positioned boxes, in the order they were laid out.
+    pub(crate) layers: Vec<Layer>,
 }
 
 /// Buffer lengths before or after a cell, so its content can move once the row height is known.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct Marks {
     pub(crate) lines: usize,
     pub(crate) boxes: usize,
     pub(crate) images: usize,
+    pub(crate) layers: usize,
 }
 
 impl LayoutBuffer {
@@ -127,6 +145,7 @@ impl LayoutBuffer {
             lines: self.lines.len(),
             boxes: self.boxes.len(),
             images: self.images.len(),
+            layers: self.layers.len(),
         }
     }
 
@@ -143,6 +162,11 @@ impl LayoutBuffer {
         for image in &mut self.images[from.images..to.images] {
             image.origin.y += dy;
         }
+        for layer in &mut self.layers[from.layers..to.layers] {
+            if !layer.page {
+                layer.offset.y += dy;
+            }
+        }
     }
 
     pub(crate) fn clear(&mut self) {
@@ -157,6 +181,7 @@ impl LayoutBuffer {
         self.images.clear();
         self.links.clear();
         self.anchors.clear();
+        self.layers.clear();
     }
 
     /// Heap bytes held, leaving out link and alt text.
@@ -171,5 +196,10 @@ impl LayoutBuffer {
             + self.boxes.capacity() * size_of::<PositionedBox>()
             + self.images.capacity() * size_of::<PositionedImage>()
             + self.links.capacity() * size_of::<String>()
+            + self
+                .layers
+                .iter()
+                .map(|layer| layer.buffer.capacity())
+                .sum::<usize>()
     }
 }

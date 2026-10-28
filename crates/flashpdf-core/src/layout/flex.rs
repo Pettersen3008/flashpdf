@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use crate::document::{Element, FlexNode};
 use crate::geometry::LayoutArea;
+use crate::layout::output::Marks;
 use crate::layout::{
     border_size, border_width, overflows, painted, text, LayoutBuffer, LayoutEngine, LayoutError,
     TOLERANCE,
@@ -84,7 +85,7 @@ struct Item {
     size: f32,
     frozen: bool,
     violation: f32,
-    span: (Mark, Mark),
+    span: (Marks, Marks),
     height: f32,
 }
 
@@ -149,27 +150,9 @@ fn resolve(items: &mut [Item], space: f32, grow: bool) -> f32 {
     }
 }
 
-/// Where an item's output starts or ends: lines, boxes, and images.
-type Mark = (usize, usize, usize);
-
-fn mark(output: &LayoutBuffer) -> Mark {
-    (output.lines.len(), output.boxes.len(), output.images.len())
-}
-
 /// Moves one item's output down by `dy`.
-fn shift(output: &mut LayoutBuffer, (from, to): (Mark, Mark), dy: f32) {
-    let dy = Pt(dy);
-    for line in &mut output.lines[from.0..to.0] {
-        line.origin.y += dy;
-        line.top += dy;
-        line.bottom += dy;
-    }
-    for paint in &mut output.boxes[from.1..to.1] {
-        paint.origin.y += dy;
-    }
-    for image in &mut output.images[from.2..to.2] {
-        image.origin.y += dy;
-    }
+fn shift(output: &mut LayoutBuffer, (from, to): (Marks, Marks), dy: f32) {
+    output.shift(from, to, Pt(dy));
 }
 
 /// Where an item sits in `free` space across the container.
@@ -208,12 +191,13 @@ fn align_row(
         };
         // §9.4 step 11: an item with an auto height stretches to the line, up to its max-height.
         if let Element::Box(node) = child {
-            let auto = node.size.height.is_none() && autos == 0.0;
+            // A positioned item paints in its own layer, which does not stretch.
+            let auto = node.size.height.is_none() && autos == 0.0 && node.size.position.is_none();
             if align == Align::Stretch && auto && painted(&node.style) {
                 let room = node.size.max_height.map_or(free, |max| {
                     frame.height(max) + frame.margins(true) - item.height
                 });
-                output.boxes[item.span.0 .1].height += Pt(free.min(room).max(0.0));
+                output.boxes[item.span.0.boxes].height += Pt(free.min(room).max(0.0));
             }
         }
         shift(output, item.span, top + dy);
@@ -363,8 +347,12 @@ impl LayoutEngine<'_> {
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
         let row = rows.rows[index].clone();
+        let before = self.absolutes.get();
         let height = self.place_row(node, &mut rows.items, row.clone(), area, output)?;
-        align_row(node, &rows.items, row, height, 0.0, output)?;
+        align_row(node, &rows.items, row.clone(), height, 0.0, output)?;
+        if self.absolutes.get() != before {
+            self.place_absolutes(&node.children[row], None, output)?;
+        }
         Ok(Pt(height))
     }
 
@@ -404,10 +392,10 @@ impl LayoutEngine<'_> {
         let mut tallest = 0.0;
         for (item, child) in items.iter_mut().zip(&node.children[row]) {
             position += each * item.frame.auto(8);
-            let from = mark(output);
+            let from = output.marks();
             let border = item.size - item.frame.margins(false);
             item.height = self.item(child, area, position, border, &item.frame, output)?;
-            item.span = (from, mark(output));
+            item.span = (from, output.marks());
             tallest = f32::max(tallest, item.height);
             position += item.size + each * item.frame.auto(2) + between + gap;
         }
@@ -457,10 +445,10 @@ impl LayoutEngine<'_> {
             } else {
                 offset(align, free)
             };
-            let from = mark(output);
+            let from = output.marks();
             let height = self.item(child, area, x, border, &frame, output)?;
             hypothetical += height;
-            placed.push((frame, (from, mark(output)), height));
+            placed.push((frame, (from, output.marks()), height));
         }
         let max_height = flex.max_height.map_or(f32::INFINITY, Pt::get);
         let main = hypothetical.min(max_height).max(flex.min_height.get());
@@ -558,6 +546,15 @@ impl LayoutEngine<'_> {
                 }
             }
             Element::Spacer(_) | Element::Anchor(_) => (0.0, 0.0),
+            // Out of flow, an absolute or fixed box takes no width from its container.
+            Element::Box(node)
+                if node
+                    .size
+                    .position
+                    .is_some_and(|position| position.kind != crate::PositionKind::Relative) =>
+            {
+                (0.0, 0.0)
+            }
             Element::Box(node) => {
                 let frame = Frame::of(element);
                 let fixed = |value| match value {
@@ -618,7 +615,7 @@ impl LayoutEngine<'_> {
     }
 
     /// The widest min-content and max-content widths among stacked children.
-    fn contents(&self, children: &[Element<'_>]) -> Result<(f32, f32), LayoutError> {
+    pub(super) fn contents(&self, children: &[Element<'_>]) -> Result<(f32, f32), LayoutError> {
         let mut widest = (0.0, 0.0);
         for child in children {
             let (min, max) = self.intrinsic(child)?;

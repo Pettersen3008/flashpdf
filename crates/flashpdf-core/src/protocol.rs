@@ -90,8 +90,9 @@ struct Commands {
     metadata: crate::pdf::Metadata,
     pdfa: bool,
     body_started: bool,
-    /// `(footer, first page)` of a Header or Footer record waiting for its block.
-    furniture: Option<(bool, bool)>,
+    /// `(footer, page)` of a Header or Footer record waiting for its block: page 0 is every
+    /// page, 1 the first, and 2 every page for a `position: fixed` box of the body.
+    furniture: Option<(bool, u8)>,
 }
 
 /// A streaming `Table`'s `head` counts its `TableStart` and the header and footer
@@ -509,17 +510,21 @@ impl Commands {
                 Ok(())
             }
             Opcode::Footer | Opcode::Header => {
-                let first = match cursor.take(1)?[0] {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(ProtocolError::InvalidValue("furniture page")),
-                };
+                let footer = matches!(opcode, Opcode::Footer);
+                let page = cursor.take(1)?[0];
+                if page > 2 || page == 2 && footer {
+                    return Err(ProtocolError::InvalidValue("furniture page"));
+                }
                 cursor.done()?;
-                if self.body_started || !self.frames.is_empty() || self.furniture.is_some() {
+                // Fixed boxes follow the body; a header or footer precedes it.
+                if (self.body_started && page != 2)
+                    || !self.frames.is_empty()
+                    || self.furniture.is_some()
+                {
                     return Err(ProtocolError::InvalidNesting);
                 }
                 self.ensure_renderer()?;
-                self.furniture = Some((matches!(opcode, Opcode::Footer), first));
+                self.furniture = Some((footer, page));
                 Ok(())
             }
             Opcode::Metadata => {
@@ -808,9 +813,10 @@ impl Commands {
                     }
                     _ => return Err(ProtocolError::InvalidValue("border radius flag")),
                 };
-                // Bit 0 is border-box sizing; bits 1 to 4 are auto margins in `Edges` order.
+                // Bit 0 is border-box sizing, bits 1 to 4 are auto margins in `Edges` order, and
+                // bit 5 is a position after the sizes.
                 let flags = cursor.take(1)?[0];
-                if flags > 0x1f {
+                if flags > 0x3f {
                     return Err(ProtocolError::InvalidValue("box flags"));
                 }
                 let size = BoxSize {
@@ -821,7 +827,12 @@ impl Commands {
                     min_height: cursor.height()?.unwrap_or(Pt::ZERO),
                     max_height: cursor.height()?,
                     border_box: flags & 1 != 0,
-                    auto_margin: flags >> 1,
+                    auto_margin: flags >> 1 & 0xf,
+                    position: if flags & 0x20 != 0 {
+                        Some(cursor.position()?)
+                    } else {
+                        None
+                    },
                 };
                 cursor.done()?;
                 let style = crate::BoxStyle {
@@ -995,7 +1006,7 @@ impl Commands {
     }
 
     fn layout_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
-        self.body_started = self.furniture.is_none();
+        self.body_started |= self.furniture.is_none();
         let anchor = matches!(command, OwnedCommand::Anchor(_));
         self.push_command(command)?;
         if !anchor {
@@ -1082,8 +1093,12 @@ impl Commands {
         let block = std::mem::take(&mut self.block);
         self.block_bytes = 0;
         let renderer = self.ensure_renderer()?;
-        if let Some((footer, first)) = furniture {
-            return Ok(renderer.set_furniture(footer, first, block)?);
+        if let Some((footer, page)) = furniture {
+            if page == 2 {
+                renderer.add_fixed(block);
+                return Ok(());
+            }
+            return Ok(renderer.set_furniture(footer, page == 1, block)?);
         }
         let result = push(renderer, &block).map_err(ProtocolError::from);
         self.block = block;

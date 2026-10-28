@@ -110,6 +110,40 @@ pub fn spacing(value: &Value, size: f64, name: &str) -> Result<f64, Message> {
     Ok(amount)
 }
 
+/// A `top`, `right`, `bottom`, or `left`: `auto` (None), a length in points (kind 1), or a
+/// percent of the containing block (kind 2), either sign, up to 14,400 either way.
+pub fn inset(value: &Value, size: f64, name: &str) -> Result<Option<Dimension>, Message> {
+    if value.is("auto") {
+        return Ok(None);
+    }
+    let invalid = || format!("invalid {name}: {value} (use auto, a length, or a percent)");
+    let (sign, magnitude) = match value {
+        Value::Number(amount) => (amount.signum(), Value::Number(amount.abs())),
+        Value::Text(text) => {
+            let trimmed = js_trim(text);
+            match trimmed.strip_prefix('-') {
+                Some(rest) => (-1.0, Value::from(rest)),
+                None => (1.0, Value::from(trimmed)),
+            }
+        }
+    };
+    let percent = magnitude.text().is_some_and(|text| text.ends_with('%'));
+    let amount = if percent {
+        dimension(&magnitude, name, true)
+            .map_err(|_| invalid())?
+            .value
+    } else {
+        point(&magnitude, size, false).map_err(|_| invalid())?
+    };
+    if amount > 14_400.0 {
+        return Err(invalid().into());
+    }
+    Ok(Some(Dimension {
+        kind: if percent { 2 } else { 1 },
+        value: amount * sign,
+    }))
+}
+
 /// A width-like size: points (kind 1) or percent of the container's width (kind 2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Dimension {

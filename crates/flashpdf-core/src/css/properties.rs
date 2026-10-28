@@ -128,6 +128,15 @@ static PROPERTIES: &[Definition] = &[
     // Inherit through the text state too, so `em` resolves once, against the declaring element.
     plain("letterSpacing", "letter-spacing"),
     plain("wordSpacing", "word-spacing"),
+    plain("position", "position"),
+    plain("top", "top"),
+    plain("right", "right"),
+    plain("bottom", "bottom"),
+    plain("left", "left"),
+    plain("inset", "inset"),
+    plain("insetInline", "inset-inline"),
+    plain("insetBlock", "inset-block"),
+    plain("zIndex", "z-index"),
     plain("breakBefore", "break-before"),
     plain("breakAfter", "break-after"),
     plain("breakInside", "break-inside"),
@@ -180,6 +189,10 @@ static ALIASES: &[(&str, &str)] = &[
     ("padding-inline-end", "paddingRight"),
     ("padding-block-start", "paddingTop"),
     ("padding-block-end", "paddingBottom"),
+    ("inset-inline-start", "left"),
+    ("inset-inline-end", "right"),
+    ("inset-block-start", "top"),
+    ("inset-block-end", "bottom"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
