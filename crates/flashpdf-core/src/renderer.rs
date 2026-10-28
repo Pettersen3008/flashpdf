@@ -56,7 +56,7 @@ pub struct Renderer {
     fixed: Vec<Furniture>,
     /// The open page's positioned layers with the origin of the block they belong to; they
     /// paint over its content by z-index, those below zero under it.
-    overlays: Vec<(Layer, Point)>,
+    overlays: Vec<(Layer, Point, bool)>,
     metadata: Metadata,
     /// Anchors with no line yet, waiting for the next one painted.
     pending: Vec<u16>,
@@ -100,6 +100,8 @@ struct OpenTable {
 
 /// The header and footer rows a table repeats on every page it has body rows on.
 struct TableEdges {
+    header_painted: std::cell::Cell<bool>,
+    footer_painted: std::cell::Cell<bool>,
     header: LayoutBuffer,
     header_height: Pt,
     footer: LayoutBuffer,
@@ -570,7 +572,11 @@ impl Renderer {
                 Held::Row(row, height, edges) => {
                     self.table_top(&edges)?;
                     let rows = row.as_ref().unwrap_or(&edges.footer);
-                    self.paint(rows, 0..rows.lines.len(), Pt::ZERO, height)?;
+                    if row.is_none() {
+                        self.paint_repeat(rows, height, &edges.footer_painted)?;
+                    } else {
+                        self.paint(rows, 0..rows.lines.len(), Pt::ZERO, height)?;
+                    }
                     self.trailer = row.is_some().then(|| edges.clone());
                     if let Some(row) = row {
                         self.layout = row;
@@ -663,8 +669,8 @@ impl Renderer {
         let mut fragments = std::mem::replace(&mut self.fragments, next);
         fragments.retain(|fragment| fragment.height > Pt::ZERO && painted(&fragment.style));
         let mut overlays = std::mem::take(&mut self.overlays);
-        overlays.sort_by_key(|(layer, _)| layer.z);
-        let below = overlays.partition_point(|(layer, _)| layer.z < 0);
+        overlays.sort_by_key(|(layer, ..)| layer.z);
+        let below = overlays.partition_point(|(layer, ..)| layer.z < 0);
         let page = self.page.page();
         let mut underlay = Vec::new();
         if !fragments.is_empty() || below > 0 {
@@ -676,9 +682,12 @@ impl Renderer {
                 self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
                 self.alphas.last_mut().unwrap(),
                 &mut state,
+                self.metadata.pdfua,
             );
-            for (layer, origin) in &overlays[..below] {
-                painter.paint_layer(layer, *origin, page);
+            for (layer, origin, artifact) in &overlays[..below] {
+                painter
+                    .artifact(*artifact)
+                    .paint_layer(layer, *origin, page);
             }
             painter.paint_boxes(
                 &fragments,
@@ -696,9 +705,12 @@ impl Renderer {
                 self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
                 self.alphas.last_mut().unwrap(),
                 &mut self.state,
+                self.metadata.pdfua,
             );
-            for (layer, origin) in &overlays[below..] {
-                painter.paint_layer(layer, *origin, page);
+            for (layer, origin, artifact) in &overlays[below..] {
+                painter
+                    .artifact(*artifact)
+                    .paint_layer(layer, *origin, page);
             }
         }
         self.content_bytes += self.contents.last().unwrap().len() + underlay.len();
@@ -800,6 +812,8 @@ impl Renderer {
         self.table = Some(OpenTable {
             area,
             edges: Rc::new(TableEdges {
+                header_painted: std::cell::Cell::new(false),
+                footer_painted: std::cell::Cell::new(false),
                 header,
                 header_height,
                 footer,
@@ -857,7 +871,7 @@ impl Renderer {
             return Ok(());
         }
         let header = &edges.header;
-        self.paint(header, 0..header.lines.len(), Pt::ZERO, edges.header_height)
+        self.paint_repeat(header, edges.header_height, &edges.header_painted)
     }
 
     fn layout_rows(
@@ -878,6 +892,19 @@ impl Renderer {
         Ok((buffer, height))
     }
 
+    fn paint_repeat(
+        &mut self,
+        layout: &LayoutBuffer,
+        height: Pt,
+        painted: &std::cell::Cell<bool>,
+    ) -> Result<(), RenderError> {
+        let origin = self.cursor.origin(self.page);
+        let repeated = self.metadata.pdfua && painted.replace(true);
+        self.paint_at_tagged(layout, 0..layout.lines.len(), origin, repeated);
+        self.cursor.advance(height);
+        self.check_size()
+    }
+
     /// Checks the cap per paint: a repeated table header multiplies one block's bytes.
     fn paint(
         &mut self,
@@ -894,15 +921,27 @@ impl Renderer {
 
     /// Paints `lines` at `origin` and keeps the block's positioned layers for the page end.
     fn paint_at(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        self.paint_at_tagged(layout, lines, origin, false);
+    }
+
+    fn paint_at_tagged(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        origin: Point,
+        artifact: bool,
+    ) {
         let first = lines.start == 0;
         let page = self.page.page();
-        self.painter().paint(layout, lines.clone(), origin, page);
+        self.painter()
+            .artifact(artifact)
+            .paint(layout, lines.clone(), origin, page);
         self.place_anchors(layout, lines, origin);
         if first {
             for layer in &layout.layers {
                 self.layer_anchors(layer, origin);
                 if layer.flow.is_none() {
-                    self.overlays.push((layer.clone(), origin));
+                    self.overlays.push((layer.clone(), origin, artifact));
                 }
             }
         }
@@ -971,6 +1010,10 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn set_structure(&mut self, nodes: Vec<crate::compile::StructureNode>) {
+        self.metadata.structure = nodes;
+    }
+
     fn painter(&mut self) -> PdfPainter<'_> {
         PdfPainter::new(
             self.contents.last_mut().unwrap(),
@@ -978,6 +1021,7 @@ impl Renderer {
             self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
             self.alphas.last_mut().unwrap(),
             &mut self.state,
+            self.metadata.pdfua,
         )
     }
 
@@ -989,7 +1033,8 @@ impl Renderer {
         if let Some(edges) = self.trailer.take() {
             let origin = self.cursor.origin(self.page);
             let footer = &edges.footer;
-            self.paint_at(footer, 0..footer.lines.len(), origin);
+            let repeated = self.metadata.pdfua && edges.footer_painted.replace(true);
+            self.paint_at_tagged(footer, 0..footer.lines.len(), origin, repeated);
         }
         self.end_page();
         self.contents.push(Content::with_capacity(0));
@@ -1047,7 +1092,14 @@ impl Renderer {
                 };
                 let content = &mut self.contents[index];
                 if self.metadata.tagged {
-                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                    if self.metadata.pdfua {
+                        content
+                            .begin_marked_content_with_properties(pdf_writer::Name(b"Artifact"))
+                            .properties()
+                            .pair(pdf_writer::Name(b"Type"), pdf_writer::Name(b"Pagination"));
+                    } else {
+                        content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                    }
                 }
                 PdfPainter::new(
                     content,
@@ -1055,6 +1107,7 @@ impl Renderer {
                     None,
                     &mut self.alphas[index],
                     &mut PaintState::default(),
+                    false,
                 )
                 .paint_flow(
                     &layout,
@@ -1145,7 +1198,7 @@ fn numbered(
 ) -> Result<Vec<OwnedCommand>, RenderError> {
     let mut copy = commands.to_vec();
     for command in &mut copy {
-        let OwnedCommand::Paragraph(_, _, text, runs, _) = command else {
+        let OwnedCommand::Paragraph(_, _, text, runs, _, _) = command else {
             continue;
         };
         let mut spelled = String::new();

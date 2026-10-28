@@ -97,6 +97,7 @@ pub(crate) struct LayerEffects {
 /// `Segment`, so these ride beside it instead of inside it. Strokes are in 1/1000 em.
 #[derive(Clone)]
 pub(crate) struct Decoration {
+    pub(crate) structure: u32,
     pub(crate) underline: Option<Stroke>,
     pub(crate) line_through: Option<Stroke>,
     pub(crate) color: Rgb,
@@ -111,6 +112,7 @@ pub(crate) struct Decoration {
 
 #[derive(Clone)]
 pub(crate) struct PositionedImage {
+    pub(crate) structure: u32,
     pub(crate) origin: Point,
     pub(crate) width: Pt,
     pub(crate) height: Pt,

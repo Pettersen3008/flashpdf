@@ -211,6 +211,7 @@ export type CommonProps = {
 	id?: string | undefined;
 	className?: string | undefined;
 	/** The base direction; `auto` takes it from the first strong character, and CSS `direction` overrides it. */
+	lang?: string | undefined;
 	dir?: "ltr" | "rtl" | "auto" | undefined;
 	style?: StyleInput | undefined;
 };
@@ -229,6 +230,7 @@ export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined
 export type CellProps = BlockProps & {
 	colSpan?: number | undefined;
 	rowSpan?: number | undefined;
+	scope?: "row" | "col" | "both" | undefined;
 };
 /** `href` must be an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element with that id. */
 export type LinkProps = BlockProps & { href: string };

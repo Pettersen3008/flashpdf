@@ -24,6 +24,7 @@ fn first_header(renderer: &mut Renderer) {
                 "ab".into(),
                 vec![run(true), run(false)],
                 vec![],
+                Vec::new(),
             )],
         )
         .unwrap();
@@ -192,6 +193,7 @@ fn given_a_smaller_later_body_when_an_atomic_block_fits_neither_remaining_nor_la
                     typography: crate::Typography::NORMAL,
                 }],
                 vec![],
+                Vec::new(),
             )],
         )
         .unwrap();

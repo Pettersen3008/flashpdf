@@ -89,6 +89,9 @@ struct Commands {
     attachment_bytes: usize,
     metadata: crate::pdf::Metadata,
     pdfa: bool,
+    pdfua: bool,
+    ua_compiled: bool,
+    structure_ids: Vec<u32>,
     body_started: bool,
     /// `(footer, page)` of a Header or Footer record waiting for its block: page 0 is every
     /// page, 1 the first, and 2 every page for a `position: fixed` box of the body.
@@ -528,9 +531,10 @@ impl Commands {
                 Ok(())
             }
             Opcode::Metadata => {
-                let tagged = match cursor.take(1)?[0] {
+                let flag = cursor.take(1)?[0];
+                let tagged = match flag {
                     0 => false,
-                    1 => true,
+                    1 | 2 => true,
                     _ => return Err(ProtocolError::InvalidValue("tagged flag")),
                 };
                 let fields = (0..5)
@@ -545,6 +549,7 @@ impl Commands {
                     keywords: fields[3].clone(),
                     language: fields[4].clone(),
                     tagged,
+                    pdfua: flag == 2,
                     ..std::mem::take(&mut self.metadata)
                 };
                 if tagged && metadata.language.is_empty() {
@@ -553,6 +558,10 @@ impl Commands {
                 if !metadata.language.is_empty() && !valid_language(&metadata.language) {
                     return Err(ProtocolError::InvalidValue("metadata language"));
                 }
+                if metadata.pdfua && metadata.title.trim().is_empty() {
+                    return Err(ProtocolError::InvalidValue("PDF/UA metadata title"));
+                }
+                self.pdfua = metadata.pdfua;
                 self.metadata = metadata;
                 Ok(())
             }
@@ -726,7 +735,8 @@ impl Commands {
                     });
                 }
                 cursor.done()?;
-                self.feed(OwnedCommand::Paragraph(align, keep, text, runs, links))
+                let ids = std::mem::take(&mut self.structure_ids);
+                self.feed(OwnedCommand::Paragraph(align, keep, text, runs, links, ids))
             }
             Opcode::Image => {
                 let slot = cursor.u16()?;
@@ -752,8 +762,9 @@ impl Commands {
                 let alt = cursor.alt()?.to_owned();
                 let alpha = cursor.take(1)?[0];
                 cursor.done()?;
+                let id = self.structure_ids.pop().unwrap_or(0);
                 self.feed(OwnedCommand::Image(
-                    slot, width, height, max_width, max_height, link, alt, alpha,
+                    slot, width, height, max_width, max_height, link, alt, alpha, id,
                 ))
             }
             Opcode::BoxStart => {
@@ -896,6 +907,11 @@ impl Commands {
     /// The built-in fonts take the first slots; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
+        if self.pdfua && font.index() < BUILT_IN {
+            return Err(ProtocolError::InvalidValue(
+                "PDF/UA font: register an embedded font and set fontFamily",
+            ));
+        }
         if self.pdfa && font.index() < BUILT_IN {
             return Err(ProtocolError::PdfAFont);
         }
@@ -957,9 +973,10 @@ impl Commands {
 
     fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let payload = match &command {
-            OwnedCommand::Paragraph(_, _, text, runs, links) => {
+            OwnedCommand::Paragraph(_, _, text, runs, links, ids) => {
                 text.len()
                     + runs.len() * size_of::<TextRun>()
+                    + ids.len() * size_of::<u32>()
                     + links
                         .iter()
                         .map(|link| link.len() + size_of::<String>())
@@ -973,7 +990,7 @@ impl Commands {
             OwnedCommand::BoxStart(_, _, effects) => {
                 effects.as_ref().map_or(0, |effects| effects.capacity())
             }
-            OwnedCommand::Image(_, _, _, _, _, link, alt, _) => {
+            OwnedCommand::Image(_, _, _, _, _, link, alt, _, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
             _ => 0,
@@ -1135,6 +1152,11 @@ impl Commands {
     }
 
     fn finish(self) -> Result<Vec<u8>, ProtocolError> {
+        if self.pdfua && !self.ua_compiled {
+            return Err(ProtocolError::InvalidValue(
+                "PDF/UA requires element records",
+            ));
+        }
         if self.page.is_none() || !self.ended {
             return Err(ProtocolError::TruncatedProtocol);
         }
@@ -1145,7 +1167,7 @@ impl Commands {
     }
 }
 
-fn valid_language(value: &str) -> bool {
+pub(crate) fn valid_language(value: &str) -> bool {
     let mut parts = value.split('-');
     parts.next().is_some_and(|part| {
         (2..=8).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_alphabetic())

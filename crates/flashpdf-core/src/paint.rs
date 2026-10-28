@@ -18,9 +18,11 @@ type Corners = [[f32; 2]; 4];
 pub(crate) struct PageLink {
     pub(crate) rect: [f32; 4],
     pub(crate) uri: String,
+    pub(crate) structure: u32,
 }
 
 pub(crate) enum PageTag {
+    Semantic(u32),
     Paragraph,
     Figure(String),
 }
@@ -42,6 +44,8 @@ pub(crate) struct PdfPainter<'a> {
     /// The fill and stroke alpha in force; every `paint` ends opaque.
     alpha: u8,
     state: &'a mut PaintState,
+    ua: bool,
+    artifact: bool,
 }
 
 impl<'a> PdfPainter<'a> {
@@ -51,6 +55,7 @@ impl<'a> PdfPainter<'a> {
         tags: Option<&'a mut Vec<PageTag>>,
         alphas: &'a mut Vec<[u8; 2]>,
         state: &'a mut PaintState,
+        ua: bool,
     ) -> Self {
         Self {
             content,
@@ -59,6 +64,26 @@ impl<'a> PdfPainter<'a> {
             alphas,
             state,
             alpha: OPAQUE,
+            ua,
+            artifact: false,
+        }
+    }
+
+    pub(crate) fn artifact(&mut self, artifact: bool) -> &mut Self {
+        self.artifact = artifact;
+        self
+    }
+
+    fn begin_tag(&mut self, structure: u32, artifact: bool) {
+        if artifact || self.artifact || structure == 0 {
+            self.content.begin_marked_content(Name(b"Artifact"));
+        } else if let Some(tags) = &mut self.tags {
+            let id = tags.len() as i32;
+            tags.push(PageTag::Semantic(structure));
+            self.content
+                .begin_marked_content_with_properties(Name(b"Span"))
+                .properties()
+                .identify(id);
         }
     }
 
@@ -113,7 +138,7 @@ impl<'a> PdfPainter<'a> {
         } else {
             Vec::new()
         };
-        if let Some(tags) = &mut self.tags {
+        if let Some(tags) = self.tags.as_mut().filter(|_| !self.ua) {
             let mut images = layout.images.iter().peekable();
             for line in lines.clone() {
                 while images.peek().is_some_and(|image| image.line < line) {
@@ -476,7 +501,9 @@ impl<'a> PdfPainter<'a> {
             .filter(|image| lines.contains(&image.line))
         {
             self.set_alpha(image.alpha);
-            if let Some(id) = ids.get(image.line - lines.start).copied().flatten() {
+            if self.ua {
+                self.begin_tag(image.structure, image.alt.is_empty());
+            } else if let Some(id) = ids.get(image.line - lines.start).copied().flatten() {
                 self.content
                     .begin_marked_content_with_properties(Name(b"Figure"))
                     .properties()
@@ -497,6 +524,7 @@ impl<'a> PdfPainter<'a> {
                 self.links.push(PageLink {
                     rect: [x, y, x + width, y + height],
                     uri: layout.links[link].clone(),
+                    structure: if self.artifact { 0 } else { image.structure },
                 });
             }
             if self.tags.is_some() {
@@ -541,6 +569,13 @@ impl<'a> PdfPainter<'a> {
                     .map_or(line.text_width, |next| next.x);
                 ((x + segment.x).get(), (end - segment.x).get())
             };
+            let background_tag = self.ua
+                && layout.decorations[line.segments.clone()]
+                    .iter()
+                    .any(|decoration| decoration.background.is_some());
+            if background_tag {
+                self.content.begin_marked_content(Name(b"Artifact"));
+            }
             for (index, segment) in segments.iter().enumerate() {
                 let decoration = &layout.decorations[line.segments.start + index];
                 if let Some(color) = decoration.background {
@@ -559,6 +594,9 @@ impl<'a> PdfPainter<'a> {
                     ]);
                     self.content.fill_nonzero();
                 }
+            }
+            if background_tag {
+                self.content.end_marked_content();
             }
             self.content.begin_text();
             let mut previous: Option<&Segment> = None;
@@ -604,6 +642,12 @@ impl<'a> PdfPainter<'a> {
                     }
                     None => &[],
                 };
+                if self.ua {
+                    self.begin_tag(
+                        layout.decorations[line.segments.start + index].structure,
+                        segment.shape != 0,
+                    );
+                }
                 if segment.shape == 0 && lifts.is_empty() && actual.is_empty() {
                     show(
                         self.content,
@@ -621,6 +665,9 @@ impl<'a> PdfPainter<'a> {
                         segment.size.get(),
                     );
                 }
+                if self.ua {
+                    self.content.end_marked_content();
+                }
                 previous = Some(segment);
             }
             // Text state outlives the text object, and every other line starts from Tc 0.
@@ -634,6 +681,12 @@ impl<'a> PdfPainter<'a> {
                 let (start, width) = extent(index);
                 let baseline = baseline + segment.rise;
                 let scale = segment.size.get() / 1000.0;
+                let strokes = [decoration.underline, decoration.line_through];
+                let decoration_tag =
+                    self.ua && (segment.shape != 0 || strokes.iter().any(Option::is_some));
+                if decoration_tag {
+                    self.begin_tag(decoration.structure, segment.shape == 0);
+                }
                 if segment.shape != 0 {
                     self.set_fill(decoration.color);
                     let middle = baseline + decoration.ascent.get() / 2.0;
@@ -644,7 +697,6 @@ impl<'a> PdfPainter<'a> {
                         segment.size.get() * MARKER_SHAPE,
                     );
                 }
-                let strokes = [decoration.underline, decoration.line_through];
                 if strokes.iter().any(Option::is_some) {
                     self.set_fill(decoration.color);
                 }
@@ -659,6 +711,9 @@ impl<'a> PdfPainter<'a> {
                         )
                         .fill_nonzero();
                 }
+                if decoration_tag {
+                    self.content.end_marked_content();
+                }
                 if let Some(link) = decoration.link {
                     self.links.push(PageLink {
                         rect: [
@@ -668,10 +723,15 @@ impl<'a> PdfPainter<'a> {
                             baseline + decoration.ascent.get(),
                         ],
                         uri: layout.links[link].clone(),
+                        structure: if self.artifact {
+                            0
+                        } else {
+                            decoration.structure
+                        },
                     });
                 }
             }
-            if self.tags.is_some() {
+            if self.tags.is_some() && !self.ua {
                 self.content.end_marked_content();
             }
         }

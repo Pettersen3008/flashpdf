@@ -118,6 +118,8 @@ export type ElementNode = {
 	readonly value?: number | undefined;
 	readonly colSpan?: number | undefined;
 	readonly rowSpan?: number | undefined;
+	readonly lang?: string | undefined;
+	readonly scope?: "row" | "col" | "both" | undefined;
 	readonly dir?: "ltr" | "rtl" | "auto" | undefined;
 };
 export type Node = TextNode | ElementNode;
@@ -410,7 +412,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 							: element.type === "li"
 								? ["value"]
 								: cell
-									? ["colSpan", "rowSpan"]
+									? ["colSpan", "rowSpan", ...(element.type === "th" ? ["scope"] : [])]
 									: [];
 	const input = props(element.props, [
 		"children",
@@ -419,8 +421,16 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		"style",
 		"ref",
 		"dir",
+		"lang",
 		...own,
 	]);
+	if (
+		input.lang !== undefined &&
+		(typeof input.lang !== "string" || !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/.test(input.lang))
+	)
+		throw new Error(`invalid lang${where}`);
+	if (input.scope !== undefined && !["row", "col", "both"].includes(input.scope as string))
+		throw new Error(`scope must be row, col, or both${where}`);
 	if (input.dir !== undefined && input.dir !== "ltr" && input.dir !== "rtl" && input.dir !== "auto")
 		throw new Error(`dir must be "ltr", "rtl", or "auto"${where}`);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
@@ -455,6 +465,8 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		classes:
 			typeof input.className === "string" ? input.className.split(/\s+/).filter(Boolean) : [],
 		style: input.style as Style | string | undefined,
+		...(input.lang !== undefined ? { lang: input.lang as string } : {}),
+		...(input.scope !== undefined ? { scope: input.scope as "row" | "col" | "both" } : {}),
 		...(input.dir !== undefined ? { dir: input.dir as "ltr" | "rtl" | "auto" } : {}),
 		children: [],
 		...(element.type === "img" ? image(input, where, chain, depth) : {}),
