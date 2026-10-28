@@ -146,7 +146,7 @@ fn boxes(records: &[Record]) -> Vec<Box> {
     records
         .iter()
         .filter_map(|record| match record {
-            Record::BoxStart(value) => Some(*value),
+            Record::BoxStart(value) => Some(value.clone()),
             _ => None,
         })
         .collect()

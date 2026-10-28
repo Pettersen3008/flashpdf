@@ -325,7 +325,7 @@ impl<'a> LayoutEngine<'a> {
         width: Option<Pt>,
         output: &mut LayoutBuffer,
     ) -> Result<(Pt, Rect), LayoutError> {
-        let style = node.style;
+        let style = node.style.clone();
         let horizontal = style.margin.right
             + style.margin.left
             + style.padding.right
@@ -372,7 +372,7 @@ impl<'a> LayoutEngine<'a> {
                 origin: area.origin,
                 width: Pt::ZERO,
                 height: Pt::ZERO,
-                style,
+                style: style.clone(),
             });
             index
         });
@@ -409,7 +409,7 @@ impl<'a> LayoutEngine<'a> {
                 origin,
                 width,
                 height: Pt(height),
-                style,
+                style: style.clone(),
             };
         }
         Ok((
@@ -485,7 +485,7 @@ impl<'a> LayoutEngine<'a> {
                 align: cell.align,
                 // A positioned cell box paints in its own layer, which does not stretch.
                 painted: matches!(&cell.content, Element::Box(node)
-                    if painted(&node.style) && node.size.position.is_none()),
+                    if painted(&node.style.clone()) && node.size.position.is_none()),
                 start,
                 end: output.marks(),
             };
@@ -625,5 +625,7 @@ fn overflows(free: f32) -> bool {
 }
 
 pub(crate) fn painted(style: &BoxStyle) -> bool {
-    style.background.is_some() || style.border.iter().any(|edge| *edge > Pt::ZERO)
+    style.effects.is_some()
+        || style.background.is_some()
+        || style.border.iter().any(|edge| *edge > Pt::ZERO)
 }

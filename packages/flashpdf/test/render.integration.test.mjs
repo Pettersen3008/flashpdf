@@ -1233,22 +1233,19 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
-		[
-			{ boxShadow: "0 1px 2px red" },
-			/boxShadow \(shadows are not drawn; use a border or a background\) on <main>/,
-		],
+		[{ boxShadow: "0 1px 2px red" }, /box-shadow:.*blur is not supported.*on <main>/],
 		[{ outline: "1px solid red" }, /outline \(outlines are not drawn; use a border\) on <main>/],
 		[
 			{ borderImage: "url(a.png) 30" },
 			/borderImage \(border images are not drawn; use a solid, dashed, or dotted border\) on <main>/,
 		],
 		[
-			{ backgroundImage: "linear-gradient(red, blue)" },
-			/backgroundImage \(gradients and background images are not drawn; use background-color\) on <main>/,
+			{ backgroundImage: "conic-gradient(red, blue)" },
+			/background-image:.*conic.*not supported.*on <main>/,
 		],
 		[
-			{ background: "linear-gradient(red, blue)" },
-			/unsupported background: linear-gradient\(red, blue\) \(gradients and background images are not drawn; use a solid colour\) on <main>/,
+			{ background: "repeating-linear-gradient(red, blue)" },
+			/background-image:.*repeating.*not supported.*on <main>/,
 		],
 		[
 			{ borderBottom: "1pt solid red", borderRadius: 4 },

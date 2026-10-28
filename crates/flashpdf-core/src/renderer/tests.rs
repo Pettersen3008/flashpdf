@@ -125,6 +125,7 @@ fn given_a_split_box_and_different_first_header_when_continuing_then_background_
 
 fn background() -> BoxStyle {
     BoxStyle {
+        effects: None,
         margin: Edges::all(Pt::ZERO),
         padding: Edges::all(Pt::ZERO),
         border: Edges::all(Pt::ZERO),

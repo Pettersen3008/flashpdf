@@ -517,6 +517,7 @@ const SIZES: [Prop; 6] = [
 ];
 const BLACK: Rgb = [0, 0, 0];
 const EMPTY: Box = Box {
+    effects: None,
     margin: [0.0; 4],
     padding: [0.0; 4],
     border: [0.0; 4],
@@ -1339,7 +1340,8 @@ impl<S: Sink> Compiler<S> {
             // A `<mark>` paints its background behind each line of its text, so only box edges make it a box.
             let paint = box_style(s, context.size, 1.0)?;
             let highlight = tag == "mark"
-                && paint.is_some_and(|paint| {
+                && paint.as_ref().is_none_or(|p| p.effects.is_none())
+                && paint.as_ref().is_some_and(|paint| {
                     paint
                         .margin
                         .iter()
@@ -1458,8 +1460,8 @@ impl<S: Sink> Compiler<S> {
         avoid: bool,
         body: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
-        let [top, right, bottom, left] = value.map_or([0.0; 4], |value| value.margin);
-        let inner = value.map(|value| {
+        let [top, right, bottom, left] = value.as_ref().map_or([0.0; 4], |value| value.margin);
+        let inner = value.clone().map(|value| {
             if collapses {
                 Box {
                     margin: [0.0, right, 0.0, left],
@@ -1471,6 +1473,7 @@ impl<S: Sink> Compiler<S> {
         });
         let drawn = inner.filter(|inner| {
             !collapses
+                || inner.effects.is_some()
                 || inner.background.is_some()
                 || inner.size.is_some()
                 || inner
@@ -1484,7 +1487,7 @@ impl<S: Sink> Compiler<S> {
             self.writer.margin(top);
         }
         let result: Result<()> = (|| {
-            if let Some(inner) = drawn {
+            if let Some(inner) = drawn.clone() {
                 let through = collapses
                     && inner.size.is_none()
                     && inner.padding[0] == 0.0
@@ -1492,7 +1495,7 @@ impl<S: Sink> Compiler<S> {
                 self.writer.box_start(inner, through)?;
             }
             body(self)?;
-            if let Some(inner) = drawn {
+            if let Some(inner) = drawn.clone() {
                 self.writer
                     .box_end(collapses && inner.padding[2] == 0.0 && inner.border[2] == 0.0)?;
             }
@@ -1837,7 +1840,7 @@ impl<S: Sink> Compiler<S> {
         let paint = cell_box(Self::layout_box(s, next.size, context)?, context.cell);
         let avoid = is(s, p!("breakInside"), "avoid");
         // A CSS flex item is one element, so one without a box of its own gets an empty one.
-        let value = paint.or(context.item.then_some(EMPTY));
+        let value = paint.clone().or(context.item.then_some(EMPTY));
         let flows = collapses(context) && !out_of_flow(s);
         self.boxed(value, flows, avoid, |this| {
             let flex = is(s, p!("display"), "flex");

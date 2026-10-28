@@ -1,3 +1,5 @@
+mod effects;
+pub(crate) use effects::{write_shadings, Shading, Shadings};
 use std::ops::Range;
 
 use std::f32::consts::FRAC_PI_4;
@@ -39,6 +41,7 @@ pub(crate) struct PdfPainter<'a> {
     tags: Option<&'a mut Vec<PageTag>>,
     /// Alphas this page's `/ExtGState` must define.
     alphas: &'a mut Vec<[u8; 2]>,
+    shadings: &'a mut Shadings,
     /// The fill and stroke alpha in force; every `paint` ends opaque.
     alpha: u8,
     state: &'a mut PaintState,
@@ -50,6 +53,7 @@ impl<'a> PdfPainter<'a> {
         links: &'a mut Vec<PageLink>,
         tags: Option<&'a mut Vec<PageTag>>,
         alphas: &'a mut Vec<[u8; 2]>,
+        shadings: &'a mut Shadings,
         state: &'a mut PaintState,
     ) -> Self {
         Self {
@@ -57,6 +61,7 @@ impl<'a> PdfPainter<'a> {
             links,
             tags,
             alphas,
+            shadings,
             state,
             alpha: OPAQUE,
         }
@@ -132,6 +137,7 @@ impl<'a> PdfPainter<'a> {
             let y = origin.y.get() - paint.origin.y.get() - paint.height.get();
             let (width, height) = (paint.width.get(), paint.height.get());
             self.set_alpha(style.alpha);
+            self.paint_shadows(style, [x, y, width, height], false);
             // Four overlapping rectangles would composite their corners twice under an alpha.
             if style.radius.is_some()
                 || (style.alpha != OPAQUE
@@ -145,6 +151,8 @@ impl<'a> PdfPainter<'a> {
                 self.set_fill(color);
                 self.content.rect(x, y, width, height).fill_nonzero();
             }
+            self.paint_gradient(style, [x, y, width, height]);
+            self.paint_shadows(style, [x, y, width, height], true);
             let [top, right, bottom, left] = style.border.into_array().map(|edge| edge.get());
             for (index, ((color, line), (x, y, width, height))) in style
                 .border_color
@@ -200,6 +208,8 @@ impl<'a> PdfPainter<'a> {
             outline(self.content, rect, corners);
             op(self.content, "f", &[]);
         }
+        self.paint_gradient(style, rect);
+        self.paint_shadows(style, rect, true);
         let border = style.border.top.get();
         if border > 0.0 {
             let half = border / 2.0;

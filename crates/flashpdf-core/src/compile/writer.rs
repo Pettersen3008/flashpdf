@@ -446,9 +446,10 @@ fn box_start(b: &mut Bytes, value: &Box) {
     }
     let size = value.size;
     let position = size.and_then(|size| size.position);
-    b.u8(size.map_or(0, |size| {
-        u8::from(size.border_box) | size.auto_margin << 1 | u8::from(position.is_some()) << 5
-    }));
+    b.u8(u8::from(value.effects.is_some()) << 6
+        | size.map_or(0, |size| {
+            u8::from(size.border_box) | size.auto_margin << 1 | u8::from(position.is_some()) << 5
+        }));
     b.size(size.and_then(|size| size.width));
     b.size(size.and_then(|size| size.min_width));
     b.size(size.and_then(|size| size.max_width));
@@ -467,6 +468,14 @@ fn box_start(b: &mut Bytes, value: &Box) {
         for side in position.inset {
             b.size(side);
         }
+    }
+    if let Some(effects) = &value.effects {
+        b.f32(effects.em);
+        for channel in effects.current {
+            b.u8(channel);
+        }
+        b.text(&effects.source[0]);
+        b.text(&effects.source[1]);
     }
 }
 

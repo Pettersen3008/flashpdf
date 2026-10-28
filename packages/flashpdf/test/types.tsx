@@ -71,8 +71,18 @@ const _grid = <main style={{ display: "grid" }}>Invoice</main>;
 const _decorated = (
 	<main style={{ borderRadius: "4pt 8pt / 50%", borderTopStyle: "dashed", opacity: "50%" }}>x</main>
 );
-// @ts-expect-error Shadows are not drawn.
-const _shadow = <main style={{ boxShadow: "0 1px 2px #000" }}>Invoice</main>;
+const _shadow = (
+	<main
+		style={{
+			boxShadow: "0 1px 0 2px #000",
+			backgroundImage: "linear-gradient(red, blue)",
+			backgroundSize: "auto",
+			backgroundPosition: "0% 0%",
+		}}
+	>
+		Invoice
+	</main>
+);
 // @ts-expect-error Only none, solid, dashed, and dotted borders are drawn.
 const _double = <main style={{ borderTopStyle: "double" }}>Invoice</main>;
 // @ts-expect-error Padding takes one to four lengths, never "auto".
