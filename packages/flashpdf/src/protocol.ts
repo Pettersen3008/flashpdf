@@ -128,9 +128,9 @@ export class ProtocolWriter {
 		});
 	}
 
-	metadata(value: Record<string, unknown>, tagged: boolean) {
+	metadata(value: Record<string, unknown>, tagged: boolean, pdfua = false) {
 		this.binary.record(opcode.metadata, () => {
-			this.binary.u8(tagged ? 1 : 0);
+			this.binary.u8(pdfua ? 2 : tagged ? 1 : 0);
 			for (const key of ["title", "author", "subject", "keywords", "language"])
 				this.binary.text((value[key] as string | undefined) ?? "");
 		});
@@ -219,6 +219,10 @@ export class ProtocolWriter {
 			if (node.colSpan !== undefined) binary.u16(node.colSpan);
 			if (node.rowSpan !== undefined) binary.u16(node.rowSpan);
 			if (raster !== undefined) binary.u16(raster);
+			if (node.lang !== undefined || node.scope !== undefined) {
+				binary.text(node.lang ?? "");
+				binary.text(node.scope ?? "");
+			}
 		});
 		if (node.drawing) this.long(opcode.drawing, drawing(node.drawing));
 		this.nodes(node.children);

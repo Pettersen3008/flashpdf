@@ -388,6 +388,7 @@ fn line(text: &str, style: TextStyle) -> Vec<crate::OwnedCommand> {
         text.into(),
         vec![run],
         Vec::new(),
+        Vec::new(),
     )]
 }
 
@@ -2111,6 +2112,7 @@ fn given_a_two_line_first_page_header_and_a_numbered_header_when_rendering_then_
         "Firstpage".into(),
         runs,
         vec![],
+        Vec::new(),
     );
     renderer.set_furniture(false, true, vec![first]).unwrap();
     renderer
@@ -2150,6 +2152,7 @@ fn given_a_page_number_whose_real_width_pulls_a_larger_word_up_a_line_when_finis
         "\u{1e} M M".into(),
         runs,
         vec![],
+        Vec::new(),
     );
     renderer.set_furniture(true, false, vec![footer]).unwrap();
     renderer.push(&[text("body")]).unwrap();

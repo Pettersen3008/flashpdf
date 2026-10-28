@@ -108,6 +108,7 @@ pub(crate) enum OwnedCommand {
         String,
         Vec<TextRun>,
         Vec<String>,
+        Vec<u32>,
     ),
     BoxStart(BoxStyle, BoxSize),
     BoxEnd,
@@ -129,6 +130,7 @@ pub(crate) enum OwnedCommand {
         Option<String>,
         String,
         u8,
+        u32,
     ),
     Anchor(u16),
 }
@@ -136,7 +138,7 @@ pub(crate) enum OwnedCommand {
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Paragraph((align, direction), [orphans, widows], text, runs, links) => {
+            Self::Paragraph((align, direction), [orphans, widows], text, runs, links, _) => {
                 Command::Paragraph {
                     align: *align,
                     direction: *direction,
@@ -168,7 +170,7 @@ impl OwnedCommand {
                 width: *width,
             },
             Self::TableEnd => Command::TableEnd,
-            Self::Image(slot, width, height, max_width, max_height, link, alt, alpha) => {
+            Self::Image(slot, width, height, max_width, max_height, link, alt, alpha, _) => {
                 Command::Image {
                     slot: *slot,
                     width: *width,
@@ -186,6 +188,9 @@ impl OwnedCommand {
 }
 
 pub(crate) trait CommandSource {
+    fn structure(&self, _index: usize) -> Option<&[u32]> {
+        None
+    }
     fn command(&self, index: usize) -> Option<Command<'_>>;
     fn len(&self) -> usize;
 }
@@ -201,6 +206,16 @@ impl<'command> CommandSource for [Command<'command>] {
 }
 
 impl CommandSource for [OwnedCommand] {
+    fn structure(&self, index: usize) -> Option<&[u32]> {
+        match self.get(index)? {
+            OwnedCommand::Paragraph(_, _, _, _, _, ids) if !ids.is_empty() => Some(ids),
+            OwnedCommand::Image(_, _, _, _, _, _, _, _, id) if *id != 0 => {
+                Some(std::slice::from_ref(id))
+            }
+            _ => None,
+        }
+    }
+
     fn command(&self, index: usize) -> Option<Command<'_>> {
         self.get(index).map(OwnedCommand::borrow)
     }
@@ -257,7 +272,8 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_element(&mut self, depth: usize) -> Result<Element<'a>, CommandParseError> {
-        match self.next()? {
+        let structure = self.source.structure(self.index);
+        let mut element = match self.next()? {
             Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
                 align: style.align,
                 direction: Direction::Ltr,
@@ -275,6 +291,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     typography: style.typography,
                 }],
                 links: &[],
+                structure: &[],
             })),
             Command::Paragraph {
                 align,
@@ -292,6 +309,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 text,
                 runs: runs.to_vec(),
                 links,
+                structure: &[],
             })),
             Command::Image {
                 slot,
@@ -311,6 +329,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 link,
                 alt,
                 alpha,
+                structure: 0,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::Anchor(slot) => Ok(Element::Anchor(slot)),
@@ -416,7 +435,15 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             | Command::TableEnd
             | Command::PageBreak
             | Command::Avoid => Err(CommandParseError::UnexpectedCommand),
+        }?;
+        if let Some(ids) = structure {
+            match &mut element {
+                Element::Paragraph(p) if ids.len() == p.runs.len() => p.structure = ids,
+                Element::Image(image) if ids.len() == 1 => image.structure = ids[0],
+                _ => return Err(CommandParseError::UnexpectedCommand),
+            }
         }
+        Ok(element)
     }
 
     /// Comparing variants rather than whole commands keeps `Command`'s `PartialEq` out of the WASM.

@@ -616,6 +616,18 @@ fn attribute(
                 .collect()
         }
         "style" => element.style = InlineStyle::Text(value),
+        "lang" => {
+            if !crate::protocol::valid_language(&value) {
+                return Err("invalid lang".into());
+            }
+            element.lang = Some(value);
+        }
+        "scope" if tag == "th" => {
+            if !["row", "col", "both"].contains(&value.as_str()) {
+                return Err("scope must be row, col, or both".into());
+            }
+            element.scope = Some(value);
+        }
         "dir" => {
             element.dir = Some(match value.as_str() {
                 "ltr" => Direction::Ltr,

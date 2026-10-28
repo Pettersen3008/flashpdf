@@ -37,6 +37,7 @@ pub(crate) struct Paragraph<'a> {
     pub(crate) text: &'a str,
     pub(crate) runs: Vec<TextRun>,
     pub(crate) links: &'a [String],
+    pub(crate) structure: &'a [u32],
 }
 
 pub(crate) struct ImageNode<'a> {
@@ -48,6 +49,7 @@ pub(crate) struct ImageNode<'a> {
     pub(crate) link: Option<&'a str>,
     pub(crate) alt: &'a str,
     pub(crate) alpha: u8,
+    pub(crate) structure: u32,
 }
 
 pub(crate) struct Spacer {

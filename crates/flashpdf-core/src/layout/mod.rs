@@ -146,10 +146,11 @@ impl<'a> LayoutEngine<'a> {
         area: LayoutArea,
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
-        let mut keys: Vec<(Rgb, RunDecoration)> = Vec::new();
+        let mut keys: Vec<(Rgb, RunDecoration, u32)> = Vec::new();
         let mut indices = BTreeMap::new();
         let mut runs = Vec::with_capacity(paragraph.runs.len());
-        for run in &paragraph.runs {
+        for (run_index, run) in paragraph.runs.iter().enumerate() {
+            let structure = paragraph.structure.get(run_index).copied().unwrap_or(0);
             let RunDecoration {
                 underline,
                 line_through,
@@ -169,9 +170,10 @@ impl<'a> LayoutEngine<'a> {
                 link,
                 alpha,
                 background.map(|color| [color.r, color.g, color.b]),
+                structure,
             );
             let index = *indices.entry(key).or_insert_with(|| {
-                keys.push((run.color, run.decoration));
+                keys.push((run.color, run.decoration, structure));
                 keys.len() - 1
             });
             runs.push(TextRun {
@@ -192,7 +194,7 @@ impl<'a> LayoutEngine<'a> {
             let index = usize::from(segment.color.r)
                 | usize::from(segment.color.g) << 8
                 | usize::from(segment.color.b) << 16;
-            let (color, decoration) = keys[index];
+            let (color, decoration, structure) = keys[index];
             segment.color = color;
             let font = self
                 .fonts
@@ -202,6 +204,7 @@ impl<'a> LayoutEngine<'a> {
             let (underline, line_through) = font.strokes();
             let scale = segment.size.get() / 1000.0;
             output.decorations.push(Decoration {
+                structure,
                 underline: decoration.underline.then_some(underline),
                 line_through: decoration.line_through.then_some(line_through),
                 color: decoration.color.unwrap_or(color),
@@ -290,6 +293,7 @@ impl<'a> LayoutEngine<'a> {
             output.links.len() - 1
         });
         output.images.push(PositionedImage {
+            structure: node.structure,
             origin: area.origin,
             width: Pt(width),
             height: Pt(height),

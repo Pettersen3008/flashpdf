@@ -50,6 +50,8 @@ export type RenderOptions = {
 	firstPageFooter?: Element | Iterable<Element> | string | null | undefined;
 	metadata?: PdfMetadata | undefined;
 	tagged?: boolean | undefined;
+	/** PDF/UA-1. Requires title, language, embedded fonts, and explicit image alt text. */
+	pdfua?: boolean | undefined;
 	/** Bookmarks every `h1` to `h6` in document order, nested by level, and opens the outline panel. */
 	outline?: boolean | undefined;
 	/** PDF/A-2 forbids attachments and Factur-X, which need "3b". */
@@ -89,6 +91,7 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 			...FURNITURE,
 			"metadata",
 			"tagged",
+			"pdfua",
 			"outline",
 			"pdfa",
 			"attachments",
@@ -117,7 +120,12 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 			throw new Error("invalid metadata language");
 		if (p.tagged !== undefined && typeof p.tagged !== "boolean")
 			throw new Error("invalid tagged option");
-		if (p.tagged && !metadata.language) throw new Error("tagged PDF requires metadata.language");
+		if (p.pdfua !== undefined && typeof p.pdfua !== "boolean")
+			throw new Error("invalid pdfua option");
+		if (p.pdfua && !(metadata.title as string | undefined)?.trim())
+			throw new Error("PDF/UA requires metadata.title");
+		if ((p.tagged || p.pdfua) && !metadata.language)
+			throw new Error("tagged PDF requires metadata.language");
 		if (p.outline !== undefined && typeof p.outline !== "boolean")
 			throw new Error("invalid outline option");
 		const backend = await loadBackend();
@@ -142,7 +150,7 @@ export function createRenderer(loadBackend: () => Promise<Backend>) {
 				if (typeof p[option] === "string") writer.html(index + 1, p[option]);
 			if (typeof document === "string") writer.html(0, document);
 			writer.setup(p.outline === true, page);
-			writer.metadata(metadata, p.tagged === true);
+			writer.metadata(metadata, p.tagged === true || p.pdfua === true, p.pdfua === true);
 			attach(renderer, writer, p.pdfa, p.attachments, p.facturx);
 			writer.flush();
 			for (const sheet of stylesheets) if (strict.has(sheet)) strict.set(sheet, true);
