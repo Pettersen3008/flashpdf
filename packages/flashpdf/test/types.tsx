@@ -17,6 +17,9 @@ void render("<main><img src=logo></main>", {
 	images: { logo: new Uint8Array(1) },
 	footer: "<p>Acme</p>",
 });
+void render(<p tw="p-4 text-sm font-bold">Total</p>);
+// @ts-expect-error tw is one string of utilities.
+const _twList = <p tw={["p-4"]}>Total</p>;
 // @ts-expect-error An images entry holds bytes, not a URL.
 void render("<main></main>", { images: { logo: "logo.png" } });
 // @ts-expect-error An element's type is a supported tag.

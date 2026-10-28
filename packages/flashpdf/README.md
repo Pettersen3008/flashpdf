@@ -121,6 +121,25 @@ FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImpor
 const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
 ```
 
+## Tailwind without a build
+
+The `tw` prop in JSX, or the `tw` attribute in HTML, takes Tailwind v4 utility names and applies the declarations Tailwind's default theme compiles them to, with no Tailwind install or build step. Its declarations go ahead of `style`, so `style` wins a conflict, and conflicts follow Tailwind utility order regardless of token order.
+
+```tsx
+<div tw="flex justify-between p-4 bg-gray-100 border border-gray-200 rounded-lg">
+  <span tw="text-sm font-semibold text-gray-600">Total</span>
+  <span tw="text-lg font-bold">EUR 1200.00</span>
+</div>
+```
+
+It covers spacing (`p-*`, `m-*`, `gap-*`, including `px` and quarter steps), sizing (`w-*`, `h-*`, `size-*`, `min-*`, `max-*`, `basis-*`, fractions, `full`, container sizes), flex (`flex`, `flex-col`, `flex-wrap`, `flex-1`, `grow`, `shrink-0`, `justify-*`, `items-*`, `self-*`, `content-*`), typography (`text-xs` to `text-9xl`, `font-*` weights and families, `leading-*`, `tracking-*`, `italic`, `underline`, `uppercase`, `whitespace-*`, `text-left` and the other alignments), colours from the default palette (`text-*`, `bg-*`, `border-*`, `decoration-*`, `black`, `white`, `transparent`), borders (`border`, `border-2`, `border-t`, `border-dashed`), radius (`rounded-*`, including `rounded-full`, and its corners), `block`, `opacity-*`, `list-*`, and arbitrary values such as `w-[120px]`, `text-[#0a7]`, and `[orphans:3]`.
+
+Unknown utilities and variants, such as `md:` or `hover:`, reject with the token and element path. Utilities that style children, such as `space-y-*` and `divide-y`, need the built stylesheet. Unsupported display, reverse flex, baseline alignment, and modifier utilities reject.
+
+Arbitrary values support underscores for spaces, `\_` for a literal underscore, and `length:`, `color:`, `number:`, `percentage:`, and `family-name:` hints. Important modifiers, comments, declaration separators, and other escapes reject. Arbitrary values must fit FlashPDF’s CSS subset, so negative margins and percentage font sizes still reject. Tailwind’s private `--tw-*` custom properties are reserved.
+
+Each `tw` string is limited to 16 KiB, 256 utilities, 1024 bytes per utility, and 16 bracket or parenthesis levels.
+
 ## Styling with CSS
 
 Compile stylesheets with the consuming app's build tool and pass the resulting string to `render`:

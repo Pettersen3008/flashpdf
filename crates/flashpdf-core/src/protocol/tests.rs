@@ -1664,3 +1664,38 @@ fn given_an_axis_the_selected_font_lacks_when_compiling_then_rejects_naming_the_
         "fontStyle: oblique -10deg needs a font with a slnt axis; without one, use oblique, which slants by 14deg on <p> in <main>"
     );
 }
+
+#[test]
+fn given_tw_records_when_decoding_then_accepts_one_before_children_and_rejects_misplaced_or_duplicate_records(
+) {
+    let tw = record(37, &text(b"text-sm"));
+    for records in [
+        vec![tw.clone()],
+        vec![open(P, 0, &[]), tw.clone(), tw.clone()],
+        vec![open(P, 0, &[]), element_text("x"), tw.clone()],
+    ] {
+        let mut bytes = elements(&[]);
+        bytes.extend(record(29, &[0]));
+        bytes.extend(records.concat());
+        assert_eq!(
+            Decoder::default().push(&bytes).unwrap_err().to_string(),
+            "invalid nesting"
+        );
+    }
+    let mut bytes = elements(&[]);
+    bytes.extend(record(29, &[0]));
+    bytes.extend(open(P, 0, &[]));
+    bytes.extend(tw);
+    bytes.extend(element_text("Utility"));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(255, &[]));
+    let mut decoder = Decoder::default();
+    decoder.push(&bytes).unwrap();
+    assert_eq!(
+        crate::tests::page_text(
+            &lopdf::Document::load_mem(&decoder.finish().unwrap()).unwrap(),
+            1
+        ),
+        "Utility"
+    );
+}

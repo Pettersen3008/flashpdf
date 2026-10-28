@@ -616,6 +616,7 @@ fn attribute(
                 .collect()
         }
         "style" => element.style = InlineStyle::Text(value),
+        "tw" => element.tw = Some(value),
         "dir" => {
             element.dir = Some(match value.as_str() {
                 "ltr" => Direction::Ltr,

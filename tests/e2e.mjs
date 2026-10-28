@@ -96,16 +96,23 @@ const Invoice = ({ total }) => jsxs("main", {
   style: { fontFamily: "Invoice" },
   children: [
     jsx("a", { href: "https://example.com/", children: jsx("img", { src: logo, alt: "Logo", style: { width: 24 } }) }),
-    jsx("h1", { children: "Invoice" }),
-    jsx("p", { className: "total", children: total }),
+    jsx("h1", { tw: "text-lg font-bold text-blue-700", children: "Invoice" }),
+    jsx("p", { className: "total", tw: "px-4 p-2 rounded-full bg-gray-100 text-[min(9pt,12pt)]", children: total }),
   ],
 });
-export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {
+export const renderInvoice = async () => {
+  try { await render(jsx("p", { tw: "not-a-utility", children: "invalid" })); throw new Error("unknown tw accepted"); }
+  catch (error) { if (!String(error).includes("unknown tw utility: not-a-utility")) throw error; }
+  const first = await render('<p tw="p-4 px-2 text-sm">Order</p>');
+  const second = await render('<p tw="text-sm px-2 p-4">Order</p>');
+  if (first.length !== second.length || first.some((byte, index) => byte !== second[index])) throw new Error("tw order mismatch");
+  return render(jsx(Invoice, { total: "$100.00" }), {
   pageFormat: "A4",
   margin: 36,
   stylesheets: [stylesheet("@layer theme, utilities; @layer theme { .total { color:red } } @layer utilities { .total { @supports NOT (display:grid) { color:color-mix(in oklab, red, blue) } text-align:right } }")],
   fonts: [{ family: "Invoice", regular: font, bold: font }],
 });
+};
 `,
 	);
 	writeFileSync(

@@ -267,6 +267,19 @@ impl Decoder {
                 element.picture = Some(Picture::Drawing(drawing(&bytes)?));
                 Ok(())
             }
+            Opcode::Tw if in_block => {
+                count(elements, payload.len())?;
+                let mut cursor = Cursor::new(payload);
+                let utilities = cursor.utf8()?;
+                cursor.done()?;
+                let element = elements
+                    .open
+                    .last_mut()
+                    .filter(|element| element.children.is_empty() && element.tw.is_none())
+                    .ok_or(ProtocolError::InvalidNesting)?;
+                element.tw = Some(utilities.into());
+                Ok(())
+            }
             Opcode::Close if in_block && payload.is_empty() => {
                 let element = elements.open.pop().ok_or(ProtocolError::InvalidNesting)?;
                 elements.attach(Node::Element(element));

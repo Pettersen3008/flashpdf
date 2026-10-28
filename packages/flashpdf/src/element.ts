@@ -204,6 +204,8 @@ export type CommonProps = {
 	key?: string | number | undefined;
 	id?: string | undefined;
 	className?: string | undefined;
+	/** Tailwind v4 utilities without a build step, such as `"p-4 text-sm font-bold"`; `style` wins a conflict. */
+	tw?: string | undefined;
 	/** The base direction; `auto` takes it from the first strong character, and CSS `direction` overrides it. */
 	dir?: "ltr" | "rtl" | "auto" | undefined;
 	style?: StyleInput | undefined;

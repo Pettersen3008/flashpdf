@@ -69,6 +69,8 @@ pub struct Element {
     pub id: Option<String>,
     pub classes: Vec<String>,
     pub style: InlineStyle,
+    /// The `tw` prop's utilities, which apply before `style`.
+    pub tw: Option<String>,
     pub children: Vec<Node>,
     pub picture: Option<Picture>,
     pub alt: Option<String>,
@@ -276,6 +278,19 @@ impl Styler {
         single_line: bool,
     ) -> Result<Styled<'a>> {
         let at: Rc<str> = tree.path(node).into();
+        let with_tw;
+        let el_style = match &el.tw {
+            Some(tw) => {
+                with_tw = crate::tw::merge(&el.style, tw)
+                    .map_err(|message| Error::new(message).locate(&at))?;
+                &with_tw
+            }
+            None => &el.style,
+        };
+        let at = el
+            .tw
+            .as_ref()
+            .map_or(at.clone(), |tw| format!("{at} with tw=\"{tw}\"").into());
         let matched = self.resolver.matched(tree, node);
         let mut key = format!("{single_line}\n{}\n{}\n", el.tag, list_key(tree, node));
         for index in &matched {
@@ -283,7 +298,7 @@ impl Styler {
             key.push(',');
         }
         key.push('\n');
-        inline_key(&el.style, &mut key);
+        inline_key(el_style, &mut key);
         let computed = match self.computed[parent].children.get(&key) {
             Some(&index) => index,
             None => {
@@ -292,7 +307,7 @@ impl Styler {
                     Some(Value::Number(size)) => Some(*size),
                     _ => None,
                 };
-                let inline = match &el.style {
+                let inline = match el_style {
                     InlineStyle::None => Inline::None,
                     InlineStyle::Text(text) => Inline::Text(text),
                     InlineStyle::Object(entries) => Inline::Object(entries.clone()),

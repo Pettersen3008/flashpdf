@@ -70,6 +70,8 @@ A link to `#id` is a `GoTo` action to a destination at the top of the target's f
 <p>See the <a href="#terms">terms</a>.</p>
 ```
 
+The `tw` JSX prop and HTML attribute map a strict subset of Tailwind v4 default utilities directly in Rust. Conflicts follow Tailwind utility order, and inline `style` overrides them. Unknown utilities and variants reject by token and element path. See the [utility reference](./packages/flashpdf/README.md#tailwind-without-a-build) for supported names and input limits.
+
 Compile CSS in the consuming app's build step, then pass the resulting string to `render`. CSS Modules and minification belong to that build step. `stylesheet` validates the final CSS against FlashPDF's supported subset.
 
 ```ts
