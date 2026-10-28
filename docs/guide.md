@@ -2,6 +2,25 @@
 
 Setup for bundlers and browsers, fixes for common rejections, Tailwind v4, four recipes, and a map from react-pdf. The [README](../README.md) covers the API and [CSS.md](../CSS.md) covers the CSS subset.
 
+## Measuring a change
+
+Keep built baseline and candidate checkouts before changing performance settings. Build each with the existing `sh build-native.sh`, `sh build.sh`, and `pnpm build` commands. Supply the same offline Inter fonts as `inter-400.ttf` and `inter-700.ttf` in one directory. Run from the repository root:
+
+```sh
+node packages/flashpdf/bench/compare.mjs \
+  --baseline ../flashpdf-before --candidate ../flashpdf-after \
+  --backend native --fonts ./fonts \
+  --baseline-sha256 <verified-baseline-artifact-sha256> \
+  --candidate-sha256 <verified-candidate-artifact-sha256> \
+  --check > /tmp/flashpdf-check.json
+```
+
+Both checkouts need built `dist`, WASM, and the host's native addon. The command copies them to a temporary directory and loads each backend explicitly, with no native fallback. Hashes refer to the selected backend's `flashpdf.node` or `flashpdf_wasm_bg.wasm`. `--check` verifies repeated, native/WASM, and baseline/candidate PDF hashes without collecting timings. It reports changed baseline/candidate bytes rather than accepting them as equivalent.
+
+After correctness checks pass, stop builds and other CPU work, remove `--check`, and save the JSON outside the repository. Repeat with `--backend wasm` and its artifact hashes. Defaults are ten alternating baseline/candidate process pairs per tagging mode, ten discarded warmups, and 100 measured renders per process. Override with `--pairs`, `--warmups`, and `--runs`. Untagged and basic-tagged results stay separate; this fixture does not request PDF/UA.
+
+Results include raw samples, process medians, paired candidate/baseline ratios and their observed range, peak RSS, PDF bytes, artifact sizes, source/profile/tool/hardware metadata, and SHA-256 hashes. `releaseGzip9Bytes` uses the same `gzip -9 -n` command as the size gate; `nodeGzip9Bytes` reports Node zlib separately, and `brotli11Bytes` uses Node Brotli. Cold time includes imports and initialization in a fresh process, excluding process launch. Warm time includes invoice tree creation and rendering. A ratio below one favors the candidate; a small difference or a range spanning one needs more quiet runs. The range is not a confidence interval. Changed bytes block performance claims until output semantics receive a separate review; PDFs remain in the reported temporary directory. Repeated or native/WASM byte differences fail the run. There are no CI timing thresholds.
+
 ## Bundlers and runtimes
 
 The browser entry loads the WASM with `new URL('../wasm/flashpdf_wasm_bg.wasm', import.meta.url)`. A bundler that understands that pattern emits the file as an asset. Serve it as `application/wasm`: browsers compile it while it streams only with that type, and otherwise FlashPDF falls back to a slower path and logs a warning.
