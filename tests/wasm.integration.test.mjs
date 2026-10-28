@@ -50,7 +50,7 @@ function record(opcode, payload = new Uint8Array()) {
 
 function protocolHeader() {
 	const page = join(f32(120), f32(60), ...[10, 10, 10, 10].map(f32));
-	return join(encoder.encode("FPDF"), u16(24), record(1, page));
+	return join(encoder.encode("FPDF"), u16(25), record(1, page));
 }
 
 /** A left-aligned paragraph of one plain Helvetica run, with two orphans and two widows. */

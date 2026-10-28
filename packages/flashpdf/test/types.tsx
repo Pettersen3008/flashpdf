@@ -13,6 +13,12 @@ const _data: ElementData = {
 	props: { className: "invoice", children: [{ type: "p", props: { children: "Total" } }] },
 };
 void render(_data);
+void render("<main><img src=logo></main>", {
+	images: { logo: new Uint8Array(1) },
+	footer: "<p>Acme</p>",
+});
+// @ts-expect-error An images entry holds bytes, not a URL.
+void render("<main></main>", { images: { logo: "logo.png" } });
 // @ts-expect-error An element's type is a supported tag.
 const _dataTag: ElementData = { type: "marquee", props: {} };
 
@@ -54,8 +60,8 @@ void render(invoice, {
 });
 // @ts-expect-error Only the first-page variants take null.
 void render(invoice, { header: null });
-// @ts-expect-error A PDF document starts with one or more React elements.
-void render("bare text");
+// @ts-expect-error A PDF document is elements or an HTML string, not a number.
+void render(42);
 // @ts-expect-error FlashPDF only accepts its documented intrinsic elements.
 const _unsupported = <button>Print</button>;
 // @ts-expect-error Unknown intrinsic properties cannot reach runtime validation.

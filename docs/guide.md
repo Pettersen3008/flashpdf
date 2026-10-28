@@ -98,6 +98,10 @@ Tailwind compiles spacing to `calc(0.25rem * 4)`, `px-4` to `padding-inline`, `w
 
 ## Recipes
 
+### Invoices from HTML templates
+
+A template engine that already writes HTML, such as Handlebars or a server-side string template, can hand its output to `render` as a string. Escape the values it fills in as HTML, since the parser rejects a bare `&` or `<`. Pass the logo in `images` and name it in `<img src>`, and put shared CSS in a `<style>` element or in `stylesheets`. See [HTML](../packages/flashpdf/README.md#html) for what the parser accepts.
+
 ### Totals table
 
 Put the totals in the items table, with each label spanning the columns left of the amounts, so the numbers line up with the amount column. Keep the grand total out of `tfoot`, because `tfoot` rows repeat on every page.

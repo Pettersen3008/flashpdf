@@ -35,6 +35,10 @@ pub(super) enum Opcode {
     Drawing = 33,
     /// A Stylesheet that `stylesheet()` declared: checked in full before it joins the cascade.
     StrictStylesheet = 34,
+    /// A block's HTML, a kind byte then UTF-8, read before Setup since its `<style>` joins the cascade.
+    Html = 35,
+    /// An `images` entry an HTML `<img src>` names: a staged raster or a drawing.
+    NamedImage = 36,
     End = 255,
 }
 
@@ -74,6 +78,8 @@ impl TryFrom<u8> for Opcode {
             32 => Self::Close,
             33 => Self::Drawing,
             34 => Self::StrictStylesheet,
+            35 => Self::Html,
+            36 => Self::NamedImage,
             255 => Self::End,
             _ => return Err(ProtocolError::UnknownOpcode),
         })

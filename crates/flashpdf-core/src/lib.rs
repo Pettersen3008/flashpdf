@@ -4,6 +4,7 @@ mod css;
 mod document;
 mod font;
 mod geometry;
+mod html;
 mod image;
 mod layout;
 mod model;

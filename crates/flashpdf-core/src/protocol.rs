@@ -39,7 +39,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 6;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 24;
+const VERSION: u16 = 25;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -203,7 +203,9 @@ impl Decoder {
             | Opcode::Open
             | Opcode::Text
             | Opcode::Close
-            | Opcode::Drawing => self.element_record(code, payload),
+            | Opcode::Drawing
+            | Opcode::Html
+            | Opcode::NamedImage => self.element_record(code, payload),
             Opcode::End if compiling => self.element_record(code, payload),
             // A host that sends element records leaves layout to the compiler.
             Opcode::Metadata | Opcode::PdfA | Opcode::Attachment => {
@@ -347,7 +349,9 @@ impl Commands {
             | Opcode::Open
             | Opcode::Text
             | Opcode::Close
-            | Opcode::Drawing => Err(ProtocolError::InvalidNesting),
+            | Opcode::Drawing
+            | Opcode::Html
+            | Opcode::NamedImage => Err(ProtocolError::InvalidNesting),
             Opcode::Spacer => {
                 let space = pt(cursor.nonnegative_f32("spacer")?)?;
                 cursor.done()?;
