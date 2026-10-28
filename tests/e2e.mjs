@@ -101,6 +101,8 @@ const Invoice = ({ total }) => jsxs("main", {
   ],
 });
 export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {
+  pdfua: true,
+  metadata: { title: "Combined feature invoice", language: "en-US" },
   pageFormat: "A4",
   margin: 36,
   stylesheets: [stylesheet("@layer theme, utilities; @layer theme { .total { color:red } } @layer utilities { .total { @supports NOT (display:grid) { color:color-mix(in oklab, red, blue) } text-align:right } }")],

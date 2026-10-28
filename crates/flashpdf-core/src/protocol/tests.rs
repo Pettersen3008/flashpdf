@@ -124,7 +124,7 @@ fn decorated_box(border: f32, tail: &[u8]) -> Vec<u8> {
     payload.extend([1, 0xee, 0xee, 0xee]);
     payload.extend([0, 0, 0].repeat(4));
     payload.extend(tail);
-    payload.extend([0; 7]);
+    payload.extend([0; 8]);
     record(17, &payload)
 }
 
