@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use super::Error;
 use crate::css::style::{Box, Dimension, Rgb, Transform, WhiteSpace};
+use crate::{Grid, GridItem};
 
 /// A column: kind 0 points, 1 a grow factor, 2 percent.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,6 +84,8 @@ pub enum Record {
     RowEnd,
     FlexStart(Flex, Vec<FlexItem>),
     FlexEnd,
+    GridStart(Grid, Vec<GridItem>),
+    GridEnd,
     PageBreak,
     /// The header or footer block that follows; `first` is the first page's.
     Repeat {
@@ -162,6 +165,8 @@ impl Record {
             Self::Avoid => 23,
             Self::FlexStart(..) => 24,
             Self::FlexEnd => 25,
+            Self::GridStart(..) => 37,
+            Self::GridEnd => 38,
             Self::End => 255,
         }
     }
@@ -209,6 +214,7 @@ impl Record {
                     b.u8(item.align);
                 }
             }
+            Self::GridStart(style, items) => crate::protocol::grid::encode(style, items, b.0),
             Self::Repeat { first, fixed, .. } => b.u8(if *fixed { 2 } else { u8::from(*first) }),
             Self::Paragraph {
                 runs,
@@ -270,6 +276,7 @@ impl Record {
             Self::StackEnd
             | Self::RowEnd
             | Self::FlexEnd
+            | Self::GridEnd
             | Self::PageBreak
             | Self::TableEnd
             | Self::BoxEnd
@@ -658,6 +665,20 @@ impl<S: Sink> Writer<S> {
     pub fn flex_end(&mut self) -> Result<(), Error> {
         self.flush()?;
         self.record(Record::FlexEnd)
+    }
+
+    pub fn grid_start(&mut self, grid: Grid, items: Vec<GridItem>) -> Result<(), Error> {
+        grid.validate()
+            .map_err(|error| Error::new(error.to_string()))?;
+        crate::protocol::grid::validate_items(&items)
+            .map_err(|error| Error::new(error.to_string()))?;
+        self.flush()?;
+        self.record(Record::GridStart(grid, items))
+    }
+
+    pub fn grid_end(&mut self) -> Result<(), Error> {
+        self.flush()?;
+        self.record(Record::GridEnd)
     }
 
     /// The first `header` children repeat on every page the table continues on.

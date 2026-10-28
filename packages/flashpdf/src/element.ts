@@ -39,14 +39,33 @@ export type Alignment =
 	| "end"
 	| "center";
 
+/** A bounded track list, including minmax() and integer repeat(); validated by the core. */
+export type GridTracks = number | string;
+export type GridLine = number | "auto" | `${number}` | `span ${number}` | `${number} span`;
+export type GridPlacement = GridLine | `${GridLine} / ${GridLine}`;
+
 export type BorderStyle = "none" | "hidden" | "solid" | "dashed" | "dotted";
 
 export type Style = {
-	display?: "block" | "flex";
+	display?: "block" | "flex" | "grid";
+	gridTemplateColumns?: GridTracks;
+	gridTemplateRows?: GridTracks;
+	gridAutoColumns?: GridTracks;
+	gridAutoRows?: GridTracks;
+	gridAutoFlow?: "row" | "column";
+	gridColumn?: GridPlacement;
+	gridRow?: GridPlacement;
+	gridColumnStart?: GridLine;
+	gridColumnEnd?: GridLine;
+	gridRowStart?: GridLine;
+	gridRowEnd?: GridLine;
+	justifyItems?: Alignment;
+	justifySelf?: Alignment | "auto";
 	flexDirection?: "row" | "column";
 	flexWrap?: "nowrap" | "wrap";
 	justifyContent?:
 		| "normal"
+		| "stretch"
 		| "flex-start"
 		| "start"
 		| "flex-end"

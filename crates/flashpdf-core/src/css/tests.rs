@@ -502,7 +502,7 @@ fn given_long_descendant_selectors_in_is_and_not_on_a_deep_tree_when_matching_th
 fn given_css_outside_the_subset_when_validating_then_rejects_with_its_source_position() {
     for (css, parts) in [
         (".a { box-shadow: 1pt }", &["box-shadow", "\".a\" at 1:1"][..]),
-        (".a { grid-template-columns: 1fr }", &["unsupported CSS property: grid-template-columns", "\".a\" at 1:1"]),
+        (".a { display: inline-grid }", &["invalid display: inline-grid", "\".a\" at 1:1"]),
         (".a { color }", &["invalid CSS declaration: color", "at 1:1"]),
         (".a { color: #000 } oops", &["invalid CSS stylesheet at 1:20"]),
         ("{bad}p { color: red }", &["invalid CSS stylesheet"]),
@@ -649,9 +649,9 @@ fn given_quoted_and_uppercase_supports_conditions_when_resolving_then_checks_cap
 ) {
     let sheet = r#".a { color:blue }
 @supports (--x:"(") and (display:grid) { .a { color:red } }
-@supports NOT (display:grid) { .b { color:green } }
+@supports NOT (display:inline-grid) { .b { color:green } }
 @supports (display:block) AND (color:red) { .c { color:navy } }"#;
-    assert_eq!(text(&one(sheet, "a").unwrap(), "color"), Some("blue"));
+    assert_eq!(text(&one(sheet, "a").unwrap(), "color"), Some("red"));
     assert_eq!(text(&one(sheet, "b").unwrap(), "color"), Some("green"));
     assert_eq!(text(&one(sheet, "c").unwrap(), "color"), Some("navy"));
     let deep = format!(

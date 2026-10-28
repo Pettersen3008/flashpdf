@@ -1,10 +1,11 @@
 mod flex;
+mod grid;
 mod output;
 mod position;
 mod row;
 mod text;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 
 use output::Marks;
@@ -78,6 +79,8 @@ pub(crate) struct LayoutEngine<'a> {
     /// Absolute and fixed boxes met in flow, so a containing block looks for its own only when
     /// the count moved while its content laid out.
     absolutes: Cell<usize>,
+    // Intrinsic probes revisit nested grids at the same constraints within this block.
+    grids: RefCell<BTreeMap<grid::GridKey, grid::GridRows>>,
 }
 
 impl<'a> LayoutEngine<'a> {
@@ -90,6 +93,7 @@ impl<'a> LayoutEngine<'a> {
                 page.height - page.margin.top - page.margin.bottom,
             ),
             absolutes: Cell::new(0),
+            grids: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -133,6 +137,7 @@ impl<'a> LayoutEngine<'a> {
                 Ok(Pt::ZERO)
             }
             Element::Flex(node) => self.layout_flex(node, area, output),
+            Element::Grid(node) => self.layout_grid(node, area, output),
         }
     }
 
@@ -311,8 +316,12 @@ impl<'a> LayoutEngine<'a> {
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
         match node.size.position {
-            None => Ok(self.block(node, node.size, area, width, output)?.0),
-            Some(position) => self.positioned(node, position, area, width, output),
+            None => Ok(self
+                .block(node, (node.size, node.style), area, width, output)?
+                .0),
+            Some(position) => {
+                self.positioned(node, position, (node.size, node.style), area, width, output)
+            }
         }
     }
 
@@ -320,12 +329,11 @@ impl<'a> LayoutEngine<'a> {
     fn block(
         &self,
         node: &BoxNode<'_>,
-        size: BoxSize,
+        (size, style): (BoxSize, BoxStyle),
         area: LayoutArea,
         width: Option<Pt>,
         output: &mut LayoutBuffer,
     ) -> Result<(Pt, Rect), LayoutError> {
-        let style = node.style;
         let horizontal = style.margin.right
             + style.margin.left
             + style.padding.right
@@ -377,13 +385,23 @@ impl<'a> LayoutEngine<'a> {
             index
         });
         let mut inner_height = Pt::ZERO;
+        let vertical_extent =
+            style.padding.top + style.padding.bottom + style.border.top + style.border.bottom;
+        let assigned_height = size.height.map(|height| {
+            (border_size(height.get(), vertical_extent.get(), size.border_box)
+                - vertical_extent.get())
+            .max(0.0)
+        });
         for child in &node.children {
-            inner_height += self.layout(
-                child,
-                area.translated(inset_x, inset_y + inner_height)
-                    .with_width(inner_width),
-                output,
-            )?;
+            let child_area = area
+                .translated(inset_x, inset_y + inner_height)
+                .with_width(inner_width);
+            inner_height += match child {
+                Element::Grid(grid) if grid.style.boxed => {
+                    self.layout_grid_height(grid, child_area, assigned_height, output)?
+                }
+                _ => self.layout(child, child_area, output)?,
+            };
         }
         let box_height = inner_height
             + style.padding.top

@@ -104,6 +104,12 @@ fn longhands(key: &Key) -> Vec<Key> {
         Key::Prop(BORDER_RADIUS) => RADII.into(),
         Key::Prop(FLEX) => vec![prop!("flexGrow"), prop!("flexShrink"), prop!("flexBasis")],
         Key::Prop(BACKGROUND) => vec![prop!("backgroundColor")],
+        Key::Prop(prop) if prop == prop!("gridColumn") => {
+            vec![prop!("gridColumnStart"), prop!("gridColumnEnd")]
+        }
+        Key::Prop(prop) if prop == prop!("gridRow") => {
+            vec![prop!("gridRowStart"), prop!("gridRowEnd")]
+        }
         Key::Prop(prop) => match LOGICAL.iter().find(|(own, _)| *own == prop) {
             Some((_, sides)) => sides.to_vec(),
             None => vec![prop],
@@ -281,6 +287,11 @@ pub(super) fn normalize(value: &Cascaded, parent: &Style) -> Result<Style, Messa
             result.set(prop!("flexGrow"), grow.into());
             result.set(prop!("flexShrink"), shrink.into());
             result.set(prop!("flexBasis"), basis);
+        } else if prop == prop!("gridColumn") || prop == prop!("gridRow") {
+            let values = super::grid::placement(&item, prop.name())?;
+            for (key, value) in longhands(key).into_iter().zip(values) {
+                result.set_key(key, value);
+            }
         } else if prop == BACKGROUND {
             result.set(prop!("backgroundColor"), item);
         } else {

@@ -71,6 +71,10 @@ pub(crate) struct PositionedBox {
 /// around it, ordered by `z` and then as laid out.
 #[derive(Clone)]
 pub(crate) struct Layer {
+    /// A normal grid item paints before this marker line; positioned layers wait until page end.
+    pub(crate) at: Option<usize>,
+    /// Grid instance and source child, so fragmented rows retain source paint order.
+    pub(crate) order: Option<(u32, usize)>,
     pub(crate) z: i32,
     /// How far right and down the buffer paints from where it was laid out.
     pub(crate) offset: Point,
@@ -196,6 +200,7 @@ impl LayoutBuffer {
             + self.boxes.capacity() * size_of::<PositionedBox>()
             + self.images.capacity() * size_of::<PositionedImage>()
             + self.links.capacity() * size_of::<String>()
+            + self.layers.capacity() * size_of::<Layer>()
             + self
                 .layers
                 .iter()

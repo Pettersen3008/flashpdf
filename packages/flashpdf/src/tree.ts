@@ -6,7 +6,9 @@ import { isMarkup, markup, vector, type Drawing } from "./svg.js";
 /** The style keys the core supports (css/properties.rs); it rejects any other key by name. */
 const supported = new Set(
 	`
-	display flexDirection flexWrap justifyContent alignItems alignSelf alignContent flex flexGrow flexShrink
+	display gridTemplateColumns gridTemplateRows gridAutoColumns gridAutoRows gridAutoFlow
+	gridColumn gridRow gridColumnStart gridColumnEnd gridRowStart gridRowEnd justifyItems justifySelf
+	flexDirection flexWrap justifyContent alignItems alignSelf alignContent flex flexGrow flexShrink
 	flexBasis width minWidth maxWidth height minHeight maxHeight boxSizing margin marginTop
 	marginRight marginBottom marginLeft padding paddingTop paddingRight paddingBottom paddingLeft
 	border borderWidth borderColor borderTop borderRight borderBottom borderLeft borderStyle

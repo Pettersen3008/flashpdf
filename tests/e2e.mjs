@@ -98,12 +98,24 @@ const Invoice = ({ total }) => jsxs("main", {
     jsx("a", { href: "https://example.com/", children: jsx("img", { src: logo, alt: "Logo", style: { width: 24 } }) }),
     jsx("h1", { children: "Invoice" }),
     jsx("p", { className: "total", children: total }),
+    jsxs("section", {
+      className: "geometry",
+      style: { width: 237.7, fontSize: 9.3, lineHeight: 1.17 },
+      children: [
+        jsx("div", { style: { gridRow: "span 2" }, children: "Fractional tracks wrap invoice details across lines" }),
+        jsxs("div", {
+          style: { display: "grid", gridColumn: "2 / span 2", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 2.3 },
+          children: [jsx("div", { children: "Nested grid" }), jsx("div", { children: "Percent tracks" })],
+        }),
+        jsx("div", { style: { gridColumn: "2 / span 2" }, children: "Grid span" }),
+      ],
+    }),
   ],
 });
 export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {
   pageFormat: "A4",
   margin: 36,
-  stylesheets: [stylesheet("@layer theme, utilities; @layer theme { .total { color:red } } @layer utilities { .total { @supports NOT (display:grid) { color:color-mix(in oklab, red, blue) } text-align:right } }")],
+  stylesheets: [stylesheet("@layer theme, utilities; @layer theme { .total { color:red } } @layer utilities { .total { @supports NOT (display:inline-grid) { color:color-mix(in oklab, red, blue) } text-align:right } } .geometry { display: grid; grid-template-columns: 23.5% repeat(2, minmax(0, 1fr)); gap: 3.3pt 4.7pt } .geometry > div { background: #eee }")],
   fonts: [{ family: "Invoice", regular: font, bold: font }],
 });
 `,

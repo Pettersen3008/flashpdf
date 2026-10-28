@@ -75,6 +75,38 @@ impl<'a> PdfPainter<'a> {
     }
 
     pub(crate) fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        let mut normal: Vec<_> = layout
+            .layers
+            .iter()
+            .filter(|layer| layer.at.is_some_and(|at| lines.contains(&at)))
+            .collect();
+        if normal.is_empty() {
+            self.paint_slice(layout, lines, origin, true);
+            return;
+        }
+        normal.sort_by_key(|layer| layer.at);
+        self.paint_boxes(&layout.boxes, origin);
+        let mut start = lines.start;
+        for layer in normal {
+            let at = layer.at.unwrap();
+            self.paint_slice(layout, start..at, origin, false);
+            self.paint(
+                &layer.buffer,
+                0..layer.buffer.lines.len(),
+                origin.translated(layer.offset.x, Pt::ZERO - layer.offset.y),
+            );
+            start = at;
+        }
+        self.paint_slice(layout, start..lines.end, origin, false);
+    }
+
+    fn paint_slice(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        origin: Point,
+        boxes: bool,
+    ) {
         let mut ids = if self.tags.is_some() {
             vec![None; lines.len()]
         } else {
@@ -100,7 +132,9 @@ impl<'a> PdfPainter<'a> {
                 }
             }
         }
-        self.paint_boxes(&layout.boxes, origin);
+        if boxes {
+            self.paint_boxes(&layout.boxes, origin);
+        }
         self.paint_images(layout, lines.clone(), origin, &ids);
         self.paint_text(layout, lines, origin, &ids);
         self.set_alpha(OPAQUE);
@@ -109,7 +143,11 @@ impl<'a> PdfPainter<'a> {
     /// The whole buffer at `origin`, then its positioned layers over it.
     pub(crate) fn paint_flow(&mut self, layout: &LayoutBuffer, origin: Point, page: Page) {
         self.paint(layout, 0..layout.lines.len(), origin);
-        let mut layers: Vec<&Layer> = layout.layers.iter().collect();
+        let mut layers: Vec<&Layer> = layout
+            .layers
+            .iter()
+            .filter(|layer| layer.at.is_none())
+            .collect();
         layers.sort_by_key(|layer| layer.z);
         for layer in layers {
             self.paint_layer(layer, origin, page);

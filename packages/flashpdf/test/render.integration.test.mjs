@@ -1279,10 +1279,10 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 			{ position: "absolute", top: 0 },
 			/an absolute or fixed box needs top or bottom, and left or right/,
 		],
-		[{ display: "grid" }, /invalid display/],
+		[{ display: "inline-grid" }, /invalid display: inline-grid/],
 		[
 			{ justifyContent: "center" },
-			/justify-content, align-items, align-content, and flex-wrap apply only to a flex container on <main>/,
+			/justify-content, align-items, align-content, and flex-wrap apply only to a flex container or grid on <main>/,
 		],
 	])
 		await assert.rejects(
