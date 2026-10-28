@@ -1,3 +1,3 @@
 - [ ] `sh verify.sh` passes
-- [ ] `packages/flashpdf/CHANGELOG.md` has an entry under Unreleased or the version being released
+- [ ] Commits a user can notice are `feat:` or `fix:` Conventional Commits, which release-please turns into the changelog
 - [ ] Docs updated (README.md, CSS.md, or AGENTS.md) where behaviour changed

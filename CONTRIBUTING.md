@@ -6,7 +6,7 @@
 
 1. Fork the repository and create a branch from `main`.
 2. Install pnpm 12.4.2 with `npm install -g pnpm@12.4.2`, because `packageManager` pins it and older pnpm cannot switch to it. Make the change, then run `sh verify.sh`. It is the source of truth and CI runs the same script.
-3. Add an entry under `## Unreleased` in `packages/flashpdf/CHANGELOG.md` for anything a user can notice.
+3. Write commit messages as [Conventional Commits](https://www.conventionalcommits.org/). release-please builds the changelog from them, so describe anything a user can notice in a `feat:` or `fix:` commit.
 4. Update README.md, CSS.md, or AGENTS.md when the behaviour they describe changes.
 5. Open the pull request and complete the checklist in the template.
 
