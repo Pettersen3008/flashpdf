@@ -2133,3 +2133,17 @@ fn given_tw_records_when_decoding_then_accepts_one_before_children_and_rejects_m
         "Utility"
     );
 }
+
+#[test]
+fn given_reversed_grid_rows_in_ua_when_rendered_then_keeps_source_text_links_and_destination_coordinates(
+) {
+    let bytes = ua_document("<main><div style='height:100pt'><div style='display:grid;grid-template-columns:100pt;grid-template-rows:20pt 20pt'><div id='first' style='grid-row:2'><a href='#second'>FIRST</a></div><div id='second' style='grid-row:1'><a href='#first'>SECOND</a></div></div></div></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "FIRST\nSECOND");
+    assert_eq!(structure_elements(&pdf, b"Link").len(), 2);
+    let first = destination(&pdf, b"first");
+    let second = destination(&pdf, b"second");
+    assert_eq!(first, (second.0, 12.0, 148.0));
+    assert_eq!(second.1, 12.0);
+    assert_eq!(second.2, 168.0);
+}

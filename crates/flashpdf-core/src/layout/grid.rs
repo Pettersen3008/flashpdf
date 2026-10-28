@@ -492,15 +492,14 @@ impl LayoutEngine<'_> {
     ) -> Result<Pt, LayoutError> {
         let rows = self.grid_sizing(node, AvailableSpace::Definite(area.width.get()), height)?;
         let layer_start = output.layers.len();
-        for row in &rows.rows {
-            self.layout_grid_row(
-                node,
-                &rows,
-                row,
-                area.translated(Pt::ZERO, Pt(row.start)),
-                output,
-                0,
-            )?;
+        if let Some(last) = rows.rows.last() {
+            // Atomic grids emit source order directly, so flow markers and layers stay aligned.
+            let row = GridRow {
+                start: 0.0,
+                end: rows.height,
+                tracks: 0..last.tracks.end,
+            };
+            self.layout_grid_row(node, &rows, &row, area, output, 0)?;
         }
         output.layers[layer_start..]
             .sort_by_key(|layer| (layer.z, layer.order.map_or(usize::MAX, |v| v.1)));
@@ -622,7 +621,7 @@ impl LayoutEngine<'_> {
         if rows
             .rows
             .last()
-            .is_some_and(|last| last.tracks == row.tracks)
+            .is_some_and(|last| last.tracks.end == row.tracks.end)
         {
             for child in node
                 .children

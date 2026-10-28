@@ -1337,6 +1337,30 @@ mod effect_regressions {
     }
 
     #[test]
+    fn given_reversed_grid_rows_when_atomic_or_span_connected_then_paints_every_child_once_in_source_order(
+    ) {
+        let grid = "<div style='display:grid;grid-template-columns:100pt;grid-template-rows:20pt 20pt'><div style='grid-row:2'>FIRST</div><div style='grid-row:1'>SECOND</div></div>";
+        for style in [
+            "height:100pt",
+            "height:100pt;position:relative",
+            "height:100pt;transform:translateX(2pt)",
+            "position:absolute;left:0;top:0;width:200pt;height:100pt",
+        ] {
+            let pdf = compile(&format!("<div style='{style}'>{grid}</div>"));
+            assert_eq!(
+                pdf.extract_text(&[1]).unwrap().trim(),
+                "FIRST\nSECOND",
+                "{style}"
+            );
+        }
+        let pdf = compile("<div style='height:80pt'>BEFORE</div><div style='display:grid;grid-template-columns:100pt 100pt;grid-template-rows:repeat(8,20pt)'><div style='grid-column:1;grid-row:3 / span 2'>FIRST</div><div style='grid-column:2;grid-row:1 / span 3'>SECOND</div><div style='grid-column:1;grid-row:5 / span 4'>THIRD</div></div>");
+        assert_eq!(pdf.get_pages().len(), 3);
+        for (page, text) in [(1, "BEFORE"), (2, "FIRST\nSECOND"), (3, "THIRD")] {
+            assert_eq!(pdf.extract_text(&[page]).unwrap().trim(), text);
+        }
+    }
+
+    #[test]
     fn given_overflow_on_bordered_gradients_and_shadows_when_painted_then_only_the_owner_and_each_child_paint_once(
     ) {
         for (child, count) in [("", 1), ("<div style='width:10pt;height:10pt;background-image:linear-gradient(white,blue);box-shadow:1pt 1pt green'></div>", 2)] {

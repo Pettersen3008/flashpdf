@@ -97,6 +97,11 @@ const Invoice = ({ total }) => jsxs("main", {
   children: [
     jsx("a", { href: "https://example.com/", children: jsx("img", { src: logo, alt: "Logo", style: { width: 24 } }) }),
     jsx("h1", { tw: "text-lg font-bold text-blue-700", children: "Invoice", style: { transform: "rotate(3deg) skewX(2deg) translate(1pt, 2pt)", transformOrigin: "left top", clipPath: "inset(0 round 2pt)", overflow: "hidden", borderRadius: 4, backgroundImage: "linear-gradient(30deg, #fff, #eee 40%, #ddd)", boxShadow: "2pt 3pt 0 1pt #888, inset 0 1pt #aaa" } }),
+    jsx("div", { style: { height: 60 }, children: jsxs("section", {
+      tw: "[display:grid]",
+      style: { gridTemplateColumns: "100pt", gridTemplateRows: "20pt 20pt" },
+      children: [jsx("div", { style: { gridRow: "2" }, children: "FIRST" }), jsx("div", { style: { gridRow: "1" }, children: "SECOND" })],
+    }) }),
     jsx("p", { className: "total", tw: "px-4 p-2 rounded-full bg-gray-100 text-[min(9pt,12pt)]", style: { background: "radial-gradient(ellipse farthest-corner at 30% 20%, #fff, #cde)" }, children: total }),
     jsxs("section", {
       className: "geometry",

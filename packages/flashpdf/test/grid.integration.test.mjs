@@ -148,3 +148,23 @@ test("given unsupported grid input in inline styles or unmatched strict CSS, whe
 		);
 	}
 });
+
+test("given reversed rows in atomic and span-connected grids, when rendering, then paints every child once in source order", async () => {
+	const grid =
+		'<div style="display:grid;grid-template-columns:100pt;grid-template-rows:20pt 20pt"><div style="grid-row:2">FIRST</div><div style="grid-row:1">SECOND</div></div>';
+	const options = { pageFormat: { width: 240, height: 160 }, margin: 10 };
+	for (const style of [
+		"height:100pt",
+		"height:100pt;position:relative",
+		"height:100pt;transform:translateX(2pt)",
+		"position:absolute;left:0;top:0;width:200pt;height:100pt",
+	]) {
+		const pdf = await render(`<div style="${style}">${grid}</div>`, options);
+		assert.deepEqual(labels(pdf), [["FIRST", "SECOND"]]);
+	}
+	const pdf = await render(
+		'<div style="height:80pt">BEFORE</div><div style="display:grid;grid-template-columns:100pt 100pt;grid-template-rows:repeat(8,20pt)"><div style="grid-column:1;grid-row:3 / span 2">FIRST</div><div style="grid-column:2;grid-row:1 / span 3">SECOND</div><div style="grid-column:1;grid-row:5 / span 4">THIRD</div></div>',
+		options,
+	);
+	assert.deepEqual(labels(pdf), [["BEFORE"], ["FIRST", "SECOND"], ["THIRD"]]);
+});
