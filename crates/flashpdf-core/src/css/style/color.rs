@@ -330,14 +330,8 @@ pub(crate) fn color_alpha(value: &Value) -> Result<(Rgb, f64), Message> {
         return Ok(([0; 3], 0.0));
     }
     let mut alpha = 1.0;
-    let rgb = channels_alpha(&source, 0, &mut alpha)?;
-    if !alpha.is_finite() {
-        return Err("invalid colour alpha".into());
-    }
-    Ok((
-        rgb.map(|channel| byte(channel / 255.0) as u8),
-        alpha.clamp(0.0, 1.0),
-    ))
+    channels_alpha(&source, 0, &mut alpha)
+        .map(|rgb| (rgb.map(|channel| byte(channel / 255.0) as u8), alpha))
 }
 
 fn channels(source: &str, nesting: usize) -> Result<[f64; 3], Message> {
@@ -359,6 +353,10 @@ fn channels_alpha(source: &str, nesting: usize, alpha: &mut f64) -> Result<[f64;
             None => functional(source, alpha)?,
         },
     };
+    if !alpha.is_finite() {
+        return Err("invalid colour alpha".into());
+    }
+    *alpha = alpha.clamp(0.0, 1.0);
     rgb.ok_or_else(|| {
         if source == "transparent" {
             "transparent applies only to background and border color".into()

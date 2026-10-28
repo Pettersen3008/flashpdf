@@ -149,6 +149,14 @@ fn given_oklch_and_oklab_colours_when_resolving_them_then_converts_to_clipped_sr
 #[test]
 fn given_color_mix_when_resolving_then_mixes_opaque_colours_and_rejects_any_transparency() {
     assert_eq!(
+        super::color::color_alpha(&t("#0008")),
+        Ok(([0; 3], 136.0 / 255.0))
+    );
+    assert_eq!(
+        color(&t("color-mix(in srgb, color-mix(in oklab, oklab(0.5 0.4 0), oklab(0.5 -0.4 0)), rgb(99 99 99))")),
+        Ok([99, 99, 99])
+    );
+    assert_eq!(
         color(&t("color-mix(in srgb, red\u{a0}50%, blue)")),
         Ok([128, 0, 128])
     );
@@ -191,6 +199,7 @@ fn given_color_mix_when_resolving_then_mixes_opaque_colours_and_rejects_any_tran
     for value in [
         "color-mix(in oklab, #000 10%, transparent)",
         "color-mix(in srgb, red 20%, blue 30%)",
+        "color-mix(in srgb, #0008, blue)",
     ] {
         assert_eq!(
             color(&t(value)),
@@ -203,6 +212,7 @@ fn given_color_mix_when_resolving_then_mixes_opaque_colours_and_rejects_any_tran
         Err("unsupported color-mix space: in lab; use srgb or oklab".into())
     );
     assert!(color(&t("color-mix(in srgb, red 50garbage%, blue)")).is_err());
+    assert!(color(&t("color-mix(in srgb, rgba(0, 0, 0, NaN), blue)")).is_err());
     let nested = format!(
         "{}red{}",
         "color-mix(in srgb, red, ".repeat(17),

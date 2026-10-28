@@ -344,7 +344,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     bad_magic[0] = b'X';
     assert_eq!(push_error(&bad_magic), "invalid magic");
 
-    for version in [1_u16, 20] {
+    for version in [1_u16, 20, 25] {
         let mut bad_version = representative();
         bad_version[4..6].copy_from_slice(&version.to_le_bytes());
         assert_eq!(push_error(&bad_version), "unknown version");
@@ -1986,4 +1986,14 @@ fn given_ua_table_body_and_footer_headings_when_rendering_then_checks_levels_in_
     for role in [b"H1".as_slice(), b"H2", b"H3"] {
         assert_eq!(structure_elements(&pdf, role).len(), 1);
     }
+}
+
+#[test]
+fn given_an_unknown_box_paint_flag_when_decoding_then_rejects_before_layout() {
+    let mut command = box_start();
+    let flag = command.len() - 7;
+    command[flag] = 2;
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(command);
+    assert_eq!(push_error(&bytes), "invalid box paint flag");
 }
