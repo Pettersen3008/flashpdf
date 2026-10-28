@@ -313,7 +313,7 @@ pub(crate) fn number(value: f64, positive: bool) -> Result<f64, Message> {
 }
 
 /// Points per unit. CSS fixes 1in = 2.54cm = 25.4mm = 101.6Q = 96px = 72pt = 6pc; rem is the 12pt root size.
-fn unit_points(unit: &str) -> Option<f64> {
+pub(crate) fn unit_points(unit: &str) -> Option<f64> {
     Some(match unit {
         "pt" => 1.0,
         "px" => 0.75,

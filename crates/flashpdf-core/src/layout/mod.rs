@@ -311,9 +311,111 @@ impl<'a> LayoutEngine<'a> {
         output: &mut LayoutBuffer,
     ) -> Result<Pt, LayoutError> {
         match node.size.position {
+            None if node.effects.is_some() => {
+                let mut buffer = LayoutBuffer::default();
+                let before = self.absolutes.get();
+                let (height, rect) = self.block(node, node.size, area, width, &mut buffer)?;
+                if node.effects.is_some_and(crate::BoxEffects::transformed)
+                    && self.absolutes.get() != before
+                {
+                    self.place_absolutes(
+                        &node.children,
+                        Some(position::padding_box(node, rect)),
+                        &mut buffer,
+                    )?;
+                }
+                self.effect_layer(node, rect, &mut buffer)?;
+                let mut layer = buffer.layers.remove(0);
+                layer.flow = Some(output.marks());
+                output.lines.extend(buffer.lines);
+                output.layers.push(layer);
+                output.layers.extend(buffer.layers);
+                Ok(height)
+            }
             None => Ok(self.block(node, node.size, area, width, output)?.0),
             Some(position) => self.positioned(node, position, area, width, output),
         }
+    }
+
+    fn effect_layer(
+        &self,
+        node: &BoxNode<'_>,
+        rect: Rect,
+        output: &mut LayoutBuffer,
+    ) -> Result<(), LayoutError> {
+        let Some(effect) = node.effects else {
+            return Ok(());
+        };
+        let (width, height) = (rect.width.get(), rect.height.get());
+        let matrix = effect
+            .transform(width, height)
+            .map_err(|_| LayoutError::InvalidBox)?;
+        let clip = effect
+            .clip(width, height)
+            .map_err(|_| LayoutError::InvalidBox)?;
+        let mut buffer = std::mem::take(output);
+        let paint = effect.overflow() && painted(&node.style);
+        if paint {
+            // Nested layers keep indices into boxes, so retain the unpainted slot.
+            let style = &mut buffer.boxes[0].style;
+            style.background = None;
+            style.border = crate::Edges::all(Pt::ZERO);
+            style.radius = None;
+        }
+        output.lines.push(output::PositionedLine {
+            segments: 0..0,
+            origin: rect.origin,
+            top: rect.origin.y,
+            bottom: rect.origin.y + rect.height,
+            available_width: rect.width,
+            text_width: Pt::ZERO,
+            align: TextAlign::Left,
+        });
+        let inner = if !effect.transformed() {
+            buffer
+                .layers
+                .extract_if(.., |layer| layer.flow.is_none())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut effects = output::LayerEffects {
+            source: std::ptr::from_ref(node) as usize,
+            rect: PositionedBox {
+                origin: rect.origin,
+                width: rect.width,
+                height: rect.height,
+                style: node.style,
+            },
+            transform: effect.transformed().then_some(matrix),
+            clip: clip.map(std::rc::Rc::new),
+            clip_border: effect.border_box(),
+            overflow: effect.overflow(),
+            paint,
+        };
+        output.layers.push(Layer {
+            z: 0,
+            flow: Some(output::Marks::default()),
+            offset: Point::ZERO,
+            page: false,
+            effects: Some(Box::new(effects.clone())),
+            buffer,
+        });
+        effects.paint = false;
+        for layer in inner {
+            output.layers.push(Layer {
+                z: layer.z,
+                flow: None,
+                offset: Point::ZERO,
+                page: false,
+                effects: Some(Box::new(effects.clone())),
+                buffer: LayoutBuffer {
+                    layers: vec![layer],
+                    ..LayoutBuffer::default()
+                },
+            });
+        }
+        Ok(())
     }
 
     /// Lays out a box with `size` for its own and returns its margin-box height and its border box.
@@ -400,9 +502,20 @@ impl<'a> LayoutEngine<'a> {
             height = height.min(border(max));
         }
         let height = height.max(min);
-        if overflows(height - content) {
+        if overflows(height - content) && !node.effects.is_some_and(crate::BoxEffects::overflow) {
             return Err(LayoutError::ContentOverflow);
         }
+        let width = if node.effects.is_some_and(crate::BoxEffects::image) {
+            output.images.last().map_or(width, |image| {
+                image.width
+                    + style.padding.left
+                    + style.padding.right
+                    + style.border.left
+                    + style.border.right
+            })
+        } else {
+            width
+        };
         let origin = area.origin.translated(left, style.margin.top);
         if let Some(index) = paint {
             output.boxes[index] = PositionedBox {
@@ -485,7 +598,7 @@ impl<'a> LayoutEngine<'a> {
                 align: cell.align,
                 // A positioned cell box paints in its own layer, which does not stretch.
                 painted: matches!(&cell.content, Element::Box(node)
-                    if painted(&node.style) && node.size.position.is_none()),
+                    if painted(&node.style) && node.size.position.is_none() && node.effects.is_none()),
                 start,
                 end: output.marks(),
             };
@@ -626,4 +739,204 @@ fn overflows(free: f32) -> bool {
 
 pub(crate) fn painted(style: &BoxStyle) -> bool {
     style.background.is_some() || style.border.iter().any(|edge| *edge > Pt::ZERO)
+}
+
+#[cfg(test)]
+mod effect_tests {
+    use super::*;
+    use crate::{BoxEffects, Edges, Inset, LineStyle, Position, PositionKind, OPAQUE};
+
+    fn node<'a>(
+        kind: Option<PositionKind>,
+        z: Option<i32>,
+        effects: Option<&'a BoxEffects>,
+        children: Vec<Element<'a>>,
+    ) -> BoxNode<'a> {
+        BoxNode {
+            style: BoxStyle {
+                margin: Edges::all(Pt::ZERO),
+                padding: Edges::all(Pt::ZERO),
+                border: Edges::all(Pt::ZERO),
+                background: Some(Rgb { r: 255, g: 0, b: 0 }),
+                border_color: Edges::all(Rgb { r: 0, g: 0, b: 0 }),
+                border_style: Edges::all(LineStyle::Solid),
+                radius: None,
+                alpha: OPAQUE,
+            },
+            size: BoxSize {
+                width: ImageSize::Fixed(Pt(80.0)),
+                height: Some(Pt(20.0)),
+                position: kind.map(|kind| Position {
+                    kind,
+                    inset: Edges {
+                        top: Inset::Points(0.0),
+                        right: Inset::Auto,
+                        bottom: Inset::Auto,
+                        left: Inset::Points(0.0),
+                    },
+                    z,
+                }),
+                ..BoxSize::AUTO
+            },
+            effects,
+            children,
+        }
+    }
+
+    fn layout(element: Element<'_>) -> LayoutBuffer {
+        let fonts = FontBook::new(Vec::new());
+        let engine = LayoutEngine::new(&fonts, &[], Page::A4);
+        let mut buffer = LayoutBuffer::default();
+        engine
+            .layout_root(&element, LayoutArea::root(Pt(100.0)), &mut buffer)
+            .unwrap();
+        buffer
+    }
+
+    #[test]
+    fn given_an_absolute_with_promoted_children_when_placed_then_every_layer_keeps_ancestor_clips()
+    {
+        let outer = BoxEffects::parse("none", "center", "inset(1pt)", false, 10.0).unwrap();
+        let inner = BoxEffects::parse("none", "center", "none", true, 10.0).unwrap();
+        let child = node(Some(PositionKind::Relative), Some(9), None, vec![]);
+        let absolute = node(
+            Some(PositionKind::Absolute),
+            None,
+            None,
+            vec![Element::Box(child)],
+        );
+        let clipped = node(None, None, Some(&inner), vec![Element::Box(absolute)]);
+        let root = node(None, None, Some(&outer), vec![Element::Box(clipped)]);
+        let buffer = layout(Element::Box(root));
+        assert_eq!(buffer.layers.len(), 3);
+        for (layer, z) in buffer.layers[1..].iter().zip([0, 9]) {
+            assert_eq!(layer.z, z);
+            let effect = layer.effects.as_ref().unwrap();
+            assert!(effect.clip.is_some());
+            assert!(!effect.paint);
+            let inner = &layer.buffer.layers[0];
+            assert_eq!(inner.z, z);
+            let effect = inner.effects.as_ref().unwrap();
+            assert!(effect.overflow);
+            assert!(!effect.paint);
+            assert_eq!(inner.buffer.layers[0].z, z);
+        }
+    }
+
+    #[test]
+    fn given_clip_only_boxes_when_laid_out_then_flow_stays_first_and_positioned_children_join_page_layers(
+    ) {
+        for (clip, overflow) in [("none", true), ("inset(1pt)", false)] {
+            let effects = BoxEffects::parse("none", "center", clip, overflow, 10.0).unwrap();
+            for kind in [
+                None,
+                Some(PositionKind::Relative),
+                Some(PositionKind::Absolute),
+            ] {
+                let child = node(
+                    Some(PositionKind::Relative),
+                    Some(7),
+                    Some(&effects),
+                    vec![],
+                );
+                let root = node(kind, None, Some(&effects), vec![Element::Box(child)]);
+                let buffer = layout(Element::Box(root));
+                assert_eq!(buffer.layers.len(), 2);
+                let flow = if kind.is_none() {
+                    &buffer.layers[0]
+                } else {
+                    assert_eq!(buffer.layers[0].buffer.layers.len(), 1);
+                    &buffer.layers[0].buffer.layers[0]
+                };
+                assert!(flow.flow.is_some());
+                assert_eq!(flow.effects.as_ref().unwrap().paint, overflow);
+                assert!(flow.buffer.layers.is_empty());
+                let child = &buffer.layers[1];
+                assert_eq!(child.z, 7);
+                assert!(child.flow.is_none());
+                assert!(!child.effects.as_ref().unwrap().paint);
+                assert_eq!(child.buffer.layers[0].z, 7);
+                assert!(child.buffer.layers[0].buffer.layers[0].flow.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn given_transformed_boxes_when_laid_out_then_nested_z_indexes_stay_inside_the_stacking_context(
+    ) {
+        let effects = BoxEffects::parse("translate(1pt)", "center", "none", false, 10.0).unwrap();
+        for kind in [
+            None,
+            Some(PositionKind::Relative),
+            Some(PositionKind::Absolute),
+        ] {
+            let child = node(Some(PositionKind::Relative), Some(9), None, vec![]);
+            let root = node(kind, None, Some(&effects), vec![Element::Box(child)]);
+            let buffer = layout(Element::Box(root));
+            assert_eq!(buffer.layers.len(), 1);
+            assert_eq!(buffer.layers[0].z, 0);
+            let flow = if kind.is_none() {
+                &buffer.layers[0]
+            } else {
+                assert_eq!(buffer.layers[0].buffer.layers.len(), 1);
+                &buffer.layers[0].buffer.layers[0]
+            };
+            assert!(flow.effects.as_ref().unwrap().transform.is_some());
+            assert_eq!(flow.buffer.layers.len(), 1);
+            assert_eq!(flow.buffer.layers[0].z, 9);
+        }
+    }
+
+    #[test]
+    fn given_reused_public_effects_when_absolutes_are_clipped_then_each_uses_its_own_box_geometry()
+    {
+        let effects = BoxEffects::parse("none", "center", "inset(10%)", false, 10.0).unwrap();
+        let mut children = Vec::new();
+        for width in [40.0, 70.0] {
+            let mut absolute = node(Some(PositionKind::Absolute), Some(1), None, vec![]);
+            absolute.size.width = ImageSize::Fixed(Pt(10.0));
+            let mut clip = node(None, None, Some(&effects), vec![Element::Box(absolute)]);
+            clip.size.width = ImageSize::Fixed(Pt(width));
+            children.push(Element::Box(clip));
+        }
+        let buffer = layout(Element::Stack(crate::document::Stack {
+            gap: Pt::ZERO,
+            children,
+        }));
+        assert_eq!(buffer.layers.len(), 4);
+        let first = buffer.layers[2].effects.as_ref().unwrap();
+        let second = buffer.layers[3].effects.as_ref().unwrap();
+        assert_ne!(first.source, second.source);
+        assert_eq!((first.rect.width, first.rect.origin.y), (Pt(40.0), Pt(0.0)));
+        assert_eq!(
+            (second.rect.width, second.rect.origin.y),
+            (Pt(70.0), Pt(20.0))
+        );
+        assert_ne!(first.clip, second.clip);
+    }
+
+    #[test]
+    fn given_a_clip_layer_when_measuring_capacity_then_effects_and_path_allocations_are_counted() {
+        let effects = BoxEffects::parse(
+            "none",
+            "center",
+            "polygon(0 0, 100% 0, 0 100%)",
+            false,
+            10.0,
+        )
+        .unwrap();
+        let root = node(None, None, Some(&effects), vec![]);
+        let mut buffer = layout(Element::Box(root));
+        let before = buffer.capacity();
+        let effect = buffer.layers[0].effects.take().unwrap();
+        let operations = effect.clip.as_ref().unwrap().operations.capacity();
+        assert!(operations > 0);
+        assert_eq!(
+            before - buffer.capacity(),
+            std::mem::size_of::<output::LayerEffects>()
+                + std::mem::size_of::<crate::effects::ResolvedClip>()
+                + 2 * std::mem::size_of::<usize>()
+                + operations * std::mem::size_of::<crate::vector::PathOp>()
+        );
+    }
 }

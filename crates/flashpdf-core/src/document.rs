@@ -57,6 +57,7 @@ pub(crate) struct Spacer {
 pub(crate) struct BoxNode<'a> {
     pub(crate) style: BoxStyle,
     pub(crate) size: BoxSize,
+    pub(crate) effects: Option<&'a crate::BoxEffects>,
     pub(crate) children: Vec<Element<'a>>,
 }
 

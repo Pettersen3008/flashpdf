@@ -42,6 +42,12 @@ export type Alignment =
 export type BorderStyle = "none" | "hidden" | "solid" | "dashed" | "dotted";
 
 export type Style = {
+	/** 2D CSS transform functions, applied after layout. */
+	transform?: string;
+	transformOrigin?: string | 0;
+	transformBox?: "view-box";
+	clipPath?: string;
+	overflow?: "visible" | "hidden";
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
 	flexWrap?: "nowrap" | "wrap";

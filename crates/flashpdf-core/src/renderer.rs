@@ -399,7 +399,9 @@ impl Renderer {
         match element {
             Element::Table(table) => return self.render_table(table),
             Element::Box(node)
-                if node.size == crate::BoxSize::AUTO && node.style.radius.is_none() =>
+                if node.size == crate::BoxSize::AUTO
+                    && node.style.radius.is_none()
+                    && node.effects.is_none() =>
             {
                 self.open_box(node.style)?;
                 for child in &node.children {
@@ -893,21 +895,47 @@ impl Renderer {
     /// Paints `lines` at `origin` and keeps the block's positioned layers for the page end.
     fn paint_at(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
         let first = lines.start == 0;
-        self.painter().paint(layout, lines.clone(), origin);
+        let page = self.page.page();
+        self.painter().paint(layout, lines.clone(), origin, page);
         self.place_anchors(layout, lines, origin);
         if first {
             for layer in &layout.layers {
                 self.layer_anchors(layer, origin);
-                self.overlays.push((layer.clone(), origin));
+                if layer.flow.is_none() {
+                    self.overlays.push((layer.clone(), origin));
+                }
             }
         }
     }
 
     fn layer_anchors(&mut self, layer: &Layer, origin: Point) {
+        let matrix = layer.effects.as_ref().and_then(|effect| effect.transform);
+        let unset: Vec<usize> = if matrix.is_some() {
+            self.metadata
+                .anchors
+                .iter()
+                .enumerate()
+                .filter_map(|(index, anchor)| anchor.at.is_none().then_some(index))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let at = layer_origin(layer, origin, self.page.page());
         self.place_anchors(&layer.buffer, 0..layer.buffer.lines.len(), at);
         for inner in &layer.buffer.layers {
             self.layer_anchors(inner, at);
+        }
+        if let Some([a, b, c, d, e, f]) = matrix {
+            let rect = layer.effects.as_ref().unwrap().rect;
+            let left = (at.x + rect.origin.x).get();
+            let top = (at.y - rect.origin.y).get();
+            for index in unset {
+                if let Some((_, x, y)) = &mut self.metadata.anchors[index].at {
+                    let (local_x, local_y) = (*x - left, top - *y);
+                    *x = left + a * local_x + c * local_y + e;
+                    *y = top - b * local_x - d * local_y - f;
+                }
+            }
         }
     }
 

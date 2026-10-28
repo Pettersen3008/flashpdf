@@ -1655,3 +1655,60 @@ test("given a list and a pre block in an embedded font under PDF/A, when rendere
 	assert.doesNotMatch(string(pdf), /\/Type1\b/);
 	assert.match(string(pdf), /\nh\nf\n/);
 });
+
+test("given transforms and clips in stylesheets and style objects, when rendering, then writes native PDF effects and rejects unsupported values", async () => {
+	const pdf = await render(
+		jsxs("main", {
+			children: [
+				jsx("div", { className: "effect", children: "CSS" }),
+				jsx("p", {
+					style: {
+						transform: "translate(2pt, 3pt)",
+						transformOrigin: "0 0",
+						clipPath: "polygon(evenodd, 0 0, 100% 0, 50% 100%)",
+					},
+					children: "Object",
+				}),
+			],
+		}),
+		{
+			stylesheets: [
+				".effect { transform: rotate(15deg); clip-path: circle(50%); overflow: hidden }",
+			],
+		},
+	);
+	const stream = string(pdf);
+	assert.match(stream, /1 0 0 1 2 -3 cm/);
+	assert.match(stream, /W\*\nn/);
+	assert.match(stream, /W\nn/);
+	for (const [property, value] of [
+		["transform", "rotateX(20deg)"],
+		["transform", "perspective(10px)"],
+		["transformOrigin", "left right"],
+		["transformBox", "content-box"],
+		["perspective", "20px"],
+		["transformStyle", "preserve-3d"],
+		["clipPath", "url(#clip)"],
+		["clipPath", "inset(0) padding-box"],
+		["overflow", "scroll"],
+	]) {
+		await assert.rejects(
+			render(jsx("main", { style: { [property]: value }, children: "bad" })),
+			(error) => {
+				assert.match(error.message, /on <main>/);
+				assert.ok(error.message.includes(value), error.message);
+				return true;
+			},
+		);
+	}
+});
+
+test("given a fully clipped link and a translated target, when rendering, then removes the hidden annotation and moves the destination", async () => {
+	const pdf = await render(
+		'<div style="clip-path: circle(0)"><a href="https://example.com">hidden</a></div><a href="#target">go</a><p id="target" style="margin:0;transform:translate(10pt, 5pt)">target</p>',
+		{ margin: 10 },
+	);
+	const stream = string(pdf);
+	assert.doesNotMatch(stream, /\/URI/);
+	assert.match(stream, /\/XYZ 20 /);
+});
