@@ -147,7 +147,7 @@ pub(crate) struct Transform {
 }
 
 #[inline(never)]
-fn multiply(a: [f32; 6], b: [f32; 6]) -> Result<[f32; 6]> {
+pub(crate) fn multiply(a: [f32; 6], b: [f32; 6]) -> Result<[f32; 6]> {
     let result = [
         a[0] * b[0] + a[2] * b[1],
         a[1] * b[0] + a[3] * b[1],

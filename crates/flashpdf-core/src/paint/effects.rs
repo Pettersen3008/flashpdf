@@ -13,6 +13,7 @@ pub(crate) struct Shading {
     pub radial: bool,
     pub tile: [f32; 4],
     pub matrix: [f32; 6],
+    pub pattern: [f32; 6],
     pub coords: Vec<f32>,
     pub stops: Vec<(f32, [f32; 3])>,
 }
@@ -141,6 +142,7 @@ impl PdfPainter<'_> {
                 return;
             }
             shading.tile = tile;
+            shading.pattern = [1.0, 0.0, 0.0, 1.0, tile[0], tile[1]];
             shading.matrix = matrix;
             let slot = self.shadings.items.len();
             self.shadings.bytes += 512 + shading.stops.len() * 256;
@@ -402,6 +404,7 @@ fn resolve_gradient(gradient: &Gradient, rect: [f32; 4]) -> (Shading, [f32; 6]) 
             coords,
             stops: stops.into_iter().map(|(p, c)| (p as f32, c)).collect(),
             tile: rect,
+            pattern: [1.0, 0.0, 0.0, 1.0, rect[0], rect[1]],
             matrix,
         },
         matrix,
@@ -419,7 +422,7 @@ pub(crate) fn write_shadings(
         let mut content = Content::new();
         content.transform(shading.matrix).shading(Name(b"S"));
         let bytes = content.finish();
-        let [x, y, w, h] = shading.tile;
+        let [_, _, w, h] = shading.tile;
         let mut pattern = pdf.tiling_pattern(*reference, &bytes);
         pattern
             .paint_type(PaintType::Colored)
@@ -427,7 +430,7 @@ pub(crate) fn write_shadings(
             .bbox(Rect::new(0.0, 0.0, w, h))
             .x_step(w)
             .y_step(h)
-            .matrix([1.0, 0.0, 0.0, 1.0, x, y]);
+            .matrix(shading.pattern);
         let mut resources = pattern.resources();
         let mut dict = resources.shadings();
         let mut s = dict.insert(Name(b"S")).dict();

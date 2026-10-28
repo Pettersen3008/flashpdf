@@ -201,6 +201,7 @@ impl<'a> PdfPainter<'a> {
             return;
         }
         let link_start = self.links.len();
+        let shading_start = self.shadings.items.len();
         self.content.save_state();
         if let Some(matrix) = matrix {
             op(self.content, "cm", &matrix);
@@ -283,6 +284,15 @@ impl<'a> PdfPainter<'a> {
         }
         *self.state = PaintState::default();
         self.paint_flow(&layer.buffer, origin, page);
+        // PDF pattern matrices map to page space, so retain every enclosing layer transform.
+        if let Some(matrix) = matrix {
+            for shading in &mut self.shadings.items[shading_start..] {
+                match crate::effects::multiply(matrix, shading.pattern) {
+                    Ok(pattern) => shading.pattern = pattern,
+                    Err(_) => self.shadings.invalid = true,
+                }
+            }
+        }
         self.content.restore_state();
         let clip_bounds = effect.clip.as_ref().map(|clip| {
             clip.outline

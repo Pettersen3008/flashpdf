@@ -1709,3 +1709,29 @@ test("given a fully clipped link and a translated target, when rendering, then r
 	assert.doesNotMatch(stream, /\/URI/);
 	assert.match(stream, /\/XYZ 20 /);
 });
+
+test("given a translated gradient, when rasterized, then matches a gradient placed at the same coordinates with a margin", async () => {
+	const directory = new URL("../../../dist/gradient-transforms/", import.meta.url);
+	mkdirSync(directory, { recursive: true });
+	const paths = [];
+	for (const [name, position] of [
+		["translated", "transform:translateX(20pt)"],
+		["offset", "margin-left:20pt"],
+	]) {
+		const pdf = await render(
+			`<div style="width:100pt;height:40pt;background-image:linear-gradient(to right,red,blue);${position}"></div>`,
+			{ pageFormat: { width: 160, height: 100 }, margin: 10 },
+		);
+		const path = new URL(`${name}.pdf`, directory);
+		writeFileSync(path, pdf);
+		paths.push(path.pathname);
+	}
+	if (spawnSync("mutool", ["-v"]).error === undefined) {
+		const rasters = paths.map((path) => {
+			const raster = spawnSync("mutool", ["draw", "-q", "-r", "72", "-F", "ppm", "-o", "-", path]);
+			assert.equal(raster.status, 0, raster.stderr.toString());
+			return raster.stdout;
+		});
+		assert.deepEqual(rasters[0], rasters[1]);
+	}
+});

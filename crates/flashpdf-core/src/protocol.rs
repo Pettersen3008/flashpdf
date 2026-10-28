@@ -1256,6 +1256,45 @@ mod effect_regressions {
     }
 
     #[test]
+    fn given_nested_and_distinct_transforms_when_painting_identical_gradients_then_each_pattern_keeps_its_own_matrix(
+    ) {
+        let patterns = |pdf: &lopdf::Document| -> Vec<Vec<f32>> {
+            pdf.objects
+                .values()
+                .filter_map(|object| object.as_stream().ok())
+                .filter(|stream| stream.dict.has(b"PatternType"))
+                .map(|stream| {
+                    stream
+                        .dict
+                        .get(b"Matrix")
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|value| value.as_float().unwrap())
+                        .collect()
+                })
+                .collect()
+        };
+        for gradient in [
+            "linear-gradient(to right,red,blue)",
+            "radial-gradient(circle,red,blue)",
+        ] {
+            let style = format!("width:100pt;height:20pt;background-image:{gradient}");
+            let pdf = compile(&format!("<div style='transform:translateX(20pt);{style}'></div><div style='transform:translateX(40pt);{style}'></div>"));
+            assert_eq!(
+                patterns(&pdf),
+                [
+                    vec![1.0, 0.0, 0.0, 1.0, 30.0, 130.0],
+                    vec![1.0, 0.0, 0.0, 1.0, 50.0, 110.0]
+                ]
+            );
+            let pdf = compile(&format!("<div style='transform:translateX(20pt);transform-origin:0 0'><div style='transform:scale(2);transform-origin:0 0;{style}'></div></div>"));
+            assert_eq!(patterns(&pdf), [vec![2.0, 0.0, 0.0, 2.0, 30.0, 110.0]]);
+        }
+    }
+
+    #[test]
     fn given_painted_overflow_with_a_nested_flow_layer_when_compiled_then_keeps_box_marks_valid() {
         let pdf = compile(
             "<div style='overflow:hidden;background-color:red;border:1pt solid red;border-radius:3pt'>\
