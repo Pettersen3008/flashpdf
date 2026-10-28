@@ -144,12 +144,38 @@ pub(crate) fn lookup(ranges: &[Range], character: char) -> Option<u16> {
 /// Lowest code point per used glyph, for `/ToUnicode`.
 pub(crate) fn reverse(ranges: &[Range], used: &BTreeSet<u16>) -> BTreeMap<u16, char> {
     let mut map = BTreeMap::new();
+    let Some(&max) = used.last() else {
+        return map;
+    };
+    // Most ranges are one code long, so a bit test each beats a tree query each.
+    let mut bits = vec![0_u64; usize::from(max) / 64 + 1];
+    for gid in used {
+        bits[usize::from(*gid / 64)] |= 1 << (gid % 64);
+    }
+    let mut add = |gid: u16, code: u32| {
+        if let Some(character) = char::from_u32(code) {
+            map.entry(gid).or_insert(character);
+        }
+    };
     for range in ranges {
-        let last = (u32::from(range.gid) + (range.end - range.start)) as u16;
-        for gid in used.range(range.gid..=last) {
-            let code = range.start + u32::from(gid - range.gid);
-            if let Some(character) = char::from_u32(code) {
-                map.entry(*gid).or_insert(character);
+        let length = range.end - range.start;
+        if range.gid > max {
+            continue;
+        }
+        if length >= 64 {
+            let last = (u32::from(range.gid) + length) as u16;
+            for gid in used.range(range.gid..=last) {
+                add(*gid, range.start + u32::from(gid - range.gid));
+            }
+            continue;
+        }
+        for offset in 0..=length {
+            let gid = u32::from(range.gid) + offset;
+            if gid > u32::from(max) {
+                break;
+            }
+            if bits[gid as usize / 64] & (1 << (gid % 64)) != 0 {
+                add(gid as u16, range.start + offset);
             }
         }
     }
@@ -158,7 +184,9 @@ pub(crate) fn reverse(ranges: &[Range], used: &BTreeSet<u16>) -> BTreeMap<u16, c
 
 #[cfg(test)]
 mod tests {
-    use super::{lookup, parse};
+    use std::collections::BTreeSet;
+
+    use super::{lookup, parse, reverse, Range};
 
     /// One format 4 segment mapping `A` through `delta`, then the 0xffff terminator.
     fn cmap(delta: u16) -> Vec<u8> {
@@ -247,5 +275,31 @@ mod tests {
         let ranges = parse(&cmap, 100).unwrap();
         assert_eq!(lookup(&ranges, 'D'), Some(13));
         assert_eq!(lookup(&ranges, 'H'), Some(24));
+    }
+
+    #[test]
+    fn given_glyphs_in_short_and_long_ranges_when_reversing_then_each_gets_its_lowest_code_point() {
+        let ranges = [
+            Range {
+                start: 0x41,
+                end: 0x41,
+                gid: 5,
+            },
+            Range {
+                start: 0x61,
+                end: 0x61,
+                gid: 5,
+            },
+            Range {
+                start: 0x4e00,
+                end: 0x4fff,
+                gid: 10,
+            },
+        ];
+        let map = reverse(&ranges, &BTreeSet::from([5, 6, 300]));
+        assert_eq!(
+            map.into_iter().collect::<Vec<_>>(),
+            [(5, 'A'), (300, '\u{4f22}')]
+        );
     }
 }

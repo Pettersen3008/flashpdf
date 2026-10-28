@@ -4,8 +4,9 @@ use std::sync::Arc;
 
 use pdf_writer::Rect;
 
-use super::shape::Shaping;
+use super::shape::{Program, Shaping};
 use super::{cmap, subset, Stroke};
+use crate::pdf::{deflate, Stream};
 
 pub(super) const INVALID: &str = "invalid TrueType font";
 
@@ -194,6 +195,14 @@ impl EmbeddedFont {
     /// when a glyph table is malformed in a way parsing did not catch.
     pub(crate) fn program(&self) -> Vec<u8> {
         subset::subset(&self.bytes, &self.used).unwrap_or_else(|| self.bytes.to_vec())
+    }
+
+    /// [`Self::program`] deflated, shared with earlier renders that showed the same glyphs.
+    pub(crate) fn deflated_program(&self) -> Program {
+        self.shaping.program(&self.used, || {
+            let program = self.program();
+            (program.len(), deflate(&program, Stream::Table))
+        })
     }
 
     /// `/BaseFont` with the PDF subset prefix.

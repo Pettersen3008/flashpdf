@@ -33,27 +33,41 @@ pub(super) fn subset(font: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
         glyf.get(offset(gid)?..offset(gid + 1)?)
     };
 
-    let mut keep = used.clone();
-    keep.insert(0);
-    let mut pending: Vec<u16> = keep.iter().copied().collect();
+    // A bit per glyph id: the copy loop below visits every id up to the last kept one,
+    // where a tree lookup each cost more than the copying.
+    let mut keep = vec![0_u64; usize::from(glyphs).div_ceil(64)];
+    let mut kept = |gid: u16| {
+        let (word, bit) = (usize::from(gid / 64), 1 << (gid % 64));
+        let new = keep.get(word)? & bit == 0;
+        keep[word] |= bit;
+        Some(new)
+    };
+    let mut pending: Vec<u16> = vec![0];
+    pending.extend(used);
+    let mut last = 0;
     while let Some(gid) = pending.pop() {
-        if gid >= glyphs {
-            return None;
+        if gid >= glyphs || !kept(gid)? {
+            continue;
         }
-        for component in components(outline(usize::from(gid))?)? {
-            if keep.insert(component) {
-                pending.push(component);
-            }
-        }
+        last = last.max(gid);
+        let outline = outline(usize::from(gid))?;
+        components(outline, |component| {
+            pending.push(component);
+        })?;
     }
-    let count = usize::from(*keep.last()?) + 1;
+    let count = usize::from(last) + 1;
+    let is_kept = |gid: usize| keep[gid / 64] & (1 << (gid % 64)) != 0;
 
-    let mut new_glyf = Vec::new();
+    let mut glyf_length = 0;
+    for gid in (0..count).filter(|gid| is_kept(*gid)) {
+        glyf_length += outline(gid)?.len().next_multiple_of(4);
+    }
+    let mut new_glyf = Vec::with_capacity(glyf_length);
     let mut new_loca = Vec::with_capacity((count + 1) * 4);
     let mut new_hmtx = Vec::with_capacity(count * 4);
     for gid in 0..count {
         new_loca.extend((new_glyf.len() as u32).to_be_bytes());
-        if !keep.contains(&(gid as u16)) {
+        if !is_kept(gid) {
             new_hmtx.extend([0; 4]);
             continue;
         }
@@ -85,29 +99,36 @@ pub(super) fn subset(font: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
             .unwrap_or(&[0; 28][..]),
     );
 
-    let mut tables = vec![
-        (b"glyf", new_glyf),
-        (b"head", new_head),
-        (b"hhea", new_hhea),
-        (b"hmtx", new_hmtx),
-        (b"loca", new_loca),
-        (b"maxp", new_maxp),
-        (b"post", post),
+    // Borrowed, so the hinting tables and the glyphs copy once, straight into the file.
+    let mut tables: Vec<(&[u8; 4], &[u8])> = vec![
+        (b"glyf", &new_glyf),
+        (b"head", &new_head),
+        (b"hhea", &new_hhea),
+        (b"hmtx", &new_hmtx),
+        (b"loca", &new_loca),
+        (b"maxp", &new_maxp),
+        (b"post", &post),
     ];
     tables.extend(
         [b"cvt ", b"fpgm", b"prep"]
             .into_iter()
-            .filter_map(|tag| Some((tag, table(tag)?.to_vec()))),
+            .filter_map(|tag| Some((tag, table(tag)?))),
     );
     tables.sort_by_key(|(tag, _)| *tag);
     let selector = tables.len().ilog2() as u16;
     let search_range = 16_u16 << selector;
-    let mut out = vec![0, 1, 0, 0];
+    let mut offset = 12 + tables.len() * 16;
+    let size = offset
+        + tables
+            .iter()
+            .map(|(_, data)| data.len().next_multiple_of(4))
+            .sum::<usize>();
+    let mut out = Vec::with_capacity(size);
+    out.extend([0, 1, 0, 0]);
     out.extend((tables.len() as u16).to_be_bytes());
     out.extend(search_range.to_be_bytes());
     out.extend(selector.to_be_bytes());
     out.extend((tables.len() as u16 * 16 - search_range).to_be_bytes());
-    let mut offset = out.len() + tables.len() * 16;
     for (tag, data) in &tables {
         out.extend(*tag);
         out.extend(checksum(data).to_be_bytes());
@@ -116,22 +137,21 @@ pub(super) fn subset(font: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
         offset += data.len().next_multiple_of(4);
     }
     for (_, data) in &tables {
-        out.extend(data);
+        out.extend(*data);
         out.resize(out.len().next_multiple_of(4), 0);
     }
     Some(out)
 }
 
-/// Glyph ids a composite glyph references; empty for simple glyphs.
-fn components(outline: &[u8]) -> Option<Vec<u16>> {
-    let mut found = Vec::new();
+/// Calls `found` with each glyph id a composite glyph references; none for simple glyphs.
+fn components(outline: &[u8], mut found: impl FnMut(u16)) -> Option<()> {
     if outline.len() < 10 || be_i16(outline, 0).ok()? >= 0 {
-        return Some(found);
+        return Some(());
     }
     let mut at = 10;
     loop {
         let flags = be_u16(outline, at).ok()?;
-        found.push(be_u16(outline, at + 2).ok()?);
+        found(be_u16(outline, at + 2).ok()?);
         at += 4 + if flags & 1 != 0 { 4 } else { 2 };
         at += match flags & 0xc8 {
             0x08 => 2,
@@ -140,17 +160,18 @@ fn components(outline: &[u8]) -> Option<Vec<u16>> {
             _ => 0,
         };
         if flags & 0x20 == 0 {
-            return Some(found);
+            return Some(());
         }
     }
 }
 
 fn checksum(data: &[u8]) -> u32 {
-    data.chunks(4).fold(0_u32, |sum, chunk| {
-        let mut word = [0; 4];
-        word[..chunk.len()].copy_from_slice(chunk);
-        sum.wrapping_add(u32::from_be_bytes(word))
-    })
+    let words = data.chunks_exact(4);
+    let mut tail = [0; 4];
+    tail[..words.remainder().len()].copy_from_slice(words.remainder());
+    words
+        .map(|word| u32::from_be_bytes([word[0], word[1], word[2], word[3]]))
+        .fold(u32::from_be_bytes(tail), u32::wrapping_add)
 }
 
 /// Six-letter subset prefix from an FNV-1a hash of the used glyph set.

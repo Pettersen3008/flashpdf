@@ -4,7 +4,7 @@
 //! feature switches, so fonts registered again with the same bytes share one
 //! word cache across renders, as a browser shares one per font face.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use harfrust::{
@@ -18,6 +18,8 @@ use super::EmbeddedFont;
 const CACHE_WORDS: usize = 4096;
 /// Fonts whose bytes and caches outlive a render, oldest dropped first.
 const FONTS_KEPT: usize = 8;
+/// Deflated subsets kept per font, oldest dropped first.
+const PROGRAMS_KEPT: usize = 4;
 /// Their bytes together, past which older fonts drop even under `FONTS_KEPT`.
 const FONT_BYTES_KEPT: usize = 32 * 1024 * 1024;
 
@@ -54,11 +56,16 @@ pub(crate) struct Shaped {
     pub(crate) names: Vec<(u16, Box<str>)>,
 }
 
-/// What a font's bytes keep across renders: harfrust's lookup caches and the shaped words.
+/// A subset's undeflated length and its deflated bytes.
+pub(crate) type Program = Arc<(usize, Vec<u8>)>;
+
+/// What a font's bytes keep across renders: harfrust's lookup caches, the shaped words,
+/// and the deflated subsets, which depend only on the bytes and the glyph set.
 pub(crate) struct Shaping {
     pub(crate) bytes: Arc<Vec<u8>>,
     data: ShaperData,
     words: Mutex<Words>,
+    programs: Mutex<Vec<(Box<[u16]>, Program)>>,
 }
 
 #[derive(Default)]
@@ -89,6 +96,7 @@ impl Shaping {
             bytes: Arc::new(bytes),
             data,
             words: Mutex::default(),
+            programs: Mutex::default(),
         });
         fonts.push(shaping.clone());
         while fonts.len() > FONTS_KEPT
@@ -98,6 +106,29 @@ impl Shaping {
             fonts.remove(0);
         }
         Ok(shaping)
+    }
+
+    /// The deflated subset for `used`, made by `make` unless a render already made it.
+    pub(crate) fn program(
+        &self,
+        used: &BTreeSet<u16>,
+        make: impl FnOnce() -> (usize, Vec<u8>),
+    ) -> Program {
+        let found = lock(&self.programs)
+            .iter()
+            .find(|(glyphs, _)| glyphs.iter().eq(used))
+            .map(|(_, program)| program.clone());
+        if let Some(program) = found {
+            return program;
+        }
+        // Made outside the lock, so two slots with the same bytes deflate in parallel.
+        let program = Arc::new(make());
+        let mut programs = lock(&self.programs);
+        if programs.len() >= PROGRAMS_KEPT {
+            programs.remove(0);
+        }
+        programs.push((used.iter().copied().collect(), program.clone()));
+        program
     }
 
     /// Shapes `text` in the script of its first letter, right to left under `RTL`, or names a
@@ -277,7 +308,9 @@ fn collect(font: &EmbeddedFont, text: &str, buffer: &GlyphBuffer) -> Result<Shap
 mod tests {
     use std::sync::Arc;
 
-    use super::{lock, Shaping, CACHE_WORDS, FONTS_KEPT};
+    use std::collections::BTreeSet;
+
+    use super::{lock, Shaping, CACHE_WORDS, FONTS_KEPT, PROGRAMS_KEPT};
     use crate::font::EmbeddedFont;
 
     const ABEL: &[u8] =
@@ -315,5 +348,19 @@ mod tests {
         }
         assert!(lock(&shaping.words).shaped.len() <= CACHE_WORDS);
         assert!(!Arc::ptr_eq(&first, &shaping.shape(&font, "a", 0).unwrap()));
+    }
+
+    #[test]
+    fn given_a_glyph_set_deflated_before_when_finishing_again_then_reuses_it_until_newer_sets_push_it_out(
+    ) {
+        let shaping = Shaping::kept(&mut Vec::new(), ABEL.to_vec()).unwrap();
+        let set = |gids: &[u16]| gids.iter().copied().collect::<BTreeSet<u16>>();
+        let first = shaping.program(&set(&[1, 2]), || (1, vec![1]));
+        let again = shaping.program(&set(&[1, 2]), || unreachable!("made twice"));
+        assert!(Arc::ptr_eq(&first, &again));
+        for gid in 0..PROGRAMS_KEPT as u16 {
+            shaping.program(&set(&[gid + 3]), || (2, vec![2]));
+        }
+        assert_eq!(shaping.program(&set(&[1, 2]), || (3, vec![3])).0, 3);
     }
 }
