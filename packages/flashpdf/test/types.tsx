@@ -4,8 +4,17 @@ import {
 	QRCode,
 	render,
 	TotalPages,
+	type ElementData,
 	type EmbeddedFont,
 } from "@pettersen3008/flashpdf";
+
+const _data: ElementData = {
+	type: "main",
+	props: { className: "invoice", children: [{ type: "p", props: { children: "Total" } }] },
+};
+void render(_data);
+// @ts-expect-error An element's type is a supported tag.
+const _dataTag: ElementData = { type: "marquee", props: {} };
 
 const invoice = (
 	<main className="invoice" style={{ padding: "18pt", backgroundColor: "#fff" }}>

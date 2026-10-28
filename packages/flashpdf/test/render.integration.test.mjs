@@ -139,6 +139,27 @@ test("given native JSX components and fragments, when rendering, then preserves 
 	await assert.rejects(render("bare text"), /expected element or props/);
 });
 
+test("given a parsed JSON element tree, when rendering, then matches the same tree from JSX and rejects unknown tags and deep nesting by path", async () => {
+	const data = JSON.parse(
+		'{"type":"main","props":{"className":"x","children":[{"type":"h1","props":{"children":"Invoice"}},{"type":"p","props":{"style":{"color":"#c00"},"children":["Total ",42]}}]}}',
+	);
+	const jsxTree = jsxs("main", {
+		className: "x",
+		children: [
+			jsx("h1", { children: "Invoice" }),
+			jsx("p", { style: { color: "#c00" }, children: ["Total ", 42] }),
+		],
+	});
+	assert.deepEqual(await render(data), await render(jsxTree));
+	await assert.rejects(
+		render(JSON.parse('{"type":"main","props":{"children":{"type":"marquee","props":{}}}}')),
+		/unsupported element <marquee> in <main>/,
+	);
+	let deep = { type: "div", props: {} };
+	for (let level = 0; level < 70; level++) deep = { type: "div", props: { children: deep } };
+	await assert.rejects(render(deep), /nesting exceeds 64/);
+});
+
 test("given registered regular and bold fonts, when fontFamily selects them, then embeds both TTF files", async () => {
 	const document = jsxs("main", {
 		className: "invoice",

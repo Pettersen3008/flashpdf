@@ -74,3 +74,8 @@ export namespace JSX {
 		th: CellProps;
 	}
 }
+
+/** A host element as plain data, such as parsed JSON: the `{ type, props }` object `jsx()` returns. */
+export type ElementData = {
+	[Tag in keyof JSX.IntrinsicElements]: { type: Tag; props: JSX.IntrinsicElements[Tag] };
+}[keyof JSX.IntrinsicElements];
