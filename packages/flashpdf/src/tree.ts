@@ -106,6 +106,8 @@ export type ElementNode = {
 	readonly id?: string | undefined;
 	readonly classes: readonly string[];
 	readonly style?: Style | string | undefined;
+	/** Tailwind utilities the core turns into declarations ahead of `style`. */
+	readonly tw?: string | undefined;
 	readonly children: readonly Node[];
 	readonly src?: Uint8Array | undefined;
 	readonly alt?: string | undefined;
@@ -421,6 +423,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		"id",
 		"className",
 		"style",
+		"tw",
 		"ref",
 		"dir",
 		"lang",
@@ -441,6 +444,10 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		throw new Error(`id must be a string${where}`);
 	if (input.className !== undefined && typeof input.className !== "string")
 		throw new Error(`className must be a string${where}`);
+	if (input.tw !== undefined && typeof input.tw !== "string")
+		throw new Error(`tw must be a string${where}`);
+	if (typeof input.tw === "string" && input.tw.length > 16_384)
+		throw new Error(`tw exceeds 16384 bytes${where}`);
 	if (
 		input.style !== undefined &&
 		typeof input.style !== "string" &&
@@ -469,6 +476,7 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		style: input.style as Style | string | undefined,
 		...(input.lang !== undefined ? { lang: input.lang as string } : {}),
 		...(input.scope !== undefined ? { scope: input.scope as "row" | "col" | "both" } : {}),
+		...(input.tw ? { tw: input.tw as string } : {}),
 		...(input.dir !== undefined ? { dir: input.dir as "ltr" | "rtl" | "auto" } : {}),
 		children: [],
 		...(element.type === "img" ? image(input, where, chain, depth) : {}),

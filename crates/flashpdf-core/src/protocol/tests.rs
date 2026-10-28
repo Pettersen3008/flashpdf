@@ -445,7 +445,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     bad_magic[0] = b'X';
     assert_eq!(push_error(&bad_magic), "invalid magic");
 
-    for version in [1_u16, 20, 25] {
+    for version in [1_u16, 20, 25, 26, 27] {
         let mut bad_version = representative();
         bad_version[4..6].copy_from_slice(&version.to_le_bytes());
         assert_eq!(push_error(&bad_version), "unknown version");
@@ -2097,4 +2097,39 @@ fn given_an_unknown_box_paint_flag_when_decoding_then_rejects_before_layout() {
     let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
     bytes.extend(command);
     assert_eq!(push_error(&bytes), "invalid box paint flag");
+}
+
+#[test]
+fn given_tw_records_when_decoding_then_accepts_one_before_children_and_rejects_misplaced_or_duplicate_records(
+) {
+    let tw = record(39, &text(b"text-sm"));
+    for records in [
+        vec![tw.clone()],
+        vec![open(P, 0, &[]), tw.clone(), tw.clone()],
+        vec![open(P, 0, &[]), element_text("x"), tw.clone()],
+    ] {
+        let mut bytes = elements(&[]);
+        bytes.extend(record(29, &[0]));
+        bytes.extend(records.concat());
+        assert_eq!(
+            Decoder::default().push(&bytes).unwrap_err().to_string(),
+            "invalid nesting"
+        );
+    }
+    let mut bytes = elements(&[]);
+    bytes.extend(record(29, &[0]));
+    bytes.extend(open(P, 0, &[]));
+    bytes.extend(tw);
+    bytes.extend(element_text("Utility"));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(255, &[]));
+    let mut decoder = Decoder::default();
+    decoder.push(&bytes).unwrap();
+    assert_eq!(
+        crate::tests::page_text(
+            &lopdf::Document::load_mem(&decoder.finish().unwrap()).unwrap(),
+            1
+        ),
+        "Utility"
+    );
 }

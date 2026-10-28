@@ -63,6 +63,8 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 
 ## Tailwind v4
 
+For utilities on single elements, the `tw` prop needs no build at all; see [Tailwind without a build](../packages/flashpdf/README.md#tailwind-without-a-build). For utilities shared by the CSS subset, it gives the same bytes as the built stylesheet. Use the build below for variants and for utilities that style children.
+
 Compile with the Tailwind CLI, then pass the CSS to `render`. Import the theme and the utilities without preflight, which is Tailwind's own way to leave the browser reset out. Its layers, `:root` theme variables, nested `@media`, `@supports` fallbacks, and `@property` defaults all render. `examples/css-integrations/tailwind.mjs` builds and renders an invoice this way, and with the theme inline, and checks both give the same bytes.
 
 ```css

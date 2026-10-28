@@ -96,10 +96,11 @@ const Invoice = ({ total }) => jsxs("main", {
   style: { fontFamily: "Invoice" },
   children: [
     jsx("a", { href: "https://example.com/", children: jsx("img", { src: logo, alt: "Logo", style: { width: 24 } }) }),
-    jsx("h1", { children: "Invoice", style: { transform: "rotate(3deg) skewX(2deg) translate(1pt, 2pt)", transformOrigin: "left top", clipPath: "inset(0 round 2pt)", overflow: "hidden", borderRadius: 4, backgroundImage: "linear-gradient(30deg, #fff, #eee 40%, #ddd)", boxShadow: "2pt 3pt 0 1pt #888, inset 0 1pt #aaa" } }),
-    jsx("p", { className: "total", style: { background: "radial-gradient(ellipse farthest-corner at 30% 20%, #fff, #cde)" }, children: total }),
+    jsx("h1", { tw: "text-lg font-bold text-blue-700", children: "Invoice", style: { transform: "rotate(3deg) skewX(2deg) translate(1pt, 2pt)", transformOrigin: "left top", clipPath: "inset(0 round 2pt)", overflow: "hidden", borderRadius: 4, backgroundImage: "linear-gradient(30deg, #fff, #eee 40%, #ddd)", boxShadow: "2pt 3pt 0 1pt #888, inset 0 1pt #aaa" } }),
+    jsx("p", { className: "total", tw: "px-4 p-2 rounded-full bg-gray-100 text-[min(9pt,12pt)]", style: { background: "radial-gradient(ellipse farthest-corner at 30% 20%, #fff, #cde)" }, children: total }),
     jsxs("section", {
       className: "geometry",
+      tw: "[display:grid]",
       style: { width: 237.7, fontSize: 9.3, lineHeight: 1.17 },
       children: [
         jsx("div", { style: { gridRow: "span 2" }, children: "Fractional tracks wrap invoice details across lines" }),
@@ -112,7 +113,13 @@ const Invoice = ({ total }) => jsxs("main", {
     }),
   ],
 });
-export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {
+export const renderInvoice = async () => {
+  try { await render(jsx("p", { tw: "not-a-utility", children: "invalid" })); throw new Error("unknown tw accepted"); }
+  catch (error) { if (!String(error).includes("unknown tw utility: not-a-utility")) throw error; }
+  const first = await render('<p tw="p-4 px-2 text-sm">Order</p>');
+  const second = await render('<p tw="text-sm px-2 p-4">Order</p>');
+  if (first.length !== second.length || first.some((byte, index) => byte !== second[index])) throw new Error("tw order mismatch");
+  return render(jsx(Invoice, { total: "$100.00" }), {
   pdfua: true,
   metadata: { title: "Combined feature invoice", language: "en-US" },
   pageFormat: "A4",
@@ -120,6 +127,7 @@ export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {
   stylesheets: [stylesheet("@layer theme, utilities; @layer theme { .total { color:red } } @layer utilities { .total { @supports NOT (display:inline-grid) { color:color-mix(in oklab, red, blue) } text-align:right } } .geometry { display: grid; grid-template-columns: 23.5% repeat(2, minmax(0, 1fr)); gap: 3.3pt 4.7pt } .geometry > div { background: #eee }")],
   fonts: [{ family: "Invoice", regular: font, bold: font }],
 });
+};
 `,
 	);
 	writeFileSync(

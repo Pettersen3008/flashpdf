@@ -19,6 +19,7 @@ const opcode = {
 	strictStylesheet: 34,
 	html: 35,
 	namedImage: 36,
+	tw: 39,
 	end: 255,
 } as const;
 /** Open record flags: which attributes follow the classes. */
@@ -224,6 +225,7 @@ export class ProtocolWriter {
 				binary.text(node.scope ?? "");
 			}
 		});
+		if (node.tw) binary.record(opcode.tw, () => binary.text(node.tw!));
 		if (node.drawing) this.long(opcode.drawing, drawing(node.drawing));
 		this.nodes(node.children);
 		binary.record(opcode.close);

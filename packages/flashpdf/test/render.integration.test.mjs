@@ -160,6 +160,56 @@ test("given a parsed JSON element tree, when rendering, then matches the same tr
 	await assert.rejects(render(deep), /nesting exceeds 64/);
 });
 
+test("given a tw prop or attribute, when rendering, then applies its utilities ahead of style and rejects unknown ones and variants by path", async () => {
+	const tree = (style) =>
+		jsx("main", {
+			children: jsx("p", { tw: "p-4 text-right font-bold", style, children: "Total" }),
+		});
+	assert.deepEqual(
+		await render('<main><p tw="p-4 text-right font-bold">Total</p></main>'),
+		await render(tree()),
+	);
+	assert.deepEqual(
+		await render(tree({ textAlign: "left" })),
+		await render(tree("text-align: left")),
+	);
+	assert.notDeepEqual(await render(tree({ textAlign: "left" })), await render(tree()));
+	await assert.rejects(
+		render(jsx("main", { children: jsx("p", { tw: "p-4 shadow-lg", children: "x" }) })),
+		/unknown tw utility: shadow-lg on <p> in <main>/,
+	);
+	await assert.rejects(
+		render('<main tw="md:p-4"></main>'),
+		/tw takes no variants: md:p-4 on <main>/,
+	);
+});
+
+test("given malformed tw input and arbitrary CSS values, when rendering JSX and HTML, then rejects with token context", async () => {
+	for (const tw of [
+		"[color:red;display:flex]",
+		"p-[1px",
+		"text-[bogus]",
+		"[display:inline-grid]",
+		"[box-shadow:0_0_1pt_red]",
+		"-mt-1",
+		"text-[percentage:120%]",
+	]) {
+		await assert.rejects(render(jsx("p", { tw, children: "x" })), (error) =>
+			error.message.includes(tw),
+		);
+		await assert.rejects(render(`<p tw="${tw}">x</p>`), (error) => error.message.includes(tw));
+	}
+	await assert.rejects(render(jsx("p", { tw: 4, children: "x" })), /tw must be a string/);
+	await assert.rejects(
+		render(jsx("p", { tw: " ".repeat(16_385), children: "x" })),
+		/tw exceeds 16384 bytes/,
+	);
+	await assert.rejects(
+		render('<p tw="' + " ".repeat(16_385) + '">x</p>'),
+		/tw exceeds 16384 bytes/,
+	);
+});
+
 test("given an HTML string with a style element, named images, and an HTML header, when rendering, then matches the same tree from JSX", async () => {
 	const logo = png(1, 1, 2, [0, 255, 0, 0]);
 	const mark = new TextEncoder().encode(

@@ -194,7 +194,13 @@ fn functional(source: &str, opacity: &mut f64) -> Result<Option<[f64; 3]>, Messa
             axis(third),
         )
     } else {
-        let angle = hue(third) * std::f64::consts::PI / 180.0;
+        // Tailwind's achromatic palette omits the powerless hue.
+        let degrees = if *third == "none" && axis(second) == 0.0 {
+            0.0
+        } else {
+            hue(third)
+        };
+        let angle = degrees * std::f64::consts::PI / 180.0;
         oklab(
             fraction(first, 1.0).clamp(0.0, 1.0),
             axis(second) * libm::cos(angle),
