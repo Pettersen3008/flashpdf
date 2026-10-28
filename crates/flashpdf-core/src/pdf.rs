@@ -94,10 +94,7 @@ pub(crate) fn finish_pdf(
     let programs = map_ordered(
         embedded,
         |font| font.bytes.len(),
-        |font| {
-            let program = font.program();
-            (program.len(), deflate(&program, Stream::Table))
-        },
+        crate::EmbeddedFont::deflated_program,
     );
     let attached = map_ordered(
         metadata.attachments.iter().collect(),
@@ -109,7 +106,7 @@ pub(crate) fn finish_pdf(
         deflate(&content, Stream::Content)
     });
     let capacity = (streams.iter().chain(&attached))
-        .chain(programs.iter().map(|(_, program)| program))
+        .chain(programs.iter().map(|program| &program.1))
         .map(Vec::len)
         .chain(images.iter().map(|image| image.data.len()))
         .try_fold(8 * 1024 + count * 512, |total, length| {
@@ -361,7 +358,7 @@ pub(crate) fn finish_pdf(
                     to_unicode: refs.to_unicode.unwrap(),
                 },
                 font,
-                programs.next().unwrap(),
+                &programs.next().unwrap(),
             ),
         }
     }

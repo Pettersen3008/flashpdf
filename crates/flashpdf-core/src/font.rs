@@ -253,7 +253,7 @@ pub(crate) fn write_embedded(
     pdf: &mut Pdf,
     refs: EmbeddedRefs,
     font: &EmbeddedFont,
-    (length, program): (usize, Vec<u8>),
+    (length, program): &(usize, Vec<u8>),
 ) {
     let name = font.subset_name();
     let name = Name(name.as_bytes());
@@ -302,9 +302,9 @@ pub(crate) fn write_embedded(
         .cap_height(font.cap_height)
         .stem_v(font.stem_v)
         .font_file2(refs.file);
-    pdf.stream(refs.file, &program)
+    pdf.stream(refs.file, program)
         .filter(Filter::FlateDecode)
-        .pair(Name(b"Length1"), length as i32)
+        .pair(Name(b"Length1"), *length as i32)
         .finish();
 
     let mut cmap = UnicodeCmap::new(
