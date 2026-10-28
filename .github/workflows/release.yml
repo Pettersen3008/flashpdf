@@ -95,6 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read
       actions: read
       id-token: write
       attestations: write
@@ -136,9 +137,12 @@ jobs:
             ${{ runner.temp }}/native/*.tgz
       # Platform packages first, so the main package never points at a missing version.
       # npm prefers OIDC trusted publishing; NPM_TOKEN only bootstraps packages that do not exist yet.
+      # A re-run after a partial publish skips the versions npm already has.
       - run: |
-          for tarball in "$RUNNER_TEMP"/native/*.tgz; do npm publish "$tarball" --access public --provenance; done
-          npm publish "$TARBALL" --access public --provenance
+          for tarball in "$RUNNER_TEMP"/native/*.tgz "$TARBALL"; do
+            spec=$(tar -xOzf "$tarball" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); p.name + "@" + p.version')
+            test -n "$(npm view "$spec" version 2>/dev/null)" || npm publish "$tarball" --access public --provenance
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL: ${{ steps.pack.outputs.tarball }}
