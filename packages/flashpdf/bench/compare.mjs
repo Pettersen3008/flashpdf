@@ -210,7 +210,6 @@ function main() {
 			return {
 				tagged,
 				byteEqual,
-				performanceClaimsAllowed: byteEqual && !args.check,
 				...(!args.check && {
 					baseline: stats("baseline"),
 					candidate: stats("candidate"),
@@ -261,7 +260,7 @@ function main() {
 						]),
 					),
 					method:
-						"Cold includes imports, font reads, backend initialization, tree creation and first render in a fresh process; excludes process launch. Warm includes tree creation and render after discarded warmups; excludes byte checks. Each pair alternates order. Ratios below 1 favor candidate. Range describes observed process pairs, not a confidence interval; small or overlapping differences need more quiet runs. Byte changes block claims until separately reviewed for semantics. No forced GC; RSS is process high-water mark including verification.",
+						"Cold includes imports, font reads, backend initialization, tree creation and first render in a fresh process; excludes process launch. Warm includes tree creation and render after discarded warmups; excludes byte checks. Each pair alternates order. Ratios below 1 favor candidate. Range describes observed process pairs, not a confidence interval; small or overlapping differences need more quiet runs. Byte changes block claims until separately reviewed for semantics. Byte equality does not establish a quiet host; review background CPU activity separately. No forced GC; RSS is process high-water mark including verification.",
 					proofs,
 					summary,
 					samples,
