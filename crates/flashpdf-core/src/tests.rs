@@ -3208,7 +3208,7 @@ fn given_a_fixed_box_when_rendered_across_two_pages_then_it_paints_in_the_page_a
     };
     let mut renderer = super::Renderer::new(page());
     renderer.add_fixed(vec![
-        crate::OwnedCommand::BoxStart(style, size),
+        crate::OwnedCommand::BoxStart(style, size, None),
         crate::OwnedCommand::BoxEnd,
     ]);
     renderer
@@ -3220,4 +3220,147 @@ fn given_a_fixed_box_when_rendered_across_two_pages_then_it_paints_in_the_page_a
         let content = String::from_utf8(pdf.get_page_content(*page)).unwrap();
         assert!(content.contains("100 10 10 5 re"), "{content}");
     }
+}
+
+fn effect_box<'a>(effects: &'a super::BoxEffects, height: f32) -> Command<'a> {
+    Command::EffectBoxStart {
+        effects,
+        style: super::BoxStyle {
+            margin: Edges::all(Pt::ZERO),
+            padding: Edges::all(Pt::ZERO),
+            border: Edges::all(Pt::ZERO),
+            background: Some(Rgb { r: 255, g: 0, b: 0 }),
+            ..bordered()
+        },
+        size: super::BoxSize {
+            height: Some(Pt(height)),
+            ..super::BoxSize::AUTO
+        },
+    }
+}
+
+#[test]
+fn given_a_translated_box_between_siblings_when_painted_then_cm_wraps_only_that_box_in_flow_order()
+{
+    let effects =
+        super::BoxEffects::parse("translate(10pt, 5pt)", "0 0", "none", false, 10.0).unwrap();
+    let pdf = parsed(&[
+        Command::BoxStart {
+            style: super::BoxStyle {
+                border: Edges::all(Pt::ZERO),
+                ..bordered()
+            },
+            size: super::BoxSize {
+                height: Some(Pt(35.0)),
+                ..super::BoxSize::AUTO
+            },
+        },
+        text("aaa"),
+        effect_box(&effects, 12.0),
+        text("xxx"),
+        Command::BoxEnd,
+        text("ccc"),
+        Command::BoxEnd,
+    ]);
+    let stream = content(&pdf);
+    let before = stream.find("(aaa)").unwrap();
+    let matrix = stream.find("q\n1 0 0 1 10 -5 cm").unwrap();
+    let inside = stream.find("(xxx)").unwrap_or_else(|| panic!("{stream}"));
+    let restore = stream[inside..].find("\nQ").unwrap() + inside;
+    let after = stream.find("(ccc)").unwrap();
+    assert!(
+        before < matrix && matrix < inside && inside < restore && restore < after,
+        "{stream}"
+    );
+    assert_eq!(pdf.get_pages().len(), 1);
+}
+
+#[test]
+fn given_an_origin_centered_scale_when_painted_then_the_pdf_matrix_conjugates_the_css_origin() {
+    let effect = super::BoxEffects::parse("scale(2)", "50% 50%", "none", false, 10.0).unwrap();
+    let pdf = parsed(&[effect_box(&effect, 20.0), text("scaled"), Command::BoxEnd]);
+    let stream = content(&pdf);
+    assert!(stream.contains("q\n2 0 0 2 -60 -40 cm\n"), "{stream}");
+    assert!(stream.contains("\nQ"), "{stream}");
+}
+
+#[test]
+fn given_each_clip_shape_when_painted_then_a_native_pdf_clip_precedes_its_content() {
+    for (value, operator, curve) in [
+        ("inset(2pt round 3pt)", "W", true),
+        ("circle(40% at center)", "W", true),
+        ("ellipse(40% 30% at center)", "W", true),
+        ("polygon(evenodd, 0 0, 100% 0, 50% 100%)", "W*", false),
+        ("path(nonzero, 'M0 0 L100 0 L0 20z')", "W", false),
+    ] {
+        let effect = super::BoxEffects::parse("none", "center", value, false, 10.0).unwrap();
+        let pdf = parsed(&[
+            effect_box(&effect, 20.0),
+            text("clipped"),
+            Command::BoxEnd,
+            text("outside"),
+        ]);
+        let stream = content(&pdf);
+        let clip = stream.find(&format!("\n{operator}\nn\n")).unwrap();
+        let inside = stream.find("(clipped)").unwrap();
+        let outside = stream.find("(outside)").unwrap();
+        assert!(clip < inside && inside < outside, "{value}: {stream}");
+        assert_eq!(stream[..clip].contains(" c\n"), curve, "{value}: {stream}");
+        assert!(stream[inside..outside].contains("\nQ\n"), "{stream}");
+    }
+}
+
+#[test]
+fn given_hidden_overflow_with_a_rounded_border_when_painted_then_only_children_clip_to_the_padding_box(
+) {
+    let effect = super::BoxEffects::parse("none", "center", "none", true, 10.0).unwrap();
+    let Command::EffectBoxStart {
+        mut style,
+        mut size,
+        effects,
+    } = effect_box(&effect, 12.0)
+    else {
+        unreachable!()
+    };
+    style.border = Edges::all(Pt(2.0));
+    style.radius = Some(Radii {
+        values: [5.0; 8],
+        percent: 0,
+    });
+    size.border_box = true;
+    let pdf = parsed(&[
+        Command::EffectBoxStart {
+            style,
+            size,
+            effects,
+        },
+        text("xxx"),
+        text("below"),
+        Command::BoxEnd,
+    ]);
+    let stream = content(&pdf);
+    let border = stream.find("\nS").unwrap();
+    let clip = stream.find("\nW\nn").unwrap();
+    let text = stream.find("(xxx)").unwrap();
+    assert!(border < clip && clip < text, "{stream}");
+    assert!(stream[..clip].contains(" c\n"), "{stream}");
+}
+
+#[test]
+fn given_a_transformed_box_that_would_split_when_paginating_then_it_moves_whole_and_keeps_its_flow_height(
+) {
+    let effect = super::BoxEffects::parse("scale(0.5)", "center", "none", false, 10.0).unwrap();
+    let pdf = parsed(&[
+        text("first"),
+        text("second"),
+        effect_box(&effect, 24.0),
+        text("moved"),
+        text("together"),
+        Command::BoxEnd,
+    ]);
+    assert_eq!(pdf.get_pages().len(), 2);
+    assert_eq!(page_text(&pdf, 1), "first\nsecond");
+    assert_eq!(page_text(&pdf, 2), "moved\ntogether");
+    let too_tall = super::render(page(), &[effect_box(&effect, 41.0), Command::BoxEnd]);
+    assert_eq!(too_tall, Err(RenderError::PageOverflow));
 }

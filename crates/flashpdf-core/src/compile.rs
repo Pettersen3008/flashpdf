@@ -14,11 +14,11 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::css::style::{
-    box_size, box_style, color, counter, decoration, decoration_color, dimension, flex_basis, font,
-    kerning, line_height, list_style_position, list_style_type, opacity, point, position,
-    radius_of, spacing, style as normalize, transform, vertical_align, white_space, Box, Dimension,
-    Font, FontSlots, LineHeight, Rgb, Size, Slant, Style, Transform, WhiteSpace, HELVETICA,
-    MARGINS, OBLIQUE, SHAPES,
+    box_size, box_style, color, counter, decoration, decoration_color, dimension, effects,
+    flex_basis, font, kerning, line_height, list_style_position, list_style_type, opacity, point,
+    position, radius_of, spacing, style as normalize, transform, vertical_align, white_space, Box,
+    Dimension, Font, FontSlots, LineHeight, Rgb, Size, Slant, Style, Transform, WhiteSpace,
+    HELVETICA, MARGINS, OBLIQUE, SHAPES,
 };
 use crate::css::{
     js_space, list_key, Cascaded, ElemInput, Inline, Key, Prop, Resolver, Tree, Value,
@@ -412,6 +412,8 @@ struct Ctx {
     item: bool,
     in_column: bool,
     height: Option<f64>,
+    transformed_box: bool,
+    clipped_box: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -430,6 +432,8 @@ struct CellPaint {
 }
 
 const ROOT: Ctx = Ctx {
+    transformed_box: false,
+    clipped_box: false,
     size: 12.0,
     align: 4,
     direction: Direction::Ltr,
@@ -526,6 +530,7 @@ const EMPTY: Box = Box {
     radius: None,
     opacity: 1.0,
     size: None,
+    effects: None,
 };
 
 fn justify(value: Option<&Value>) -> u8 {
@@ -586,11 +591,21 @@ fn row_only(s: &Style, in_row: bool) -> Result<()> {
     Ok(())
 }
 
-/// Sizes, an auto margin, or a position make a layout node; `box-sizing` alone changes nothing.
+#[inline(never)]
+fn has_effects(s: &Style) -> bool {
+    s.0.iter().any(|(key, _)| matches!(key, Key::Prop(prop) if [p!("transform"), p!("clipPath"), p!("overflow")].contains(prop)))
+}
+
+fn defer_anchor(node: &Styled, s: &Style) -> bool {
+    (node.el.id.is_some() || node.el.tag.starts_with('h')) && has_effects(s)
+}
+
+/// Sizes, auto margins, positions, and paint effects make a layout node.
 fn sized(s: &Style) -> bool {
     SIZES.iter().any(|prop| s.get(*prop).is_some())
         || MARGINS.iter().any(|prop| is(s, *prop, "auto"))
         || s.get(p!("position")).is_some()
+        || has_effects(s)
 }
 
 /// Whether `position` takes the element out of flow: `absolute` or `fixed`.
@@ -600,6 +615,14 @@ fn out_of_flow(s: &Style) -> bool {
 
 /// Rejects `position` where the element has no box of its own to place.
 fn static_only(s: &Style, tag: &str) -> Result<()> {
+    for prop in [p!("transform"), p!("clipPath"), p!("overflow")] {
+        if let Some(value) = get(s, prop) {
+            return Err(Error::new(format!(
+                "{}: {value} applies to blocks, text elements, and images, not <{tag}>",
+                prop.name()
+            )));
+        }
+    }
     match get(s, p!("position")) {
         Some(value) => Err(Error::new(format!(
             "position: {value} applies to blocks, text elements, and images, not <{tag}>"
@@ -777,7 +800,19 @@ fn inherit(
             .position(|own| *own == align)
             .map_or(255, |index| index as u8),
     };
+    let (mut transformed_box, mut clipped_box) = (current.transformed_box, current.clipped_box);
+    if !(transformed_box && clipped_box) {
+        for (key, value) in &s.0 {
+            if let Key::Prop(prop) = key {
+                transformed_box |= *prop == p!("transform");
+                clipped_box |=
+                    *prop == p!("clipPath") || *prop == p!("overflow") && value.is("hidden");
+            }
+        }
+    }
     Ok(Ctx {
+        transformed_box,
+        clipped_box,
         size,
         align,
         direction,
@@ -1265,7 +1300,11 @@ impl<S: Sink> Compiler<S> {
     /// An absolute or fixed box leaves the margins around it to collapse as if it were absent.
     /// A fixed one compiles into a block of its own that the engine paints on every page.
     fn out_of_flow(&mut self, el: &Styled, context: &Ctx, depth: usize) -> Result<()> {
-        let fixed = is(&el.style, p!("position"), "fixed") && !self.fixed;
+        let fixed =
+            is(&el.style, p!("position"), "fixed") && !self.fixed && !context.transformed_box;
+        if fixed && context.clipped_box {
+            return Err(Error::new("position: fixed inside a clipped ancestor without a transform is not supported; use absolute or transform the ancestor"));
+        }
         if fixed && (self.nav.is_none() || self.page_tokens) {
             return Err(Error::new(
                 "position: fixed applies in the document body, not in a header or footer",
@@ -1339,7 +1378,7 @@ impl<S: Sink> Compiler<S> {
             // A `<mark>` paints its background behind each line of its text, so only box edges make it a box.
             let paint = box_style(s, context.size, 1.0)?;
             let highlight = tag == "mark"
-                && paint.is_some_and(|paint| {
+                && paint.as_ref().is_some_and(|paint| {
                     paint
                         .margin
                         .iter()
@@ -1458,7 +1497,7 @@ impl<S: Sink> Compiler<S> {
         avoid: bool,
         body: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
-        let [top, right, bottom, left] = value.map_or([0.0; 4], |value| value.margin);
+        let [top, right, bottom, left] = value.as_ref().map_or([0.0; 4], |value| value.margin);
         let inner = value.map(|value| {
             if collapses {
                 Box {
@@ -1473,6 +1512,7 @@ impl<S: Sink> Compiler<S> {
             !collapses
                 || inner.background.is_some()
                 || inner.size.is_some()
+                || inner.effects.is_some()
                 || inner
                     .margin
                     .iter()
@@ -1484,15 +1524,16 @@ impl<S: Sink> Compiler<S> {
             self.writer.margin(top);
         }
         let result: Result<()> = (|| {
-            if let Some(inner) = drawn {
+            if let Some(inner) = &drawn {
                 let through = collapses
                     && inner.size.is_none()
+                    && inner.effects.is_none()
                     && inner.padding[0] == 0.0
                     && inner.border[0] == 0.0;
-                self.writer.box_start(inner, through)?;
+                self.writer.box_start(inner.clone(), through)?;
             }
             body(self)?;
-            if let Some(inner) = drawn {
+            if let Some(inner) = &drawn {
                 self.writer
                     .box_end(collapses && inner.padding[2] == 0.0 && inner.border[2] == 0.0)?;
             }
@@ -1506,7 +1547,7 @@ impl<S: Sink> Compiler<S> {
                     ));
                 }
                 if drawn.is_some() {
-                    let size = value.and_then(|value| value.size);
+                    let size = drawn.as_ref().and_then(|value| value.size);
                     let limited =
                         size.is_some_and(|size| size.height.or(size.max_height).is_some());
                     return Err(Error::new(if limited {
@@ -1530,7 +1571,10 @@ impl<S: Sink> Compiler<S> {
         let paint = box_style(s, size, context.opacity * own)?;
         let sizes = box_size(s, context.height, !context.in_row || context.item)?;
         let sizes = match position(s, size)? {
-            Some(position) => {
+            Some(mut position) => {
+                if position.kind == 3 && context.transformed_box {
+                    position.kind = 2;
+                }
                 Self::check_position(&position, sizes.map_or(0, |sizes| sizes.auto_margin))?;
                 Some(Size {
                     position: Some(position),
@@ -1539,6 +1583,15 @@ impl<S: Sink> Compiler<S> {
             }
             None => sizes,
         };
+        let effect = effects(s, size)?;
+        let mut paint = if effect.is_some() {
+            Some(paint.unwrap_or(EMPTY))
+        } else {
+            paint
+        };
+        if let Some(paint) = &mut paint {
+            paint.effects = effect;
+        }
         Ok(match sizes {
             Some(sizes) => Some(Box {
                 size: Some(sizes),
@@ -1751,7 +1804,9 @@ impl<S: Sink> Compiler<S> {
     fn element(&mut self, node: &Styled, context: &Ctx, depth: usize) -> Result<()> {
         let s: &Style = &node.style;
         let tag = node.el.tag.as_str();
-        self.anchor(node)?;
+        if !defer_anchor(node, s) {
+            self.anchor(node)?;
+        }
         if s.get(p!("verticalAlign")).is_some() && !TABLE_PARTS.contains(&tag) && !inline_tag(tag) {
             return Err(Error::new(VERTICAL_ALIGN));
         }
@@ -1777,7 +1832,10 @@ impl<S: Sink> Compiler<S> {
             | "h2" | "h3" | "h4" | "h5" | "h6" => self.text_block(node, s, context, depth),
             "img" | "svg" => match position(s, context.size)? {
                 // A picture has no box of its own to position, so an empty one around it moves.
-                Some(position) => {
+                Some(mut position) => {
+                    if position.kind == 3 && context.transformed_box {
+                        position.kind = 2;
+                    }
                     Self::check_position(&position, 0)?;
                     let size = Size {
                         position: Some(position),
@@ -1808,7 +1866,12 @@ impl<S: Sink> Compiler<S> {
                 let size =
                     inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?.size;
                 let paint = Self::layout_box(s, size, context)?;
-                self.boxed(paint, collapses(context), false, |_| Ok(()))?;
+                self.boxed(paint, collapses(context), false, |this| {
+                    if defer_anchor(node, s) {
+                        this.anchor(node)?;
+                    }
+                    Ok(())
+                })?;
                 self.page_break(s, true, depth)
             }
             _ => Ok(()),
@@ -1837,9 +1900,10 @@ impl<S: Sink> Compiler<S> {
         let paint = cell_box(Self::layout_box(s, next.size, context)?, context.cell);
         let avoid = is(s, p!("breakInside"), "avoid");
         // A CSS flex item is one element, so one without a box of its own gets an empty one.
-        let value = paint.or(context.item.then_some(EMPTY));
+        let value = paint.clone().or(context.item.then_some(EMPTY));
         let flows = collapses(context) && !out_of_flow(s);
         self.boxed(value, flows, avoid, |this| {
+            if defer_anchor(node, s) { this.anchor(node)?; }
             let flex = is(s, p!("display"), "flex");
             let row = flex && get(s, p!("flexDirection")).is_none_or(|value| value.is("row"));
             let inner = Ctx {
@@ -2042,6 +2106,9 @@ impl<S: Sink> Compiler<S> {
         let value = own.or((context.item && runs.is_none()).then_some(EMPTY));
         let flows = collapses(context) && !out_of_flow(s);
         self.boxed(value, flows, avoid, |this| {
+            if defer_anchor(node, s) {
+                this.anchor(node)?;
+            }
             if avoid {
                 this.writer.stack_start(0.0, false)?;
             }
@@ -2098,13 +2165,32 @@ impl<S: Sink> Compiler<S> {
             ));
         }
         let max_height = length(p!("maxHeight"))?.map(|height| height.value);
-        if radius_of(s, next.size)?.is_some() {
+        let mut effect = effects(s, next.size)?;
+        if let Some(effect) = &mut effect {
+            Rc::make_mut(effect).image = true;
+        }
+        if radius_of(s, next.size)?.is_some()
+            && !effect
+                .as_ref()
+                .is_some_and(|effect| effect.overflow || effect.clip != "none")
+        {
             return Err(Error::new(format!(
                 "border-radius does not clip <{tag}>: the picture stays rectangular, so remove the radius"
             )));
         }
         let paint = box_style(s, next.size, next.opacity)?;
+        let paint = if effect.is_some() {
+            Some(Box {
+                effects: effect,
+                ..paint.unwrap_or(EMPTY)
+            })
+        } else {
+            paint
+        };
         self.boxed(paint, collapses(context), false, |this| {
+            if defer_anchor(node, s) {
+                this.anchor(node)?;
+            }
             let result: Result<()> = (|| {
                 // A drawing carries its opacity in its shapes, where an image takes it from the page.
                 let (slot, alpha) = match &node.el.picture {

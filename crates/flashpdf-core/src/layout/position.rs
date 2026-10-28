@@ -19,26 +19,64 @@ fn resolve(inset: Inset, base: Pt) -> Option<f32> {
 
 /// The absolute and fixed boxes whose nearest positioned ancestor is out of `elements`, in
 /// document order. A positioned box holds its own.
-fn collect<'e, 'a>(elements: &'e [Element<'a>], found: &mut Vec<&'e BoxNode<'a>>) {
+fn collect<'e, 'a>(
+    elements: &'e [Element<'a>],
+    clips: &mut Vec<usize>,
+    found: &mut Vec<(&'e BoxNode<'a>, Vec<usize>)>,
+) {
     for element in elements {
         match element {
             Element::Box(node) => match node.size.position.map(|position| position.kind) {
-                Some(PositionKind::Absolute | PositionKind::Fixed) => found.push(node),
+                Some(PositionKind::Absolute | PositionKind::Fixed) => {
+                    found.push((node, clips.clone()))
+                }
                 Some(PositionKind::Relative) => {}
-                None => collect(&node.children, found),
+                None => {
+                    if node.effects.is_some_and(crate::BoxEffects::transformed) {
+                        continue;
+                    }
+                    if node.effects.is_some() {
+                        clips.push(std::ptr::from_ref(node) as usize);
+                    }
+                    collect(&node.children, clips, found);
+                    if node.effects.is_some() {
+                        clips.pop();
+                    }
+                }
             },
-            Element::Stack(stack) => collect(&stack.children, found),
-            Element::Flex(node) => collect(&node.children, found),
-            Element::Table(table) => collect(&table.rows, found),
+            Element::Stack(stack) => collect(&stack.children, clips, found),
+            Element::Flex(node) => collect(&node.children, clips, found),
+            Element::Table(table) => collect(&table.rows, clips, found),
             Element::Row(row) => {
                 for cell in &row.cells {
-                    collect(std::slice::from_ref(&cell.content), found);
+                    collect(std::slice::from_ref(&cell.content), clips, found);
                 }
             }
-            Element::Paragraph(_) | Element::Spacer(_) | Element::Image(_) | Element::Anchor(_) => {
-            }
+            _ => {}
         }
     }
+}
+
+fn clip_effect(
+    buffer: &LayoutBuffer,
+    source: usize,
+    offset: Point,
+) -> Option<super::output::LayerEffects> {
+    for layer in &buffer.layers {
+        let offset = offset.translated(layer.offset.x, layer.offset.y);
+        if let Some(effect) = &layer.effects {
+            if effect.source == source {
+                let mut effect = effect.as_ref().clone();
+                effect.rect.origin = effect.rect.origin.translated(offset.x, offset.y);
+                effect.paint = false;
+                return Some(effect);
+            }
+        }
+        if let Some(effect) = clip_effect(&layer.buffer, source, offset) {
+            return Some(effect);
+        }
+    }
+    None
 }
 
 /// Adds `buffer` as a layer. Under `z-index: auto` the box makes no stacking context, so the
@@ -51,12 +89,17 @@ fn push_layer(
     mut buffer: LayoutBuffer,
 ) {
     let inner = if z.is_none() {
-        std::mem::take(&mut buffer.layers)
+        buffer
+            .layers
+            .extract_if(.., |layer| layer.flow.is_none())
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
     output.layers.push(Layer {
         z: z.unwrap_or(0),
+        flow: None,
+        effects: None,
         offset,
         page,
         buffer,
@@ -99,9 +142,14 @@ impl LayoutEngine<'_> {
         let dy = resolve(inset.top, Pt::ZERO)
             .or_else(|| resolve(inset.bottom, Pt::ZERO).map(|bottom| -bottom))
             .unwrap_or(0.0);
+        self.effect_layer(node, rect, &mut buffer)?;
         push_layer(
             output,
-            position.z,
+            position.z.or_else(|| {
+                node.effects
+                    .is_some_and(crate::BoxEffects::transformed)
+                    .then_some(0)
+            }),
             Point {
                 x: Pt(dx),
                 y: Pt(dy),
@@ -121,9 +169,27 @@ impl LayoutEngine<'_> {
         output: &mut LayoutBuffer,
     ) -> Result<(), LayoutError> {
         let mut found = Vec::new();
-        collect(elements, &mut found);
-        for node in found {
+        collect(elements, &mut Vec::new(), &mut found);
+        for (node, clips) in found {
+            let first = output.layers.len();
             self.absolute(node, block, output)?;
+            for source in clips.into_iter().rev() {
+                let effect =
+                    clip_effect(output, source, Point::ZERO).ok_or(LayoutError::InvalidBox)?;
+                for layer in output.layers.split_off(first) {
+                    output.layers.push(Layer {
+                        z: layer.z,
+                        offset: Point::ZERO,
+                        page: false,
+                        flow: None,
+                        effects: Some(Box::new(effect.clone())),
+                        buffer: LayoutBuffer {
+                            layers: vec![layer],
+                            ..LayoutBuffer::default()
+                        },
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -207,9 +273,14 @@ impl LayoutEngine<'_> {
             self.place_absolutes(&node.children, Some(padding_box(node, rect)), &mut buffer)?;
         }
         let y = top.unwrap_or_else(|| block.height.get() - bottom.unwrap_or(0.0) - height.get());
+        self.effect_layer(node, rect, &mut buffer)?;
         push_layer(
             output,
-            position.z,
+            position.z.or_else(|| {
+                node.effects
+                    .is_some_and(crate::BoxEffects::transformed)
+                    .then_some(0)
+            }),
             Point {
                 x: Pt::ZERO,
                 y: Pt(y),
@@ -222,7 +293,7 @@ impl LayoutEngine<'_> {
 }
 
 /// The padding box inside a laid-out border box: an absolute child's containing block.
-fn padding_box(node: &BoxNode<'_>, rect: Rect) -> Rect {
+pub(super) fn padding_box(node: &BoxNode<'_>, rect: Rect) -> Rect {
     let border = node.style.border;
     Rect {
         origin: rect.origin.translated(border.left, border.top),

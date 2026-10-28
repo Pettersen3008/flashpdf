@@ -2,6 +2,7 @@ mod command;
 mod compile;
 mod css;
 mod document;
+mod effects;
 mod font;
 mod geometry;
 mod html;
@@ -18,6 +19,7 @@ pub mod protocol;
 
 pub(crate) use command::OwnedCommand;
 pub use command::{ColumnWidth, Command, Slot};
+pub use effects::BoxEffects;
 pub(crate) use font::EmbeddedFont;
 pub(crate) use image::Image;
 pub use model::*;

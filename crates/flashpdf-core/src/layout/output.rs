@@ -72,11 +72,25 @@ pub(crate) struct PositionedBox {
 #[derive(Clone)]
 pub(crate) struct Layer {
     pub(crate) z: i32,
+    /// A flow layer paints at these buffer indices, rather than at page end.
+    pub(crate) flow: Option<Marks>,
+    pub(crate) effects: Option<std::boxed::Box<LayerEffects>>,
     /// How far right and down the buffer paints from where it was laid out.
     pub(crate) offset: Point,
     /// The buffer is laid out from the page area's top left corner, not the block's.
     pub(crate) page: bool,
     pub(crate) buffer: LayoutBuffer,
+}
+
+#[derive(Clone)]
+pub(crate) struct LayerEffects {
+    pub(crate) source: usize,
+    pub(crate) rect: PositionedBox,
+    pub(crate) transform: Option<[f32; 6]>,
+    pub(crate) clip: Option<std::rc::Rc<crate::effects::ResolvedClip>>,
+    pub(crate) clip_border: bool,
+    pub(crate) overflow: bool,
+    pub(crate) paint: bool,
 }
 
 /// Paint attributes of the segment at the same index. The text layouter owns
@@ -196,10 +210,22 @@ impl LayoutBuffer {
             + self.boxes.capacity() * size_of::<PositionedBox>()
             + self.images.capacity() * size_of::<PositionedImage>()
             + self.links.capacity() * size_of::<String>()
+            + self.layers.capacity() * size_of::<Layer>()
             + self
                 .layers
                 .iter()
-                .map(|layer| layer.buffer.capacity())
+                .map(|layer| {
+                    layer.buffer.capacity()
+                        + layer.effects.as_ref().map_or(0, |effects| {
+                            size_of::<LayerEffects>()
+                                + effects.clip.as_ref().map_or(0, |clip| {
+                                    size_of::<crate::effects::ResolvedClip>()
+                                        + 2 * size_of::<usize>()
+                                        + clip.operations.capacity()
+                                            * size_of::<crate::vector::PathOp>()
+                                })
+                        })
+                })
                 .sum::<usize>()
     }
 }

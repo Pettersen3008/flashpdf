@@ -215,7 +215,7 @@ impl<S: Sink> Compiler<S> {
         self.page_break(s, false, depth)?;
         let next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
         let paint = box_style(s, next.size, next.opacity)?;
-        if paint.is_some_and(|paint| {
+        if paint.as_ref().is_some_and(|paint| {
             paint.margin[1] != 0.0
                 || paint.margin[3] != 0.0
                 || paint.background.is_some()
@@ -447,7 +447,11 @@ impl<S: Sink> Compiler<S> {
         } else {
             element_column(node)?
         };
-        if let Some(top) = paint.map(|paint| paint.margin[0]).filter(|top| *top != 0.0) {
+        if let Some(top) = paint
+            .as_ref()
+            .map(|paint| paint.margin[0])
+            .filter(|top| *top != 0.0)
+        {
             self.writer.spacer(top)?;
         }
         // Element path of each table child, indexed as the renderer reports an overflowing row.
@@ -585,7 +589,7 @@ impl<S: Sink> Compiler<S> {
                 self.writer.avoid()?;
             }
             // Collapsed borders belong to the cells.
-            let own = item.paint.map(|paint| {
+            let own = item.paint.clone().map(|paint| {
                 if table.collapsed {
                     Box {
                         border: [0.0; 4],
@@ -595,7 +599,7 @@ impl<S: Sink> Compiler<S> {
                     paint
                 }
             });
-            let shaped = own.is_some_and(|own| {
+            let shaped = own.as_ref().is_some_and(|own| {
                 own.margin.iter().chain(&own.padding).chain(&own.border).any(|edge| *edge != 0.0)
             });
             if joined && shaped {
@@ -603,7 +607,7 @@ impl<S: Sink> Compiler<S> {
                     "a <tr> that rowSpan joins to other rows takes only a background; style its cells",
                 ));
             }
-            let background = own.and_then(|own| own.background);
+            let background = own.as_ref().and_then(|own| own.background);
             // Joined rows lay out as one block, so each row's background paints in its own cells.
             let value = if joined || !(shaped || background.is_some()) {
                 None

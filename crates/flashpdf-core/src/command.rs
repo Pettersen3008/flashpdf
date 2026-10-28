@@ -34,6 +34,11 @@ pub enum Command<'a> {
         style: BoxStyle,
         size: BoxSize,
     },
+    EffectBoxStart {
+        style: BoxStyle,
+        size: BoxSize,
+        effects: &'a crate::BoxEffects,
+    },
     BoxEnd,
     Spacer(Pt),
     StackStart {
@@ -109,7 +114,7 @@ pub(crate) enum OwnedCommand {
         Vec<TextRun>,
         Vec<String>,
     ),
-    BoxStart(BoxStyle, BoxSize),
+    BoxStart(BoxStyle, BoxSize, Option<std::rc::Rc<crate::BoxEffects>>),
     BoxEnd,
     Spacer(Pt),
     StackStart(Pt),
@@ -147,9 +152,16 @@ impl OwnedCommand {
                     links,
                 }
             }
-            Self::BoxStart(style, size) => Command::BoxStart {
-                style: *style,
-                size: *size,
+            Self::BoxStart(style, size, effects) => match effects {
+                Some(effects) => Command::EffectBoxStart {
+                    style: *style,
+                    size: *size,
+                    effects: effects.as_ref(),
+                },
+                None => Command::BoxStart {
+                    style: *style,
+                    size: *size,
+                },
             },
             Self::BoxEnd => Command::BoxEnd,
             Self::Spacer(value) => Command::Spacer(*value),
@@ -257,7 +269,8 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_element(&mut self, depth: usize) -> Result<Element<'a>, CommandParseError> {
-        match self.next()? {
+        let command = self.next()?;
+        match command {
             Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
                 align: style.align,
                 direction: Direction::Ltr,
@@ -314,13 +327,18 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::Anchor(slot) => Ok(Element::Anchor(slot)),
-            Command::BoxStart { style, size } => {
+            Command::BoxStart { style, size } | Command::EffectBoxStart { style, size, .. } => {
+                let effects = match command {
+                    Command::EffectBoxStart { effects, .. } => Some(effects),
+                    _ => None,
+                };
                 self.check_depth(depth)?;
                 let children = self.parse_children(Command::BoxEnd, depth + 1)?;
                 Ok(Element::Box(BoxNode {
                     style,
                     size,
                     children,
+                    effects,
                 }))
             }
             Command::StackStart { gap } => {

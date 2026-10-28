@@ -12,7 +12,7 @@ mod length;
 mod list;
 mod normalize;
 
-pub use boxes::{box_size, box_style, position, radius_of, Box, Position, Size};
+pub use boxes::{box_size, box_style, effects, position, radius_of, Box, Position, Size};
 pub use color::{color, Rgb};
 pub use decoration::{decoration, decoration_color};
 pub use font::{
@@ -304,6 +304,34 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
     }
     // Validated after normalize, so `inherit` and `initial` have become values.
     let mut result = normalize::normalize(value, parent)?;
+    for (key, value) in &result.0 {
+        let Key::Prop(prop) = key else {
+            continue;
+        };
+        if *prop == prop!("perspective") || *prop == prop!("transformStyle") {
+            return Err(format!(
+                "unsupported {}: {value} (only 2D transforms are supported)",
+                prop.name()
+            )
+            .into());
+        }
+        let allowed = if *prop == prop!("overflow") {
+            &["visible", "hidden"][..]
+        } else if *prop == prop!("transformBox") {
+            &["view-box"][..]
+        } else {
+            continue;
+        };
+        if !allowed.iter().any(|word| value.is(word)) {
+            return Err(format!("unsupported {}: {value}", prop.name()).into());
+        }
+    }
+    result.0.retain(|(key, value)| {
+        !matches!(key, Key::Prop(prop)
+        if ((*prop == prop!("transform") || *prop == prop!("clipPath")) && value.is("none"))
+        || (*prop == prop!("overflow") && value.is("visible")))
+    });
+    effects(&result, 12.0)?;
     if !absent_or(result.get(prop!("display")), &["block", "flex"]) {
         return Err("invalid display".into());
     }

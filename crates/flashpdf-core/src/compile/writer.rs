@@ -448,7 +448,10 @@ fn box_start(b: &mut Bytes, value: &Box) {
     let position = size.and_then(|size| size.position);
     b.u8(size.map_or(0, |size| {
         u8::from(size.border_box) | size.auto_margin << 1 | u8::from(position.is_some()) << 5
-    }));
+    }) | value
+        .effects
+        .as_ref()
+        .map_or(0, |effect| 0x40 | u8::from(effect.image) << 7));
     b.size(size.and_then(|size| size.width));
     b.size(size.and_then(|size| size.min_width));
     b.size(size.and_then(|size| size.max_width));
@@ -467,6 +470,13 @@ fn box_start(b: &mut Bytes, value: &Box) {
         for side in position.inset {
             b.size(side);
         }
+    }
+    if let Some(effect) = &value.effects {
+        b.f32(f64::from(effect.font_size));
+        b.u8(u8::from(effect.overflow));
+        b.text(&effect.transform);
+        b.text(&effect.origin);
+        b.text(&effect.clip);
     }
 }
 

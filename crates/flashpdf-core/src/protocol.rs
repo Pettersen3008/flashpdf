@@ -816,7 +816,7 @@ impl Commands {
                 // Bit 0 is border-box sizing, bits 1 to 4 are auto margins in `Edges` order, and
                 // bit 5 is a position after the sizes.
                 let flags = cursor.take(1)?[0];
-                if flags > 0x3f {
+                if flags & 0xc0 == 0x80 {
                     return Err(ProtocolError::InvalidValue("box flags"));
                 }
                 let size = BoxSize {
@@ -834,6 +834,29 @@ impl Commands {
                         None
                     },
                 };
+                let effects = if flags & 0x40 != 0 {
+                    let font_size = cursor.nonnegative_f32("effect font size")?;
+                    let overflow = match cursor.take(1)?[0] {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(ProtocolError::InvalidValue("overflow")),
+                    };
+                    let transform = cursor.utf8()?;
+                    let origin = cursor.utf8()?;
+                    let clip = cursor.utf8()?;
+                    let effect = crate::BoxEffects::parse_inner(
+                        transform,
+                        origin,
+                        clip,
+                        overflow,
+                        font_size,
+                        flags & 0x80 != 0,
+                    )
+                    .map_err(|_| ProtocolError::InvalidValue("box effects"))?;
+                    Some(effect)
+                } else {
+                    None
+                };
                 cursor.done()?;
                 let style = crate::BoxStyle {
                     margin,
@@ -850,7 +873,7 @@ impl Commands {
                         "border radius with unequal borders",
                     ));
                 }
-                self.feed(OwnedCommand::BoxStart(style, size))
+                self.feed(OwnedCommand::BoxStart(style, size, effects))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
@@ -947,6 +970,9 @@ impl Commands {
                     + slots.len() * size_of::<crate::Slot>()
             }
             OwnedCommand::FlexStart(_, items) => items.len() * size_of::<FlexItem>(),
+            OwnedCommand::BoxStart(_, _, effects) => {
+                effects.as_ref().map_or(0, |effects| effects.capacity())
+            }
             OwnedCommand::Image(_, _, _, _, _, link, alt, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
@@ -964,8 +990,9 @@ impl Commands {
     fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = match &command {
             OwnedCommand::StackStart(_) => Frame::Stack,
-            OwnedCommand::BoxStart(style, size) => Frame::Box(
-                self.placing()
+            OwnedCommand::BoxStart(style, size, effects) => Frame::Box(
+                effects.is_none()
+                    && self.placing()
                     && self.furniture.is_none()
                     && *size == BoxSize::AUTO
                     && style.radius.is_none(),
@@ -1040,7 +1067,7 @@ impl Commands {
             return Err(ProtocolError::NestingTooDeep);
         }
         match (frame, command) {
-            (Frame::Box(true), OwnedCommand::BoxStart(style, _)) => {
+            (Frame::Box(true), OwnedCommand::BoxStart(style, _, _)) => {
                 self.ensure_renderer()?.open_box(style)?
             }
             (_, command) => self.push_command(command)?,
@@ -1151,4 +1178,71 @@ fn justify_code(code: u8) -> Result<Justify, ProtocolError> {
         5 => Justify::SpaceEvenly,
         _ => return Err(ProtocolError::InvalidValue("justify-content")),
     })
+}
+
+#[cfg(test)]
+mod effect_regressions {
+    use super::*;
+    use crate::compile::{Compiler, Drawing, Picture, Styler};
+    use std::collections::HashMap;
+
+    fn compile(source: &str) -> lopdf::Document {
+        let images = HashMap::from([(
+            "picture".into(),
+            Picture::Drawing(Drawing {
+                width: 40.0,
+                height: 20.0,
+                view_box: [0.0, 0.0, 40.0, 20.0],
+                align: None,
+                slice: false,
+                shapes: vec![],
+            }),
+        )]);
+        let document = crate::html::parse(source, &images).unwrap();
+        let mut commands = Commands::default();
+        commands.set_page([240.0, 160.0], [10.0; 4]).unwrap();
+        let mut compiler = Compiler::new(
+            Styler::new(&[], 220.0).unwrap(),
+            HashMap::from([("Helvetica".into(), crate::css::style::HELVETICA)]),
+            commands,
+        );
+        compiler.body(&document.nodes, false).unwrap();
+        compiler.end().unwrap();
+        lopdf::Document::load_mem(&compiler.writer.sink.finish().unwrap()).unwrap()
+    }
+
+    fn content(pdf: &lopdf::Document) -> String {
+        String::from_utf8(pdf.get_page_content(pdf.get_pages()[&1])).unwrap()
+    }
+
+    #[test]
+    fn given_painted_overflow_with_a_nested_flow_layer_when_compiled_then_keeps_box_marks_valid() {
+        let pdf = compile(
+            "<div style='overflow:hidden;background-color:red;border:1pt solid red;border-radius:3pt'>\
+             <div style='transform:translateX(1pt);background-color:blue'>nested</div>\
+             </div>",
+        );
+        assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "nested");
+        let content = content(&pdf);
+        assert_eq!(content.matches("1 0 0 rg").count(), 1, "{content}");
+        assert!(content.contains("1 0 0 RG"), "{content}");
+    }
+
+    #[test]
+    fn given_a_transformed_div_containing_one_image_when_compiled_then_uses_the_div_width() {
+        let pdf = compile("<div style='transform:translateX(50%)'><img src='picture'></div>");
+        let content = content(&pdf);
+        assert!(content.contains("1 0 0 1 110 0 cm"), "{content}");
+    }
+
+    #[test]
+    fn given_a_link_target_image_with_effects_when_compiled_then_uses_the_image_width() {
+        let pdf = compile(
+            "<a href='#target'>target</a>\
+             <img id='target' src='picture' style='transform:translateX(50%);clip-path:inset(0)'>",
+        );
+        let content = content(&pdf);
+        assert!(content.contains("1 0 0 1 20 0 cm"), "{content}");
+        assert!(content.contains("40 0 0 20"), "{content}");
+    }
 }

@@ -157,7 +157,7 @@ pub fn radius_of(s: &Style, parent: f64) -> Result<Option<Radius>, Message> {
         .then_some(radius))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Box {
     pub margin: [f64; 4],
     pub padding: [f64; 4],
@@ -170,6 +170,48 @@ pub struct Box {
     /// 0 to 1, with every ancestor's opacity multiplied in.
     pub opacity: f64,
     pub size: Option<Size>,
+    pub effects: Option<std::rc::Rc<EffectInput>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectInput {
+    pub transform: String,
+    pub origin: String,
+    pub clip: String,
+    pub overflow: bool,
+    pub font_size: f32,
+    pub(crate) image: bool,
+}
+
+pub fn effects(s: &Style, size: f64) -> Result<Option<std::rc::Rc<EffectInput>>, Message> {
+    if !s.0.iter().any(|(key, _)| matches!(key, crate::css::Key::Prop(prop)
+        if [prop!("transform"), prop!("transformOrigin"), prop!("clipPath"), prop!("overflow")].contains(prop))) {
+        return Ok(None);
+    }
+    let text = |prop, initial: &str| {
+        s.get(prop)
+            .map_or_else(|| initial.to_owned(), ToString::to_string)
+    };
+    let input = EffectInput {
+        transform: text(prop!("transform"), "none"),
+        origin: text(prop!("transformOrigin"), "50% 50%"),
+        clip: text(prop!("clipPath"), "none"),
+        overflow: s
+            .get(prop!("overflow"))
+            .is_some_and(|value| value.is("hidden")),
+        font_size: size as f32,
+        image: false,
+    };
+    crate::BoxEffects::parse_inner(
+        &input.transform,
+        &input.origin,
+        &input.clip,
+        input.overflow,
+        input.font_size,
+        false,
+    )?;
+    let active = input.transform != "none" || input.clip != "none" || input.overflow;
+    Ok(active.then(|| std::rc::Rc::new(input)))
 }
 
 /// The box's edges, paint, and radii, or None when the style sets none of them.
@@ -179,6 +221,7 @@ pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, Me
         .iter()
         .flatten()
         .chain([&prop!("backgroundColor")])
+        .chain(&RADII)
         .any(|prop| s.get(*prop).is_some());
     if !boxed {
         return Ok(None);
@@ -230,5 +273,6 @@ pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, Me
         radius,
         opacity,
         size: None,
+        effects: None,
     }))
 }

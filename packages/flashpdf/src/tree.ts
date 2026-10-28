@@ -18,7 +18,7 @@ const supported = new Set(
 	fontStretch fontVariationSettings fontKerning textAlign direction textTransform textDecoration textDecorationColor whiteSpace verticalAlign
 	listStyle listStyleType listStylePosition color lineHeight letterSpacing wordSpacing
 	breakBefore breakAfter breakInside borderCollapse borderSpacing orphans widows
-	position top right bottom left inset insetInline insetBlock zIndex`
+	position top right bottom left inset insetInline insetBlock zIndex transform transformOrigin transformBox clipPath overflow`
 		.trim()
 		.split(/\s+/),
 );
