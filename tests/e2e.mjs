@@ -16,15 +16,14 @@ import { deflateSync } from "node:zlib";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const work = mkdtempSync(join(tmpdir(), "flashpdf-e2e-"));
+// Proves Node only, for jobs that check a runtime or platform that verify.sh does not.
 const nodeOnly = process.argv.includes("--node-only");
-// Skips Workers, the type check, and the browsers, for jobs that only prove a runtime.
-const noBrowser = process.argv.includes("--no-browser");
 const run = (command, args, options = {}) =>
 	execFileSync(command, args, { cwd: work, encoding: "utf8", stdio: "pipe", ...options });
-// CI installs every optional tool, so a missing one there fails instead of skipping its check.
+// verify.sh in CI installs every optional tool, so a missing one there fails instead of skipping its check.
 const installed = (tool, skipped) => {
 	if (spawnSync(tool, ["--version"]).error === undefined) return true;
-	if (process.env.CI) throw new Error(`${tool} is required in CI`);
+	if (process.env.CI && !nodeOnly) throw new Error(`${tool} is required in CI`);
 	console.warn(`${tool} not installed; ${skipped}`);
 	return false;
 };
@@ -226,7 +225,7 @@ export async function handler() {
 		console.log("wasm fallback matches native: ok");
 	}
 
-	if (!nodeOnly && !noBrowser) {
+	if (!nodeOnly) {
 		writeFileSync(
 			join(work, "worker.mjs"),
 			`import { renderInvoice } from "./invoice.mjs";

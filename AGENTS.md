@@ -37,5 +37,7 @@ package smoke test.
 - Keep output byte-for-byte deterministic for the same input.
 - Validate untrusted input at the TypeScript and Rust boundaries.
 - Do not commit `target/`, `dist/`, `node_modules/`, or generated package output.
+- Write commit messages as Conventional Commits (`feat(css): ...`, `fix: ...`). release-please
+  builds the version and changelog from `feat` and `fix`; an area such as `css` goes in the scope.
 - Keep repository documentation public. Do not add chat transcripts, handoff
   notes, private plans, local paths, or generated verification logs.

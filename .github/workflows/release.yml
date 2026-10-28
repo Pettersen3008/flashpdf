@@ -1,14 +1,12 @@
 name: Release
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing release tag to publish
-        required: true
-        type: string
+  # Runs after CI passes on main. Publishes when the package version is not on npm yet,
+  # which is when a release-please PR was merged, then lets release-please tag and open the next PR.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
 
 permissions: {}
 
@@ -17,82 +15,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # CI has already run verify.sh on this commit, so the release only rebuilds the package.
-  # No test tools, browsers, or apt mirrors, and no write token while dependencies install.
-  build:
+  check:
+    if: github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     permissions:
       contents: read
-      checks: read
     outputs:
-      tarball: ${{ steps.pack.outputs.tarball }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
-          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
-      - name: Check release tag
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      - id: version
         run: |
-          test "v$(node -p 'require("./packages/flashpdf/package.json").version')" = "$RELEASE_TAG"
-          git fetch origin main
-          git merge-base --is-ancestor HEAD origin/main
-      - name: Check changelog heading
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          version="${RELEASE_TAG#v}"
-          awk -v version="$version" '$1 == "##" && $2 == version { found = 1 } END { exit !found }' packages/flashpdf/CHANGELOG.md \
-            || { echo "packages/flashpdf/CHANGELOG.md has no '## $version' heading" >&2; exit 1; }
-      - name: Require a passing CI verify on this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          sha=$(git rev-parse HEAD)
-          passed=$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?check_name=verify" \
-            --jq '[.check_runs[] | select(.conclusion == "success")] | length')
-          test "$passed" -gt 0 || { echo "CI verify has not passed on $sha" >&2; exit 1; }
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 2026-09-16
-        with:
-          toolchain: 1.94.0
-          targets: wasm32-unknown-unknown
-      - uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
-        with:
-          runtime: node@24.21.0
-          cache: false
-          require-lockfile: true
-      # No caches here: a poisoned one would ship inside the published package.
-      - run: cargo install wasm-pack --locked --version 0.15.0
-      - run: sh build.sh
-      - run: pnpm --filter @pettersen3008/flashpdf build
-      # The native job publishes these at the same version; npm installs the one matching os, cpu and libc.
-      - name: Add platform packages
-        working-directory: packages/flashpdf
-        run: |
-          version=$(node -p 'require("./package.json").version')
-          for platform in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
-            npm pkg set "optionalDependencies.@pettersen3008/flashpdf-${platform}=${version}"
-          done
-      - id: pack
-        run: echo "tarball=$(npm pack ./packages/flashpdf --pack-destination "$RUNNER_TEMP" --silent | tail -n 1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: package
-          path: ${{ runner.temp }}/${{ steps.pack.outputs.tarball }}
-          if-no-files-found: error
-          retention-days: 7
+          version=$(node -p 'require("./packages/flashpdf/package.json").version')
+          test "$(npm view "@pettersen3008/flashpdf@$version" version 2>/dev/null)" != "$version" || exit 0
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
   # One N-API addon per platform, packed as napi-rs lays them out. Other platforms use WASM.
   native:
-    needs: build
+    needs: check
+    if: needs.check.outputs.version != ''
     strategy:
       matrix:
         include:
           - { target: aarch64-apple-darwin, runner: macos-15 }
-          - { target: x86_64-apple-darwin, runner: macos-15 }
+          - { target: x86_64-apple-darwin, runner: macos-15, cross: true }
           # The oldest supported Ubuntu sets the glibc floor; an older glibc falls back to WASM.
           - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
@@ -100,18 +50,35 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable 2026-09-16
         with:
           toolchain: 1.94.0
           targets: ${{ matrix.target }}
+      # No caches here: a poisoned one would ship inside the published addon.
       - run: sh build-native.sh
         env:
           TARGET: ${{ matrix.target }}
+      - if: ${{ !matrix.cross }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: package
+          path: packages/flashpdf
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - if: ${{ !matrix.cross }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+      # Proves this platform's addon renders byte for byte what the WASM fallback renders.
+      - if: ${{ !matrix.cross }}
+        run: node tests/e2e.mjs --node-only
       - run: |
           mkdir -p "$RUNNER_TEMP/native"
           npm pack packages/flashpdf/npm/* --pack-destination "$RUNNER_TEMP/native"
@@ -122,20 +89,27 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Holds the write permissions, and runs only GitHub's own actions and npm.
+  # Holds the npm publish rights, and runs only GitHub's own actions and npm.
   publish:
-    needs: [build, native]
+    needs: [check, native]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      packages: write
+      contents: read
+      actions: read
       id-token: write
       attestations: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package
-          path: ${{ runner.temp }}/package
+          path: packages/flashpdf
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: native-*
@@ -144,18 +118,45 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.21.0
-          registry-url: https://npm.pkg.github.com
-          scope: "@pettersen3008"
+          registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      # npm installs the platform package matching os, cpu, and libc.
+      - id: pack
+        working-directory: packages/flashpdf
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          for platform in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            npm pkg set "optionalDependencies.@pettersen3008/flashpdf-${platform}=${VERSION}"
+          done
+          echo "tarball=$RUNNER_TEMP/$(npm pack --pack-destination "$RUNNER_TEMP" --silent | tail -n 1)" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            ${{ runner.temp }}/package/${{ needs.build.outputs.tarball }}
+            ${{ steps.pack.outputs.tarball }}
             ${{ runner.temp }}/native/*.tgz
       # Platform packages first, so the main package never points at a missing version.
+      # npm prefers OIDC trusted publishing; NPM_TOKEN only bootstraps packages that do not exist yet.
+      # A re-run after a partial publish skips the versions npm already has.
       - run: |
-          for tarball in "$RUNNER_TEMP"/native/*.tgz; do npm publish "$tarball" --access public; done
-          npm publish "$RUNNER_TEMP/package/$TARBALL" --access public
+          for tarball in "$RUNNER_TEMP"/native/*.tgz "$TARBALL"; do
+            spec=$(tar -xOzf "$tarball" package/package.json | node -p 'const p = JSON.parse(require("fs").readFileSync(0)); p.name + "@" + p.version')
+            test -n "$(npm view "$spec" version 2>/dev/null)" || npm publish "$tarball" --access public --provenance
+          done
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TARBALL: ${{ needs.build.outputs.tarball }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+
+  # Tags and creates the GitHub Release for a merged release PR, only after npm has the version,
+  # and opens or updates the next release PR from the conventional commits since.
+  release-please:
+    needs: [check, native, publish]
+    if: ${{ !cancelled() && !failure() && needs.check.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0

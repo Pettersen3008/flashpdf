@@ -1,6 +1,6 @@
 {
 	"name": "@pettersen3008/flashpdf",
-	"version": "0.6.0",
+	"version": "0.6.1",
 	"description": "Render native JSX and a static CSS subset to a PDF, in the browser, Node, or Bun.",
 	"keywords": [
 		"browser",
@@ -72,7 +72,6 @@
 		}
 	},
 	"publishConfig": {
-		"@pettersen3008:registry": "https://npm.pkg.github.com",
 		"access": "public"
 	},
 	"scripts": {

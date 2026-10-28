@@ -20,6 +20,6 @@ cp "target/$target/release/$lib" "$out/flashpdf.node"
 version=$(sed -n 's/^."version": "\(.*\)",$/\1/p' packages/flashpdf/package.json)
 case "$platform" in *-gnu) libc='"libc": ["glibc"], ' ;; *) libc= ;; esac
 cat > "$out/package.json" <<JSON
-{"name": "@pettersen3008/flashpdf-$platform", "version": "$version", "license": "MIT", "repository": {"type": "git", "url": "https://github.com/Pettersen3008/flashpdf"}, "os": ["$os"], "cpu": ["$cpu"], ${libc}"main": "flashpdf.node", "files": ["flashpdf.node"], "publishConfig": {"@pettersen3008:registry": "https://npm.pkg.github.com", "access": "public"}}
+{"name": "@pettersen3008/flashpdf-$platform", "version": "$version", "license": "MIT", "repository": {"type": "git", "url": "https://github.com/Pettersen3008/flashpdf"}, "os": ["$os"], "cpu": ["$cpu"], ${libc}"main": "flashpdf.node", "files": ["flashpdf.node"], "publishConfig": {"access": "public"}}
 JSON
 wc -c "$out/flashpdf.node"

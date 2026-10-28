@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 - 2026-10-28
+
+### Changed
+
+- Releases publish to npmjs.com. Installing no longer needs a GitHub token or a scoped `.npmrc`.
 
 ## 0.6.0 - 2026-10-28
 
