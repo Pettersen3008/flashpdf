@@ -100,15 +100,6 @@ The parser is strict. It accepts what HTML lets an author leave out: the end tag
 
 ## Install
 
-Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
-
-```ini
-@pettersen3008:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-Then install:
-
 ```sh
 npm install @pettersen3008/flashpdf
 ```

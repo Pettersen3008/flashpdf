@@ -129,15 +129,6 @@ A stylesheet can set the same through `@page { size: A4 landscape; margin: 15mm 
 
 ## Install
 
-Configure npm for the GitHub Packages scope in your project `.npmrc` and set `NODE_AUTH_TOKEN` to a classic GitHub personal access token with `read:packages`:
-
-```ini
-@pettersen3008:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
-```
-
-Then install:
-
 ```sh
 npm install @pettersen3008/flashpdf
 pnpm add @pettersen3008/flashpdf
@@ -305,7 +296,7 @@ That formats, lints, and tests the Rust workspace, formats and lints the TypeScr
 
 Run the isolated renderer comparison with `pnpm --filter @pettersen3008/flashpdf bench`. Every library renders the same fixture: A4 page, 36pt margins, 10pt body text, a 24pt heading, and a 70pt right-aligned amount column, so the comparison is fair even though each library uses its native authoring API. It reports median and p95 cold start and warm render, peak RSS, package size (`installBytes` adds every transitive runtime dependency, deduped by real path), and output PDF size for invoice and multi-page report fixtures. Set `FLASHPDF_BENCH_COLD_RUNS` or `FLASHPDF_BENCH_RUNS` to change the sample counts.
 
-To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main` after all CI jobs pass. The release workflow checks the tag against the package version and against a `## <version>` heading in `packages/flashpdf/CHANGELOG.md`, requires a successful CI `verify` check on that commit, and rebuilds the package and four native addons. It attests build provenance and publishes the platform packages before the main package to GitHub Packages with `GITHUB_TOKEN`.
+To publish the verified package, create a GitHub Release with a `v*` tag from a commit on `main` after all CI jobs pass. The release workflow checks the tag against the package version and against a `## <version>` heading in `packages/flashpdf/CHANGELOG.md`, requires a successful CI `verify` check on that commit, and rebuilds the package and four native addons. It attests build provenance and publishes the platform packages before the main package to npmjs.com through npm trusted publishing. Each package lists `Pettersen3008/flashpdf` and `release.yml` as its trusted publisher on npmjs.com, so the workflow stores no npm token. A package that does not exist yet has no trusted publisher, so its first release needs a granular npm token in the `NPM_TOKEN` repository secret; delete the secret once every package has a trusted publisher.
 
 `tests/golden/css-invoice.txt` pins the PDF content stream of the CSS invoice: every draw position, colour, font, and page break. Regenerate it with `UPDATE_GOLDEN=1` and review the diff.
 

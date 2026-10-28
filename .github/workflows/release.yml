@@ -128,7 +128,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      packages: write
       id-token: write
       attestations: write
     steps:
@@ -144,8 +143,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.21.0
-          registry-url: https://npm.pkg.github.com
-          scope: "@pettersen3008"
+          registry-url: https://registry.npmjs.org
           package-manager-cache: false
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -153,9 +151,10 @@ jobs:
             ${{ runner.temp }}/package/${{ needs.build.outputs.tarball }}
             ${{ runner.temp }}/native/*.tgz
       # Platform packages first, so the main package never points at a missing version.
+      # npm prefers OIDC trusted publishing; NPM_TOKEN only bootstraps packages that do not exist yet.
       - run: |
-          for tarball in "$RUNNER_TEMP"/native/*.tgz; do npm publish "$tarball" --access public; done
-          npm publish "$RUNNER_TEMP/package/$TARBALL" --access public
+          for tarball in "$RUNNER_TEMP"/native/*.tgz; do npm publish "$tarball" --access public --provenance; done
+          npm publish "$RUNNER_TEMP/package/$TARBALL" --access public --provenance
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TARBALL: ${{ needs.build.outputs.tarball }}
