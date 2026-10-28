@@ -2439,6 +2439,81 @@ fn given_a_column_with_a_height_and_space_between_when_laid_out_then_items_touch
     }
 }
 
+/// A wrapping row whose items each take 40pt of the 100pt body, two to a row, 5pt apart.
+fn wrapping(height: Option<f32>, align_content: Option<super::Justify>) -> super::Flex {
+    super::Flex {
+        wrap: true,
+        gap: Pt(10.0),
+        row_gap: Pt(5.0),
+        align_content,
+        ..flex(false, super::Justify::Start, super::Align::Stretch, height)
+    }
+}
+
+const WIDE: super::FlexItem = super::FlexItem {
+    basis: super::ImageSize::Fixed(Pt(40.0)),
+    ..ITEM
+};
+
+#[test]
+fn given_a_wrapping_row_whose_third_item_passes_its_width_when_laid_out_then_it_starts_a_row_one_line_and_the_row_gap_below(
+) {
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style: wrapping(None, None),
+            items: &[WIDE; 3],
+        },
+        text("a"),
+        text("b"),
+        text("c"),
+        Command::FlexEnd,
+    ]);
+    // "b" follows the 40pt "a" and the 10pt gap; "c" sits 11.499023pt plus 5pt lower.
+    let content = content(&pdf);
+    for position in ["10 40.78369 Td", "60 40.78369 Td", "10 24.284668 Td"] {
+        assert!(content.contains(position), "{position}: {content}");
+    }
+}
+
+#[test]
+fn given_a_wrapping_row_taller_than_the_page_when_rendered_then_it_breaks_between_rows() {
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style: wrapping(None, None),
+            items: &[WIDE; 6],
+        },
+        text("a"),
+        text("b"),
+        text("c"),
+        text("d"),
+        text("e"),
+        text("f"),
+        Command::FlexEnd,
+    ]);
+    // Three 11.5pt rows and two 5pt gaps pass the 40pt body, so the third row moves.
+    assert_eq!(page_texts(&pdf), ["a\nb\nc\nd", "e\nf"]);
+}
+
+#[test]
+fn given_a_wrapping_row_with_a_height_and_space_between_content_when_laid_out_then_its_rows_touch_top_and_bottom(
+) {
+    let style = wrapping(Some(40.0), Some(super::Justify::SpaceBetween));
+    let pdf = parsed(&[
+        Command::FlexStart {
+            style,
+            items: &[WIDE; 3],
+        },
+        text("a"),
+        text("b"),
+        text("c"),
+        Command::FlexEnd,
+    ]);
+    let content = content(&pdf);
+    for position in ["10 40.78369 Td", "10 12.282715 Td"] {
+        assert!(content.contains(position), "{position}: {content}");
+    }
+}
+
 fn flex(
     column: bool,
     justify: super::Justify,
@@ -2447,9 +2522,12 @@ fn flex(
 ) -> super::Flex {
     super::Flex {
         column,
+        wrap: false,
         justify,
         align,
+        align_content: None,
         gap: Pt(0.0),
+        row_gap: Pt(0.0),
         min_height: Pt(height.unwrap_or(0.0)),
         max_height: height.map(Pt),
     }

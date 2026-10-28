@@ -324,6 +324,6 @@ Four differences cause most surprises:
 - A `View` stacks its children in a flex column. A FlashPDF `div` is a block, which also stacks them. For a row, set `display: 'flex'`. FlashPDF follows CSS here, so a flex box is a row unless you set `flexDirection: 'column'`.
 - react-pdf adds vertical margins. FlashPDF collapses adjoining ones in a block, as a browser does, so `marginBottom: 12` above `marginTop: 8` leaves 12 points, not 20. To keep react-pdf's spacing, give the parent `display: 'flex'` and `flexDirection: 'column'`: flex items never collapse.
 - Numbers in `style` are points in both libraries. FlashPDF also accepts `pt`, `px` (0.75 pt), `mm`, `cm`, `in`, `pc`, `Q`, `em`, and `rem`.
-- `justifyContent` and `alignItems` work for a single flex line. `flexWrap` rejects. See [CSS.md](../CSS.md) for sizing and alignment limits.
+- `justifyContent` and `alignItems` work per flex line, and `flexWrap: "wrap"` wraps a row into lines that break across pages. `wrap-reverse` rejects. See [CSS.md](../CSS.md) for sizing and alignment limits.
 
 `Canvas` and `Note` have no equivalent. Use `ul`, `ol`, and `li` for lists; they number themselves and keep each marker with its first line.

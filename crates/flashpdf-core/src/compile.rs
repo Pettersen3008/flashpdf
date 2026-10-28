@@ -890,6 +890,7 @@ fn css_flex(s: &Style, items: &[&StyledNode], column: bool) -> Result<bool> {
     let own = [
         p!("justifyContent"),
         p!("alignItems"),
+        p!("flexWrap"),
         p!("height"),
         p!("minHeight"),
         p!("maxHeight"),
@@ -1530,11 +1531,17 @@ impl<S: Sink> Compiler<S> {
         if s.get(p!("verticalAlign")).is_some() && !TABLE_PARTS.contains(&tag) && !inline_tag(tag) {
             return Err(Error::new(VERTICAL_ALIGN));
         }
-        if (s.get(p!("justifyContent")).is_some() || s.get(p!("alignItems")).is_some())
+        let container = [
+            p!("justifyContent"),
+            p!("alignItems"),
+            p!("alignContent"),
+            p!("flexWrap"),
+        ];
+        if container.iter().any(|prop| s.get(*prop).is_some())
             && (!is(s, p!("display"), "flex") || !BLOCK_TAGS.contains(&tag))
         {
             return Err(Error::new(
-                "justify-content and align-items apply only to a flex container",
+                "justify-content, align-items, align-content, and flex-wrap apply only to a flex container",
             ));
         }
         match tag {
@@ -1604,7 +1611,8 @@ impl<S: Sink> Compiler<S> {
             if owes() && matches!(first, Some(StyledNode::Element(el)) if MARKER_ALONE.contains(&el.el.tag.as_str())) {
                 this.paragraph(vec![run(&inner, NBSP, false)], &inner)?;
             }
-            let gap = get(s, p!("gap")).map_or(Ok(0.0), |gap| point(gap, next.size, false))?;
+            let gap = |prop| get(s, prop).map_or(Ok(0.0), |gap| point(gap, next.size, false));
+            let (row_gap, gap) = (gap(p!("rowGap"))?, gap(p!("columnGap"))?);
             // A whitespace-only text child is no flex item, as in CSS.
             let items: Vec<&StyledNode> = node
                 .children
@@ -1636,11 +1644,11 @@ impl<S: Sink> Compiler<S> {
                 }
                 this.writer.row_end()?;
             } else if (context.in_row && !context.item) || avoid {
-                this.writer.stack_start(gap, collapses(context))?;
+                this.writer.stack_start(row_gap, collapses(context))?;
                 this.flow(&node.children, &inner, depth + 1, 0.0)?;
                 this.writer.stack_end(collapses(context))?;
             } else {
-                this.flow(&node.children, &inner, depth, gap)?;
+                this.flow(&node.children, &inner, depth, row_gap)?;
             }
             if owes() {
                 this.paragraph(vec![run(&inner, NBSP, false)], &inner)?;
@@ -1661,7 +1669,18 @@ impl<S: Sink> Compiler<S> {
     ) -> Result<()> {
         let column = is(s, p!("flexDirection"), "column");
         let (min_height, max_height) = heights(layout);
-        let justify = justify(get(s, p!("justifyContent")));
+        let justify_content = get(s, p!("justifyContent"));
+        let align_content = match get(s, p!("alignContent")) {
+            Some(value) if !value.is("normal") && !value.is("stretch") => 1 + justify(Some(value)),
+            _ => 0,
+        };
+        let justify = justify(justify_content);
+        let wrap = is(s, p!("flexWrap"), "wrap");
+        if wrap && column {
+            return Err(Error::new(
+                "flex-wrap: wrap in a flex column is not supported; wrap a flex row, or stack the column items",
+            ));
+        }
         let mut specs = Vec::with_capacity(items.len());
         for item in items {
             specs.push(match item {
@@ -1709,13 +1728,18 @@ impl<S: Sink> Compiler<S> {
             }
         }
         let align = flex_align(get(s, p!("alignItems")));
-        let gap = get(s, p!("gap")).map_or(Ok(0.0), |gap| point(gap, text.size, false))?;
+        let gap = |prop| get(s, prop).map_or(Ok(0.0), |gap| point(gap, text.size, false));
+        let row_gap = gap(p!("rowGap"))?;
+        let column_gap = gap(p!("columnGap"))?;
         self.writer.flex_start(
             Flex {
                 column,
+                wrap,
                 justify,
                 align,
-                gap,
+                align_content,
+                gap: if column { row_gap } else { column_gap },
+                row_gap,
                 min_height,
                 max_height,
             },

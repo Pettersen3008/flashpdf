@@ -22,12 +22,16 @@ pub enum Slot {
     Covered,
 }
 
+/// `align_content` 0 is `stretch`, else a `justify` code plus 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Flex {
     pub column: bool,
+    pub wrap: bool,
     pub justify: u8,
     pub align: u8,
+    pub align_content: u8,
     pub gap: f64,
+    pub row_gap: f64,
     pub min_height: f64,
     pub max_height: Option<f64>,
 }
@@ -179,12 +183,14 @@ impl Record {
                 }
             }
             Self::FlexStart(flex, items) => {
-                b.u8(u8::from(flex.column));
+                b.u8(u8::from(flex.column) | u8::from(flex.wrap) << 1);
                 b.u8(flex.justify);
                 b.u8(flex.align);
                 b.f32(flex.gap);
                 b.f32(flex.min_height);
                 b.height(flex.max_height);
+                b.f32(flex.row_gap);
+                b.u8(flex.align_content);
                 b.u16(items.len() as f64);
                 for item in items {
                     b.f32(item.grow);

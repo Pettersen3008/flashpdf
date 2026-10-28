@@ -42,7 +42,7 @@ export type BorderStyle = "none" | "hidden" | "solid" | "dashed" | "dotted";
 export type Style = {
 	display?: "block" | "flex";
 	flexDirection?: "row" | "column";
-	flexWrap?: "nowrap";
+	flexWrap?: "nowrap" | "wrap";
 	justifyContent?:
 		| "normal"
 		| "flex-start"
@@ -55,6 +55,17 @@ export type Style = {
 		| "space-evenly";
 	alignItems?: Alignment;
 	alignSelf?: Alignment | "auto";
+	alignContent?:
+		| "normal"
+		| "stretch"
+		| "flex-start"
+		| "start"
+		| "flex-end"
+		| "end"
+		| "center"
+		| "space-between"
+		| "space-around"
+		| "space-evenly";
 	/** `none`, `auto`, a grow factor, or grow and shrink factors with an optional basis. */
 	flex?: number | "auto" | "none" | `${number} ${string}`;
 	flexGrow?: number;
@@ -102,7 +113,10 @@ export type Style = {
 	opacity?: number | string;
 	background?: string;
 	backgroundColor?: string;
-	gap?: Length;
+	/** One length for both gaps, or the row gap then the column gap. */
+	gap?: Length | `${Length} ${Length}`;
+	rowGap?: Length;
+	columnGap?: Length;
 	fontSize?: Length;
 	/** A unitless number is a factor of the font size; `%` and `em` resolve against this element's size. */
 	lineHeight?: number | "normal" | `${number}` | `${number}%` | Length;
