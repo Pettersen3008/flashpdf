@@ -178,6 +178,14 @@ impl Renderer {
         self.fonts.len()
     }
 
+    pub(crate) fn fonts(&self) -> &FontBook {
+        &self.fonts
+    }
+
+    pub(crate) fn fonts_mut(&mut self) -> &mut FontBook {
+        &mut self.fonts
+    }
+
     /// Images register at any point before the record that paints them.
     pub(crate) fn add_image(&mut self, image: Image) -> u16 {
         self.images.push(image);

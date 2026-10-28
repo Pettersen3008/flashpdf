@@ -9,8 +9,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use harfrust::{
     BufferFlags, Direction, Feature, FontRef, GlyphBuffer, Script, ShapeOptions, ShapePlan,
-    ShaperData, Tag, UnicodeBuffer,
+    ShaperData, ShaperInstance, Tag, UnicodeBuffer,
 };
+use read_fonts::types::F2Dot14;
 
 use super::EmbeddedFont;
 
@@ -56,6 +57,11 @@ pub(crate) struct Shaped {
     pub(crate) names: Vec<(u16, Box<str>)>,
 }
 
+/// Coordinates and glyph ids of a deflated subset.
+type ProgramKey = (Box<[i16]>, Box<[u16]>);
+/// Script, feature flags, and coordinates of a shape plan.
+type PlanKey = (Script, u8, Box<[i16]>);
+
 /// A subset's undeflated length and its deflated bytes.
 pub(crate) type Program = Arc<(usize, Vec<u8>)>;
 
@@ -65,14 +71,14 @@ pub(crate) struct Shaping {
     pub(crate) bytes: Arc<Vec<u8>>,
     data: ShaperData,
     words: Mutex<Words>,
-    programs: Mutex<Vec<(Box<[u16]>, Program)>>,
+    programs: Mutex<Vec<(ProgramKey, Program)>>,
 }
 
 #[derive(Default)]
 struct Words {
     shaped: HashMap<Box<str>, Arc<Shaped>>,
     key: String,
-    plans: Vec<((Script, u8), ShapePlan)>,
+    plans: Vec<(PlanKey, ShapePlan)>,
     buffer: Option<UnicodeBuffer>,
 }
 
@@ -108,15 +114,16 @@ impl Shaping {
         Ok(shaping)
     }
 
-    /// The deflated subset for `used`, made by `make` unless a render already made it.
+    /// The deflated subset for `used` at `coords`, made by `make` unless a render already made it.
     pub(crate) fn program(
         &self,
         used: &BTreeSet<u16>,
+        coords: &[i16],
         make: impl FnOnce() -> (usize, Vec<u8>),
     ) -> Program {
         let found = lock(&self.programs)
             .iter()
-            .find(|(glyphs, _)| glyphs.iter().eq(used))
+            .find(|((at, glyphs), _)| **at == *coords && glyphs.iter().eq(used))
             .map(|(_, program)| program.clone());
         if let Some(program) = found {
             return program;
@@ -127,7 +134,10 @@ impl Shaping {
         if programs.len() >= PROGRAMS_KEPT {
             programs.remove(0);
         }
-        programs.push((used.iter().copied().collect(), program.clone()));
+        programs.push((
+            (coords.into(), used.iter().copied().collect()),
+            program.clone(),
+        ));
         program
     }
 
@@ -143,6 +153,12 @@ impl Shaping {
         let words = &mut *words;
         words.key.clear();
         words.key.push(char::from(flags));
+        // An instance's words shape apart from the default's: one char per coordinate.
+        words.key.extend(
+            font.coords
+                .iter()
+                .filter_map(|coord| char::from_u32(0x10000 + u32::from(*coord as u16))),
+        );
         words.key.push_str(text);
         if let Some(shaped) = words.shaped.get(words.key.as_str()) {
             return Ok(shaped.clone());
@@ -185,19 +201,26 @@ impl Shaping {
         let script = buffer.script();
         // `of` read these bytes as a font already.
         let face = FontRef::new(&self.bytes).expect("a parsed font");
-        let shaper = self.data.shaper(&face).build();
-        let plan = match words
-            .plans
-            .iter()
-            .position(|(key, _)| *key == (script, flags))
-        {
-            Some(index) => index,
-            None => {
-                let plan = ShapePlan::new(&shaper, direction, Some(script), None, &features);
-                words.plans.push(((script, flags), plan));
-                words.plans.len() - 1
-            }
-        };
+        let instance = (!font.coords.is_empty()).then(|| {
+            ShaperInstance::from_coords(
+                &face,
+                font.coords.iter().map(|coord| F2Dot14::from_bits(*coord)),
+            )
+        });
+        let shaper = self.data.shaper(&face).instance(instance.as_ref()).build();
+        let plan =
+            match words.plans.iter().position(|((own, set, at), _)| {
+                (*own, *set) == (script, flags) && **at == *font.coords
+            }) {
+                Some(index) => index,
+                None => {
+                    let plan = ShapePlan::new(&shaper, direction, Some(script), None, &features);
+                    words
+                        .plans
+                        .push(((script, flags, font.coords.clone()), plan));
+                    words.plans.len() - 1
+                }
+            };
         let options = ShapeOptions::new()
             .plan(Some(&words.plans[plan].1))
             .features(&features);
@@ -355,12 +378,12 @@ mod tests {
     ) {
         let shaping = Shaping::kept(&mut Vec::new(), ABEL.to_vec()).unwrap();
         let set = |gids: &[u16]| gids.iter().copied().collect::<BTreeSet<u16>>();
-        let first = shaping.program(&set(&[1, 2]), || (1, vec![1]));
-        let again = shaping.program(&set(&[1, 2]), || unreachable!("made twice"));
+        let first = shaping.program(&set(&[1, 2]), &[], || (1, vec![1]));
+        let again = shaping.program(&set(&[1, 2]), &[], || unreachable!("made twice"));
         assert!(Arc::ptr_eq(&first, &again));
         for gid in 0..PROGRAMS_KEPT as u16 {
-            shaping.program(&set(&[gid + 3]), || (2, vec![2]));
+            shaping.program(&set(&[gid + 3]), &[], || (2, vec![2]));
         }
-        assert_eq!(shaping.program(&set(&[1, 2]), || (3, vec![3])).0, 3);
+        assert_eq!(shaping.program(&set(&[1, 2]), &[], || (3, vec![3])).0, 3);
     }
 }

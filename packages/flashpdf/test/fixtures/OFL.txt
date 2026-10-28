@@ -1,4 +1,5 @@
 Copyright 2022 The Noto Project Authors (https://github.com/notofonts/arabic and https://github.com/notofonts/hebrew), for NotoSansArabic-subset.ttf and NotoSansHebrew-subset.ttf, subsets of Noto Sans Arabic and Noto Sans Hebrew.
+Copyright 2017 The Roboto Flex Project Authors (https://github.com/TypeNetwork/Roboto-Flex), for RobotoFlex-subset.ttf, a subset of Roboto Flex pinned to its wght, wdth, and slnt axes.
 Copyright (c) 2011, Matthew Desmond (http://www.madtype.com | mattdesmond@gmail.com),with Reserved Font Name Abel.
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.

@@ -1583,3 +1583,84 @@ fn given_a_strict_stylesheet_record_when_decoding_then_rejects_a_rule_no_element
         Some("unsupported color: nope in selector \".unused\" at 1:1")
     );
 }
+
+/// A body in a family "Flex" of the Roboto Flex fixture, its regular file only: a paragraph
+/// styled `style`, then one at the defaults.
+fn flex(style: &str) -> Result<Vec<u8>, String> {
+    let font = include_bytes!("../../../../packages/flashpdf/test/fixtures/RobotoFlex-subset.ttf");
+    let mut decoder = Decoder::default();
+    let slot = decoder.add_font(font.to_vec()).unwrap();
+    let mut bytes = MAGIC.to_vec();
+    bytes.extend(VERSION.to_le_bytes());
+    bytes.extend(record(
+        26,
+        &[text(b"Flex"), vec![slot, 255, 255, 255]].concat(),
+    ));
+    bytes.extend(record(28, &[0, 0, 0, 0]));
+    bytes.extend(record(29, &[0]));
+    bytes.extend(open(MAIN, 1 << 11, &text(b"font-family: Flex")));
+    bytes.extend(open(P, 1 << 11, &text(style.as_bytes())));
+    bytes.extend(element_text("Hav"));
+    bytes.extend(record(32, &[]));
+    bytes.extend(open(P, 0, &[]));
+    bytes.extend(element_text("Hav"));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(255, &[]));
+    decoder.push(&bytes).map_err(|error| error.to_string())?;
+    decoder.finish().map_err(|error| error.to_string())
+}
+
+fn base_fonts(pdf: &[u8]) -> Vec<String> {
+    let pdf = lopdf::Document::load_mem(pdf).unwrap();
+    let mut names: Vec<String> = pdf
+        .objects
+        .values()
+        .filter_map(|object| object.as_dict().ok())
+        .filter(|dict| {
+            dict.get(b"Subtype")
+                .is_ok_and(|kind| kind.as_name().is_ok_and(|name| name == b"Type0"))
+        })
+        .map(|dict| {
+            let name = dict.get(b"BaseFont").unwrap().as_name().unwrap();
+            String::from_utf8_lossy(&name[7..]).into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn given_a_variable_family_without_a_bold_file_when_text_asks_for_bold_condensed_then_embeds_an_instance_named_by_its_axes_beside_the_default(
+) {
+    let pdf = flex("font-weight: bold; font-stretch: condensed").unwrap();
+    assert_eq!(
+        base_fonts(&pdf),
+        ["RobotoFlex-Regular", "RobotoFlex-Regular_700wght_75wdth"]
+    );
+    assert_eq!(
+        flex("font-weight: bold; font-stretch: condensed").unwrap(),
+        pdf
+    );
+    // Explicit settings override the weight; the slant axis clamps at its -10 end.
+    let pdf =
+        flex("font-weight: bold; font-variation-settings: 'wght' 350; font-style: oblique 20deg")
+            .unwrap();
+    assert_eq!(
+        base_fonts(&pdf),
+        ["RobotoFlex-Regular", "RobotoFlex-Regular_350wght_-10slnt"]
+    );
+}
+
+#[test]
+fn given_an_axis_the_selected_font_lacks_when_compiling_then_rejects_naming_the_setting_and_the_fonts_axes(
+) {
+    assert_eq!(
+        flex("font-variation-settings: \"GRAD\" 50").err().unwrap(),
+        "fontVariationSettings: \"GRAD\" 50 names no axis of the selected font (its axes: wght, wdth, slnt) on <p> in <main>"
+    );
+    assert_eq!(
+        flex("font-family: serif; font-style: oblique -10deg").err().unwrap(),
+        "fontStyle: oblique -10deg needs a font with a slnt axis; without one, use oblique, which slants by 14deg on <p> in <main>"
+    );
+}

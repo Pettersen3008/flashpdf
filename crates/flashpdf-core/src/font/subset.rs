@@ -5,9 +5,16 @@
 use std::collections::BTreeSet;
 
 use super::truetype::{be_i16, be_u16, be_u32, ttf_table};
+use super::variable::Instance;
 
-/// `None` on any malformed table; the caller then embeds the whole file.
-pub(super) fn subset(font: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
+/// `None` on any malformed table; the caller then embeds the whole file. Under `instance`
+/// the glyphs, advances and side bearings take its coordinates and the hinting stays out,
+/// since `cvar` would move it too.
+pub(super) fn subset(
+    font: &[u8],
+    used: &BTreeSet<u16>,
+    instance: Option<&Instance>,
+) -> Option<Vec<u8>> {
     let table = |tag: &[u8; 4]| ttf_table(font, tag).ok();
     let (head, hhea, hmtx, maxp, loca, glyf) = (
         table(b"head")?,
@@ -71,16 +78,32 @@ pub(super) fn subset(font: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
             new_hmtx.extend([0; 4]);
             continue;
         }
-        new_glyf.extend(outline(gid)?);
-        new_glyf.resize(new_glyf.len().next_multiple_of(4), 0);
         let metric = gid.min(metrics.checked_sub(1)?) * 4;
-        new_hmtx.extend(hmtx.get(metric..metric + 2)?);
         let lsb = if gid < metrics {
             metric + 2
         } else {
             metrics * 4 + (gid - metrics) * 2
         };
-        new_hmtx.extend(hmtx.get(lsb..lsb + 2).unwrap_or(&[0, 0]));
+        let lsb = hmtx.get(lsb..lsb + 2).unwrap_or(&[0, 0]);
+        match instance {
+            None => {
+                new_glyf.extend(outline(gid)?);
+                new_hmtx.extend(hmtx.get(metric..metric + 2)?);
+                new_hmtx.extend(lsb);
+            }
+            Some(instance) => {
+                let (glyph, x_min) = instance.glyph(gid as u16, outline(gid)?)?;
+                new_glyf.extend(glyph);
+                let advance =
+                    i32::from(be_u16(hmtx, metric).ok()?) + instance.advance_delta(gid as u16);
+                new_hmtx.extend((advance.clamp(0, 65535) as u16).to_be_bytes());
+                match x_min {
+                    Some(x_min) => new_hmtx.extend(x_min.to_be_bytes()),
+                    None => new_hmtx.extend(lsb),
+                }
+            }
+        }
+        new_glyf.resize(new_glyf.len().next_multiple_of(4), 0);
     }
     new_loca.extend((new_glyf.len() as u32).to_be_bytes());
 
@@ -112,6 +135,7 @@ pub(super) fn subset(font: &[u8], used: &BTreeSet<u16>) -> Option<Vec<u8>> {
     tables.extend(
         [b"cvt ", b"fpgm", b"prep"]
             .into_iter()
+            .filter(|_| instance.is_none())
             .filter_map(|tag| Some((tag, table(tag)?))),
     );
     tables.sort_by_key(|(tag, _)| *tag);
