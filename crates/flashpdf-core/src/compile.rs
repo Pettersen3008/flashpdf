@@ -529,6 +529,7 @@ const SIZES: [Prop; 6] = [
 ];
 const BLACK: Rgb = [0, 0, 0];
 const EMPTY: Box = Box {
+    paint_effects: None,
     margin: [0.0; 4],
     padding: [0.0; 4],
     border: [0.0; 4],
@@ -1428,6 +1429,7 @@ impl<S: Sink> Compiler<S> {
             // A `<mark>` paints its background behind each line of its text, so only box edges make it a box.
             let paint = box_style(s, context.size, 1.0)?;
             let highlight = tag == "mark"
+                && paint.as_ref().is_none_or(|p| p.paint_effects.is_none())
                 && paint.as_ref().is_some_and(|paint| {
                     paint
                         .margin
@@ -1567,6 +1569,7 @@ impl<S: Sink> Compiler<S> {
         });
         let drawn = inner.filter(|inner| {
             !collapses
+                || inner.paint_effects.is_some()
                 || inner.background.is_some()
                 || inner.size.is_some()
                 || inner.effects.is_some()

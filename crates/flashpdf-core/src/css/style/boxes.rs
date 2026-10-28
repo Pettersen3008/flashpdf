@@ -163,6 +163,7 @@ pub struct Box {
     pub padding: [f64; 4],
     pub border: [f64; 4],
     pub background: Option<Rgb>,
+    pub paint_effects: Option<std::rc::Rc<crate::Effects>>,
     pub border_color: [Rgb; 4],
     /// Per side, top first: 0 solid, 1 dashed, 2 dotted.
     pub border_style: [u8; 4],
@@ -220,7 +221,11 @@ pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, Me
     let boxed = [MARGINS, PADDINGS, BORDER_WIDTHS, BORDER_COLORS]
         .iter()
         .flatten()
-        .chain([&prop!("backgroundColor")])
+        .chain([
+            &prop!("backgroundColor"),
+            &prop!("backgroundImage"),
+            &prop!("boxShadow"),
+        ])
         .chain(&RADII)
         .any(|prop| s.get(*prop).is_some());
     if !boxed {
@@ -263,11 +268,34 @@ pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, Me
         .filter(|paint| !paint.is("transparent"))
         .map(color)
         .transpose()?;
+    let effects = if s.get(prop!("boxShadow")).is_some_and(|v| !v.is("none"))
+        || s.get(prop!("backgroundImage"))
+            .is_some_and(|v| !v.is("none"))
+    {
+        let effects = crate::backgrounds::parse(
+            s.get(prop!("boxShadow"))
+                .and_then(Value::text)
+                .unwrap_or("none"),
+            s.get(prop!("backgroundImage"))
+                .and_then(Value::text)
+                .unwrap_or("none"),
+            parent,
+            s.get(prop!("color"))
+                .map(color)
+                .transpose()?
+                .unwrap_or([0; 3]),
+        )?;
+        (!effects.shadows.is_empty() || effects.gradient.is_some())
+            .then(|| std::rc::Rc::new(effects))
+    } else {
+        None
+    };
     Ok(Some(Box {
         margin,
         padding,
         border,
         background,
+        paint_effects: effects,
         border_color,
         border_style,
         radius,

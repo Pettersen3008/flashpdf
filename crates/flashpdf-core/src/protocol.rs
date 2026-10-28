@@ -39,7 +39,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 6;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 25;
+const VERSION: u16 = 26;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -830,6 +830,11 @@ impl Commands {
                 if flags & 0xc0 == 0x80 {
                     return Err(ProtocolError::InvalidValue("box flags"));
                 }
+                let paint = match cursor.take(1)?[0] {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(ProtocolError::InvalidValue("box paint flag")),
+                };
                 let size = BoxSize {
                     width: cursor.size("width")?,
                     min_width: cursor.size("min width")?,
@@ -868,8 +873,21 @@ impl Commands {
                 } else {
                     None
                 };
+                let paint_effects = if paint {
+                    let em = cursor.positive_f32("effect font size")?;
+                    let current = cursor.take(3)?.try_into().unwrap();
+                    let shadow = cursor.utf8()?;
+                    let image = cursor.utf8()?;
+                    Some(std::rc::Rc::new(
+                        crate::backgrounds::parse(shadow, image, f64::from(em), current)
+                            .map_err(|e| ProtocolError::Message(e.to_string()))?,
+                    ))
+                } else {
+                    None
+                };
                 cursor.done()?;
                 let style = crate::BoxStyle {
+                    effects: paint_effects,
                     margin,
                     padding,
                     border,

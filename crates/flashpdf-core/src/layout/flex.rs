@@ -34,7 +34,7 @@ impl Frame {
                 size: BoxSize::AUTO,
             };
         };
-        let style = node.style;
+        let style = &node.style;
         Self {
             margin: style.margin.into_array().map(Pt::get),
             inset_x: (style.padding.left

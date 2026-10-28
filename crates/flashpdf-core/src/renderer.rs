@@ -48,6 +48,7 @@ pub struct Renderer {
     tags: Vec<Vec<PageTag>>,
     /// Alphas each page draws with, parallel to `contents`.
     alphas: Vec<Vec<[u8; 2]>>,
+    shadings: Vec<crate::paint::Shadings>,
     layout: LayoutBuffer,
     /// Index 0 paints on every page; index 1 replaces it on the first page.
     header: [Option<Furniture>; 2],
@@ -161,6 +162,7 @@ impl Renderer {
             links: vec![Vec::new()],
             tags: vec![Vec::new()],
             alphas: vec![Vec::new()],
+            shadings: vec![crate::paint::Shadings::default()],
             layout: LayoutBuffer::default(),
             header: Default::default(),
             footer: Default::default(),
@@ -375,7 +377,14 @@ impl Renderer {
     }
 
     fn check_size(&self) -> Result<(), RenderError> {
-        if self.content_bytes + self.contents.last().unwrap().len() > MAX_CONTENT_BYTES {
+        if self.shadings.last().unwrap().invalid {
+            return Err(RenderError::InvalidGradientGeometry);
+        }
+        if self.content_bytes
+            + self.contents.last().unwrap().len()
+            + self.shadings.last().unwrap().bytes
+            > MAX_CONTENT_BYTES
+        {
             return Err(RenderError::DocumentTooLarge);
         }
         Ok(())
@@ -405,7 +414,7 @@ impl Renderer {
                     && node.style.radius.is_none()
                     && node.effects.is_none() =>
             {
-                self.open_box(node.style)?;
+                self.open_box(node.style.clone())?;
                 for child in &node.children {
                     self.render_element(child)?;
                 }
@@ -468,7 +477,7 @@ impl Renderer {
         }
         let top = style.margin.top + style.border.top + style.padding.top;
         self.validate_block(top + style.padding.bottom + style.border.bottom)?;
-        self.boxes.push((column, style));
+        self.boxes.push((column, style.clone()));
         self.column = column
             .translated(style.margin.left + inset, Pt::ZERO)
             .with_width(inner);
@@ -493,7 +502,7 @@ impl Renderer {
         self.begin(true)?;
         self.room(style.padding.bottom + style.border.bottom, None)?;
         let after = self.forced == Some(self.held.len());
-        self.hold(Held::Close(style))?;
+        self.hold(Held::Close(style.clone()))?;
         self.hold(Held::Space(style.margin.bottom))?;
         if after {
             self.forced = Some(self.held.len());
@@ -548,7 +557,7 @@ impl Renderer {
                 }
                 Held::Space(_) => {}
                 Held::Open(mut fragment) => {
-                    let style = fragment.style;
+                    let style = fragment.style.clone();
                     if !self.truncates() {
                         self.cursor.advance(style.margin.top);
                     }
@@ -605,7 +614,7 @@ impl Renderer {
             height += match item {
                 Held::Lines(_, _, _, height) | Held::Space(height) => *height,
                 Held::Open(fragment) => {
-                    let style = fragment.style;
+                    let style = fragment.style.clone();
                     style.margin.top + style.border.top + style.padding.top
                 }
                 Held::Close(style) => style.padding.bottom + style.border.bottom,
@@ -658,7 +667,7 @@ impl Renderer {
         let mut next = Vec::with_capacity(self.open.len());
         for slot in &mut self.open {
             let fragment = &mut self.fragments[*slot];
-            let mut continued = *fragment;
+            let mut continued = fragment.clone();
             continued.origin.y = Pt::ZERO - self.later.top();
             continued.style.border.top = Pt::ZERO;
             fragment.height = Pt::ZERO - fragment.origin.y - self.page.bottom();
@@ -681,6 +690,7 @@ impl Renderer {
                 self.links.last_mut().unwrap(),
                 self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
                 self.alphas.last_mut().unwrap(),
+                self.shadings.last_mut().unwrap(),
                 &mut state,
                 self.metadata.pdfua,
             );
@@ -704,6 +714,7 @@ impl Renderer {
                 self.links.last_mut().unwrap(),
                 self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
                 self.alphas.last_mut().unwrap(),
+                self.shadings.last_mut().unwrap(),
                 &mut self.state,
                 self.metadata.pdfua,
             );
@@ -713,7 +724,9 @@ impl Renderer {
                     .paint_layer(layer, *origin, page);
             }
         }
-        self.content_bytes += self.contents.last().unwrap().len() + underlay.len();
+        self.content_bytes += self.contents.last().unwrap().len()
+            + underlay.len()
+            + self.shadings.last().unwrap().bytes;
         self.underlays.push(underlay);
     }
 
@@ -965,7 +978,7 @@ impl Renderer {
             self.layer_anchors(inner, at);
         }
         if let Some([a, b, c, d, e, f]) = matrix {
-            let rect = layer.effects.as_ref().unwrap().rect;
+            let rect = &layer.effects.as_ref().unwrap().rect;
             let left = (at.x + rect.origin.x).get();
             let top = (at.y - rect.origin.y).get();
             for index in unset {
@@ -1020,6 +1033,7 @@ impl Renderer {
             self.links.last_mut().unwrap(),
             self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
             self.alphas.last_mut().unwrap(),
+            self.shadings.last_mut().unwrap(),
             &mut self.state,
             self.metadata.pdfua,
         )
@@ -1039,6 +1053,7 @@ impl Renderer {
         self.end_page();
         self.contents.push(Content::with_capacity(0));
         self.alphas.push(Vec::new());
+        self.shadings.push(crate::paint::Shadings::default());
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
         self.page = self.later;
@@ -1066,6 +1081,7 @@ impl Renderer {
             let mut number = itoa::Buffer::new();
             let number = number.format(index + 1);
             let before = self.contents[index].len();
+            let shading_before = self.shadings[index].bytes;
             let blocks = furniture
                 .iter()
                 .filter_map(|(slots, footer)| Some((pick(slots, index == 0)?, Some(*footer))))
@@ -1106,6 +1122,7 @@ impl Renderer {
                     &mut self.links[index],
                     None,
                     &mut self.alphas[index],
+                    &mut self.shadings[index],
                     &mut PaintState::default(),
                     false,
                 )
@@ -1121,7 +1138,11 @@ impl Renderer {
                     content.end_marked_content();
                 }
             }
-            bytes += self.contents[index].len() - before;
+            bytes +=
+                self.contents[index].len() - before + self.shadings[index].bytes - shading_before;
+            if self.shadings[index].invalid {
+                return Err(RenderError::InvalidGradientGeometry);
+            }
             if bytes > MAX_CONTENT_BYTES {
                 return Err(RenderError::DocumentTooLarge);
             }
@@ -1165,6 +1186,7 @@ impl Renderer {
             self.links,
             self.tags,
             self.alphas,
+            self.shadings.into_iter().map(|s| s.items).collect(),
             self.metadata,
         ))
     }

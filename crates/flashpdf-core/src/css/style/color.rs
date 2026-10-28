@@ -90,7 +90,7 @@ fn max(left: f64, right: f64) -> f64 {
     }
 }
 
-fn hex(source: &str) -> Result<Option<Rgb>, Message> {
+fn hex(source: &str, alpha: &mut f64) -> Result<Option<Rgb>, Message> {
     let Some(digits) = source.strip_prefix('#') else {
         return Ok(None);
     };
@@ -107,7 +107,7 @@ fn hex(source: &str) -> Result<Option<Rgb>, Message> {
     };
     let pair = |index: usize| u8::from_str_radix(&digits[index..index + 2], 16).unwrap_or(0);
     if digits.len() == 8 {
-        opaque(f64::from(pair(6)) / 255.0)?;
+        *alpha = f64::from(pair(6)) / 255.0;
     }
     Ok(Some([pair(0), pair(2), pair(4)]))
 }
@@ -153,7 +153,7 @@ fn hue(token: &str) -> f64 {
     js_parse(token.strip_suffix("deg").unwrap_or(token))
 }
 
-fn functional(source: &str) -> Result<Option<[f64; 3]>, Message> {
+fn functional(source: &str, opacity: &mut f64) -> Result<Option<[f64; 3]>, Message> {
     let Some(open) = source.find('(') else {
         return Ok(None);
     };
@@ -177,7 +177,7 @@ fn functional(source: &str) -> Result<Option<[f64; 3]>, Message> {
         return Ok(None);
     }
     if let Some(alpha) = rest.first() {
-        opaque(fraction(alpha, 1.0))?;
+        *opacity = fraction(alpha, 1.0);
     }
     let rgb = if kind.starts_with("rgb") {
         [first, second, third].map(|token| fraction(token, 255.0).clamp(0.0, 1.0) * 255.0)
@@ -313,23 +313,50 @@ fn mix(source: &str, nesting: usize) -> Result<Option<[f64; 3]>, Message> {
 }
 
 pub fn color(value: &Value) -> Result<Rgb, Message> {
+    let (rgb, alpha) = color_alpha(value)?;
+    if alpha == 0.0 && value.is("transparent") {
+        return Err("transparent applies only to background and border color".into());
+    }
+    opaque(alpha)?;
+    Ok(rgb)
+}
+
+pub(crate) fn color_alpha(value: &Value) -> Result<(Rgb, f64), Message> {
     let Value::Text(text) = value else {
         return Err(format!("invalid color: {value}").into());
     };
     let source = js_trim(text).to_lowercase();
-    channels(&source, 0).map(|rgb| rgb.map(|channel| byte(channel / 255.0) as u8))
+    if source == "transparent" {
+        return Ok(([0; 3], 0.0));
+    }
+    let mut alpha = 1.0;
+    let rgb = channels_alpha(&source, 0, &mut alpha)?;
+    if !alpha.is_finite() {
+        return Err("invalid colour alpha".into());
+    }
+    Ok((
+        rgb.map(|channel| byte(channel / 255.0) as u8),
+        alpha.clamp(0.0, 1.0),
+    ))
 }
 
 fn channels(source: &str, nesting: usize) -> Result<[f64; 3], Message> {
+    let mut alpha = 1.0;
+    let rgb = channels_alpha(source, nesting, &mut alpha)?;
+    opaque(alpha)?;
+    Ok(rgb)
+}
+
+fn channels_alpha(source: &str, nesting: usize, alpha: &mut f64) -> Result<[f64; 3], Message> {
     let rgb = match NAMED.binary_search_by(|(name, _)| name.cmp(&source)) {
         Ok(index) => {
             let [_, red, green, blue] = NAMED[index].1.to_be_bytes();
             Some([red, green, blue].map(f64::from))
         }
-        Err(_) => match hex(source)? {
+        Err(_) => match hex(source, alpha)? {
             Some(rgb) => Some(rgb.map(f64::from)),
             None if source.starts_with("color-mix(") => mix(source, nesting)?,
-            None => functional(source)?,
+            None => functional(source, alpha)?,
         },
     };
     rgb.ok_or_else(|| {

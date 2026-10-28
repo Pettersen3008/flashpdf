@@ -126,6 +126,7 @@ fn given_a_split_box_and_different_first_header_when_continuing_then_background_
 
 fn background() -> BoxStyle {
     BoxStyle {
+        effects: None,
         margin: Edges::all(Pt::ZERO),
         padding: Edges::all(Pt::ZERO),
         border: Edges::all(Pt::ZERO),
@@ -255,6 +256,7 @@ fn given_a_destination_inside_nested_transforms_when_painted_then_the_destinatio
         crate::BoxEffects::parse("translate(10pt, 5pt)", "0 0", "none", false, 10.0).unwrap();
     let inner = crate::BoxEffects::parse("scale(2)", "0 0", "none", false, 10.0).unwrap();
     let style = BoxStyle {
+        effects: None,
         background: None,
         border: Edges::all(Pt::ZERO),
         margin: Edges::all(Pt::ZERO),
@@ -273,7 +275,7 @@ fn given_a_destination_inside_nested_transforms_when_painted_then_the_destinatio
     renderer
         .push(&[
             Command::EffectBoxStart {
-                style,
+                style: style.clone(),
                 size: BoxSize::AUTO,
                 effects: &outer,
             },

@@ -389,7 +389,7 @@ impl<'a> LayoutEngine<'a> {
                 origin: rect.origin,
                 width: rect.width,
                 height: rect.height,
-                style: node.style,
+                style: node.style.clone(),
             },
             transform: effect.transformed().then_some(matrix),
             clip: clip.map(std::rc::Rc::new),
@@ -431,7 +431,7 @@ impl<'a> LayoutEngine<'a> {
         width: Option<Pt>,
         output: &mut LayoutBuffer,
     ) -> Result<(Pt, Rect), LayoutError> {
-        let style = node.style;
+        let style = node.style.clone();
         let horizontal = style.margin.right
             + style.margin.left
             + style.padding.right
@@ -478,7 +478,7 @@ impl<'a> LayoutEngine<'a> {
                 origin: area.origin,
                 width: Pt::ZERO,
                 height: Pt::ZERO,
-                style,
+                style: style.clone(),
             });
             index
         });
@@ -526,7 +526,7 @@ impl<'a> LayoutEngine<'a> {
                 origin,
                 width,
                 height: Pt(height),
-                style,
+                style: style.clone(),
             };
         }
         Ok((
@@ -742,7 +742,9 @@ fn overflows(free: f32) -> bool {
 }
 
 pub(crate) fn painted(style: &BoxStyle) -> bool {
-    style.background.is_some() || style.border.iter().any(|edge| *edge > Pt::ZERO)
+    style.effects.is_some()
+        || style.background.is_some()
+        || style.border.iter().any(|edge| *edge > Pt::ZERO)
 }
 
 #[cfg(test)]
@@ -758,6 +760,7 @@ mod effect_tests {
     ) -> BoxNode<'a> {
         BoxNode {
             style: BoxStyle {
+                effects: None,
                 margin: Edges::all(Pt::ZERO),
                 padding: Edges::all(Pt::ZERO),
                 border: Edges::all(Pt::ZERO),

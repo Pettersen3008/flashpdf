@@ -335,8 +335,9 @@ pub struct Radii {
     pub percent: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BoxStyle {
+    pub effects: Option<std::rc::Rc<crate::Effects>>,
     pub margin: Edges<Pt>,
     pub padding: Edges<Pt>,
     pub border: Edges<Pt>,
@@ -520,6 +521,8 @@ pub enum RenderError {
     /// A table row and its repeated header exceed an empty page; the index is the table child.
     TableRowOverflow(usize),
     InvalidLayout,
+    /// A gradient cannot be represented by finite PDF coordinates.
+    InvalidGradientGeometry,
     /// The embedded font has no glyph for the character.
     MissingGlyph(char),
     DocumentTooLarge,

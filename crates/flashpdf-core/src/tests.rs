@@ -109,7 +109,7 @@ fn given_content_beyond_the_cap_when_pushing_then_rejects() {
         style: TextStyle::plain(Pt(10.0)),
     };
     let error = (0..1000)
-        .find_map(|_| renderer.push(&[long]).err())
+        .find_map(|_| renderer.push(std::slice::from_ref(&long)).err())
         .expect("content must stop growing");
     assert_eq!(error, RenderError::DocumentTooLarge);
 }
@@ -466,7 +466,7 @@ fn given_a_word_spanning_two_runs_when_wrapping_then_moves_it_whole_and_paints_b
 #[test]
 fn given_lines_in_one_style_across_two_pages_when_painted_then_each_page_sets_colour_and_font_once()
 {
-    let pdf = parsed(&[text("line"); 6]);
+    let pdf = parsed(&std::array::from_fn::<_, 6, _>(|_| text("line")));
     let pages = pdf.get_pages();
     assert_eq!(pages.len(), 2);
     for page in pages.values() {
@@ -584,6 +584,7 @@ fn given_a_single_line_taller_than_the_page_when_streaming_then_rejects() {
 
 fn bordered() -> super::BoxStyle {
     super::BoxStyle {
+        effects: None,
         margin: Edges::all(Pt(0.0)),
         padding: Edges::all(Pt(0.0)),
         border: Edges::all(Pt(1.0)),
@@ -966,6 +967,7 @@ fn given_a_painted_cell_beside_a_taller_cell_when_laid_out_then_its_background_c
 ) {
     use super::ColumnWidth::{Fixed, Fraction};
     let style = super::BoxStyle {
+        effects: None,
         margin: Edges::all(Pt(0.0)),
         padding: Edges::all(Pt(0.0)),
         border: Edges::all(Pt(0.0)),
@@ -1009,6 +1011,7 @@ fn red_box() -> Command<'static> {
     Command::BoxStart {
         size: crate::BoxSize::AUTO,
         style: super::BoxStyle {
+            effects: None,
             margin: Edges::all(Pt(0.0)),
             padding: Edges::all(Pt(0.0)),
             border: Edges::all(Pt(0.0)),
@@ -1159,6 +1162,7 @@ fn given_a_table_row_taller_than_the_page_with_its_header_when_rendered_then_rej
 #[test]
 fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint() {
     let red = super::BoxStyle {
+        effects: None,
         margin: Edges::all(Pt(0.0)),
         padding: Edges::all(Pt(1.0)),
         border: Edges::all(Pt(0.0)),
@@ -1170,7 +1174,7 @@ fn given_nested_backgrounds_when_rendered_then_parent_paint_precedes_child_paint
     };
     let blue = super::BoxStyle {
         background: Some(Rgb { r: 0, g: 0, b: 255 }),
-        ..red
+        ..red.clone()
     };
     let pdf = parsed(&[
         Command::BoxStart {
@@ -1566,7 +1570,7 @@ fn given_a_header_and_footer_when_a_stack_or_table_row_is_taller_than_the_body_b
             slots: &[],
         },
     ];
-    table.extend(stack.iter().copied());
+    table.extend(stack.iter().cloned());
     table.extend([Command::RowEnd, Command::TableEnd]);
     assert_eq!(render(&stack).err(), Some(RenderError::PageOverflow));
     assert_eq!(render(&table).err(), Some(RenderError::TableRowOverflow(0)));
@@ -1612,13 +1616,18 @@ fn given_a_long_footer_and_many_page_breaks_when_finishing_then_rejects_past_the
         )
         .unwrap();
     renderer
-        .push(&[text("x"), Command::PageBreak].repeat(300))
+        .push(
+            &(0..300)
+                .flat_map(|_| [text("x"), Command::PageBreak])
+                .collect::<Vec<_>>(),
+        )
         .unwrap();
     assert_eq!(renderer.finish().err(), Some(RenderError::DocumentTooLarge));
 }
 
 fn decorated(border: f32) -> super::BoxStyle {
     super::BoxStyle {
+        effects: None,
         margin: Edges::all(Pt(0.0)),
         padding: Edges::all(Pt(1.0)),
         border: Edges::all(Pt(border)),
@@ -2610,6 +2619,7 @@ const ITEM: super::FlexItem = super::FlexItem {
 fn sized(size: super::BoxSize, background: Option<Rgb>) -> Command<'static> {
     Command::BoxStart {
         style: super::BoxStyle {
+            effects: None,
             margin: Edges::all(Pt(0.0)),
             padding: Edges::all(Pt(0.0)),
             border: Edges::all(Pt(0.0)),
@@ -3366,4 +3376,113 @@ fn given_a_transformed_box_that_would_split_when_paginating_then_it_moves_whole_
     assert_eq!(page_text(&pdf, 2), "moved\ntogether");
     let too_tall = super::render(page(), &[effect_box(&effect, 41.0), Command::BoxEnd]);
     assert_eq!(too_tall, Err(RenderError::PageOverflow));
+}
+
+#[test]
+fn given_outer_and_inset_shadows_when_painted_then_knocks_out_the_border_box_before_background_and_clips_the_padding_box_after(
+) {
+    let style = super::BoxStyle {
+        effects: Some(std::rc::Rc::new(
+            crate::backgrounds::parse(
+                "3pt 4pt 0 2pt red, inset 2pt 0 0 1pt blue",
+                "none",
+                12.0,
+                [0; 3],
+            )
+            .unwrap(),
+        )),
+        radius: round(4.0, 0),
+        alpha: 128,
+        ..decorated(1.0)
+    };
+    let stream = content(&boxed(style));
+    assert_eq!(stream.matches("W*\n").count(), 1, "{stream}");
+    assert_eq!(stream.matches("W\n").count(), 1, "{stream}");
+    assert!(stream.find("W*\n").unwrap() < stream.find("W\n").unwrap());
+    assert!(stream.contains("f*\n"));
+    assert!(stream.find("f*\n").unwrap() < stream.find("S\n").unwrap());
+    assert!(stream.matches(" c\n").count() >= 20);
+}
+
+#[test]
+fn given_linear_and_radial_backgrounds_when_written_then_embeds_rgb_shadings_and_exponential_or_stitching_functions(
+) {
+    for (source, kind, function) in [
+        ("linear-gradient(to right,red,blue)", 2, 2),
+        (
+            "radial-gradient(circle closest-side,red,green 25%,blue)",
+            3,
+            3,
+        ),
+        ("linear-gradient(red 50%,blue 50%)", 2, 3),
+    ] {
+        let style = super::BoxStyle {
+            effects: Some(std::rc::Rc::new(
+                crate::backgrounds::parse("none", source, 12.0, [0; 3]).unwrap(),
+            )),
+            radius: round(4.0, 0),
+            ..decorated(0.0)
+        };
+        let pdf = boxed(style);
+        assert!(content(&pdf).contains("/Pattern cs\n/Gr0 scn"));
+        let pattern = pdf
+            .objects
+            .values()
+            .filter_map(|o| o.as_stream().ok())
+            .find(|s| s.dict.has(b"PatternType"))
+            .unwrap();
+        let resources = pattern.dict.get(b"Resources").unwrap().as_dict().unwrap();
+        let shading = resources
+            .get(b"Shading")
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .get(b"S")
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        assert_eq!(shading.get(b"ShadingType").unwrap().as_i64().unwrap(), kind);
+        assert_eq!(
+            shading.get(b"ColorSpace").unwrap().as_name().unwrap(),
+            b"DeviceRGB"
+        );
+        let f = shading.get(b"Function").unwrap().as_dict().unwrap();
+        assert_eq!(f.get(b"FunctionType").unwrap().as_i64().unwrap(), function);
+        if function == 3 {
+            let bounds = f.get(b"Bounds").unwrap().as_array().unwrap();
+            let values: Vec<_> = bounds.iter().map(|v| v.as_float().unwrap()).collect();
+            assert!(values.windows(2).all(|p| p[0] < p[1]));
+        }
+    }
+}
+
+#[test]
+fn given_a_radial_aspect_ratio_beyond_pdf_numbers_when_rendering_then_rejects_instead_of_writing_nan_or_panicking(
+) {
+    let style = super::BoxStyle {
+        effects: Some(std::rc::Rc::new(
+            crate::backgrounds::parse(
+                "none",
+                "radial-gradient(ellipse 1e-40pt 1pt, red 0pt, blue 1pt)",
+                12.0,
+                [0; 3],
+            )
+            .unwrap(),
+        )),
+        ..decorated(0.0)
+    };
+    assert_eq!(
+        super::render(
+            Page::A4,
+            &[
+                Command::BoxStart {
+                    style,
+                    size: crate::BoxSize::AUTO
+                },
+                text("x"),
+                Command::BoxEnd,
+            ]
+        ),
+        Err(RenderError::InvalidGradientGeometry)
+    );
 }

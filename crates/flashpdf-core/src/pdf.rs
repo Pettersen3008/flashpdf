@@ -78,6 +78,7 @@ pub(crate) fn finish_pdf(
     mut links: Vec<Vec<PageLink>>,
     tags: Vec<Vec<PageTag>>,
     alphas: Vec<Vec<[u8; 2]>>,
+    shadings: Vec<Vec<crate::paint::Shading>>,
     mut metadata: Metadata,
 ) -> Vec<u8> {
     if metadata.pdfua {
@@ -180,6 +181,13 @@ pub(crate) fn finish_pdf(
             (slot as u16, image, mask)
         })
         .collect();
+    let shading_refs: Vec<Vec<Ref>> = shadings
+        .iter()
+        .map(|page| page.iter().map(|_| allocate()).collect())
+        .collect();
+    for (page, refs) in shadings.iter().zip(&shading_refs) {
+        crate::paint::write_shadings(&mut pdf, page, refs);
+    }
     let info = [
         &metadata.title,
         &metadata.author,
@@ -485,6 +493,12 @@ pub(crate) fn finish_pdf(
             x_objects.finish();
         }
         write_alphas(&mut resources, &page_alphas);
+        if !shading_refs[index].is_empty() {
+            let mut patterns = resources.patterns();
+            for (i, reference) in shading_refs[index].iter().enumerate() {
+                patterns.pair(Name(format!("Gr{i}").as_bytes()), *reference);
+            }
+        }
         resources.finish();
         let annotations: Vec<Ref> = page_links
             .iter()

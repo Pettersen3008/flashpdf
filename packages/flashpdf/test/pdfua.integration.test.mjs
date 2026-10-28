@@ -141,3 +141,25 @@ test("given invalid PDF/UA inputs, when rendering, then rejects missing metadata
 		/scope must be/,
 	);
 });
+
+test("given layered mixed colors and painted transformed links in PDF/UA, when rendering, then preserves effects and semantic annotations", async () => {
+	const source =
+		'<main style="font-family:UA"><h1>Combined</h1><div class="card"><a href="https://example.com">Linked text</a><div style="position:absolute;left:10pt;top:2pt">Positioned</div></div></main>';
+	const settings = {
+		...options,
+		pdfa: "2u",
+		stylesheets: [
+			"@layer theme, utilities; @layer theme { .card { color:red } } @layer utilities { .card { position:relative; width:200pt; height:30pt; transform:translate(2pt, 3pt); transform-origin:0 0; clip-path:inset(0 round 2pt); overflow:hidden; color:color-mix(in oklab, red, blue); box-shadow:2pt 3pt #0008; background-image:linear-gradient(30deg, white, color-mix(in srgb, red, blue)) } }",
+		],
+	};
+	const pdf = await render(source, settings);
+	assert.deepEqual(pdf, await render(source, settings));
+	const text = unpack(pdf);
+	assert.match(text, /1 0 0 1 2 -3 cm/);
+	assert.match(text, /\/ShadingType 2/);
+	assert.match(text, /\/Type\s*\/OBJR/);
+	assert.match(text, /\/S\s*\/Link/);
+	assert.match(text, /pdfuaid:part>1</);
+	mkdirSync(out, { recursive: true });
+	writeFileSync(new URL("combined-effects.pdf", out), pdf);
+});

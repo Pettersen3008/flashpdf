@@ -1,8 +1,10 @@
+mod backgrounds;
 mod command;
 mod compile;
 mod css;
 mod document;
 mod effects;
+pub use backgrounds::Effects;
 mod font;
 mod geometry;
 mod html;

@@ -635,3 +635,11 @@ fn given_font_style_stretch_and_variation_values_when_parsing_then_reads_angles_
         rejects(&[(name, t(value))], &format!("invalid {name}: {value}"));
     }
 }
+
+#[test]
+fn given_an_em_shadow_on_a_small_font_when_normalized_then_defers_length_bounds_to_the_actual_font_size(
+) {
+    let s = ok(&[("fontSize", t("1pt")), ("boxShadow", t("2000em 0"))]);
+    let b = box_style(&s, 1.0, 1.0).unwrap().unwrap();
+    assert_eq!(b.paint_effects.unwrap().shadows[0].offset, [2000.0, 0.0]);
+}

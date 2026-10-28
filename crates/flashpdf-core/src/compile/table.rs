@@ -218,6 +218,7 @@ impl<S: Sink> Compiler<S> {
         if paint.as_ref().is_some_and(|paint| {
             paint.margin[1] != 0.0
                 || paint.margin[3] != 0.0
+                || paint.paint_effects.is_some()
                 || paint.background.is_some()
                 || paint
                     .padding
@@ -628,7 +629,7 @@ impl<S: Sink> Compiler<S> {
                 }
             });
             let shaped = own.as_ref().is_some_and(|own| {
-                own.margin.iter().chain(&own.padding).chain(&own.border).any(|edge| *edge != 0.0)
+                own.paint_effects.is_some() || own.margin.iter().chain(&own.padding).chain(&own.border).any(|edge| *edge != 0.0)
             });
             if joined && shaped {
                 return Err(Error::new(

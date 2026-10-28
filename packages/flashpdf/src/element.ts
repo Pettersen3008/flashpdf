@@ -121,6 +121,10 @@ export type Style = {
 	opacity?: number | string;
 	background?: string;
 	backgroundColor?: string;
+	backgroundImage?: string;
+	backgroundSize?: "auto" | "auto auto";
+	backgroundPosition?: "0% 0%" | "0 0" | "0%" | "0";
+	boxShadow?: string;
 	/** One length for both gaps, or the row gap then the column gap. */
 	gap?: Length | `${Length} ${Length}`;
 	rowGap?: Length;

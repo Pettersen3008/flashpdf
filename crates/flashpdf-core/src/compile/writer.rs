@@ -459,6 +459,7 @@ fn box_start(b: &mut Bytes, value: &Box) {
         .effects
         .as_ref()
         .map_or(0, |effect| 0x40 | u8::from(effect.image) << 7));
+    b.u8(u8::from(value.paint_effects.is_some()));
     b.size(size.and_then(|size| size.width));
     b.size(size.and_then(|size| size.min_width));
     b.size(size.and_then(|size| size.max_width));
@@ -484,6 +485,14 @@ fn box_start(b: &mut Bytes, value: &Box) {
         b.text(&effect.transform);
         b.text(&effect.origin);
         b.text(&effect.clip);
+    }
+    if let Some(effects) = &value.paint_effects {
+        b.f32(effects.em);
+        for channel in effects.current {
+            b.u8(channel);
+        }
+        b.text(&effects.source[0]);
+        b.text(&effects.source[1]);
     }
 }
 
