@@ -15,7 +15,9 @@ mod normalize;
 pub use boxes::{box_size, box_style, radius_of, Box};
 pub use color::{color, Rgb};
 pub use decoration::{decoration, decoration_color};
-pub use font::{bold, face, font, italic, FontSlots, HELVETICA};
+pub use font::{
+    font, slant, stretch, variations, weight, Font, FontSlots, Slant, HELVETICA, OBLIQUE,
+};
 pub use length::{
     corner, dimension, edge_values, flex_basis, line_height, opacity, point, spacing, Dimension,
     LineHeight,
@@ -424,10 +426,16 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
         point(value, 12.0, true)?;
     }
     if let Some(value) = get(prop!("fontWeight")) {
-        bold(value)?;
+        weight(value)?;
     }
     if let Some(value) = get(prop!("fontStyle")) {
-        italic(value)?;
+        slant(value)?;
+    }
+    if let Some(value) = get(prop!("fontStretch")) {
+        stretch(value)?;
+    }
+    if let Some(value) = get(prop!("fontVariationSettings")) {
+        variations(value)?;
     }
     if let Some(value) = get(prop!("fontKerning")) {
         kerning(value)?;

@@ -5,11 +5,13 @@ use std::sync::Arc;
 use pdf_writer::Rect;
 
 use super::shape::{Program, Shaping};
+use super::variable::{self, Axis, Instance};
 use super::{cmap, subset, Stroke};
 use crate::pdf::{deflate, Stream};
 
 pub(super) const INVALID: &str = "invalid TrueType font";
 
+#[derive(Clone)]
 pub(crate) struct EmbeddedFont {
     pub(crate) bytes: Arc<Vec<u8>>,
     pub(crate) shaping: Arc<Shaping>,
@@ -36,6 +38,10 @@ pub(crate) struct EmbeddedFont {
     pub(crate) names: BTreeMap<u16, Box<str>>,
     /// 1000 over units per em.
     pub(crate) scale: f32,
+    /// The `fvar` axes; none for a static font.
+    pub(crate) axes: Vec<Axis>,
+    /// Normalized F2Dot14 coordinates of an instance; empty for the default one.
+    pub(crate) coords: Box<[i16]>,
 }
 
 impl EmbeddedFont {
@@ -126,6 +132,7 @@ impl EmbeddedFont {
             .ok()
             .and_then(postscript_name)
             .unwrap_or_else(|| "FlashPDF".into());
+        let axes = variable::axes(&bytes).map_err(|()| INVALID.to_owned())?;
         let shaping = Shaping::of(bytes).map_err(|()| INVALID.to_owned())?;
         Ok(Self {
             bytes: shaping.bytes.clone(),
@@ -149,7 +156,89 @@ impl EmbeddedFont {
             italic: selection & 1 != 0,
             names: BTreeMap::new(),
             scale,
+            axes,
+            coords: Box::default(),
         })
+    }
+
+    /// Normalized coordinates for user axis values, each clamped to its axis.
+    pub(crate) fn coordinates(&self, values: &[([u8; 4], f32)]) -> Box<[i16]> {
+        variable::normalize(&self.bytes, self.axes.len(), values)
+    }
+
+    /// This font at `coords`, from [`Self::coordinates`] for `values`, with its own glyph
+    /// set: advances from `HVAR` or `gvar`, line metrics from `MVAR`, and a `/BaseFont`
+    /// that names the axis values.
+    pub(crate) fn instance(&self, coords: Box<[i16]>, values: &[([u8; 4], f32)]) -> Self {
+        let mut font = self.clone();
+        font.used.clear();
+        font.seen = vec![0; 1024];
+        font.names.clear();
+        let Some(instance) = Instance::new(&self.bytes, &coords) else {
+            return font;
+        };
+        let scale = self.scale;
+        if let (Ok(hhea), Ok(hmtx)) = (
+            ttf_table(&self.bytes, b"hhea"),
+            ttf_table(&self.bytes, b"hmtx"),
+        ) {
+            let metrics = usize::from(be_u16(hhea, 34).unwrap_or(1)).max(1);
+            for (gid, advance) in font.advances.iter_mut().enumerate() {
+                let units = i32::from(be_u16(hmtx, gid.min(metrics - 1) * 4).unwrap_or(0))
+                    + instance.advance_delta(gid as u16);
+                *advance = (units.max(0) as f32 * scale).round() as u16;
+            }
+        }
+        let delta = |tag: &[u8; 4]| instance.metric(tag) * scale;
+        font.ascent += delta(b"hasc");
+        font.descent += delta(b"hdsc");
+        font.line_gap = (font.line_gap + delta(b"hlgp")).max(0.0);
+        font.cap_height += delta(b"cpht");
+        font.underline.offset += delta(b"undo");
+        font.underline.thickness += delta(b"unds");
+        font.strikeout.offset += delta(b"stro") - delta(b"strs") / 2.0;
+        font.strikeout.thickness += delta(b"strs");
+        // Each axis at its clamped user value, as the instance shows it.
+        let user = |axis: &Axis| {
+            let value = values
+                .iter()
+                .rev()
+                .find(|(tag, _)| *tag == axis.tag)
+                .map_or(axis.default, |(_, value)| *value);
+            value.clamp(axis.min, axis.max)
+        };
+        let mut suffix = String::new();
+        for (axis, coord) in self.axes.iter().zip(&coords) {
+            let value = user(axis);
+            match &axis.tag {
+                b"wght" => {
+                    font.bold = value >= 600.0;
+                    font.stem_v = (50.0 + (value / 65.0) * (value / 65.0)).round();
+                }
+                b"ital" => font.italic |= value >= 0.5,
+                b"slnt" => font.italic |= value < 0.0,
+                _ => {}
+            }
+            if *coord != 0 {
+                let tag = axis.tag.iter().filter(|byte| byte.is_ascii_alphanumeric());
+                suffix.push('_');
+                suffix.push_str(&value.to_string());
+                suffix.extend(tag.map(|byte| char::from(*byte)));
+            }
+        }
+        // A PostScript name holds 63 characters; past that a hash of the coordinates tells
+        // instances apart.
+        font.name = format!("{}{suffix}", self.name);
+        if font.name.len() > 63 {
+            let hash = coords.iter().fold(0x811c_9dc5_u32, |hash, coord| {
+                coord.to_be_bytes().iter().fold(hash, |hash, byte| {
+                    (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193)
+                })
+            });
+            font.name = format!("{:.54}_{hash:08X}", self.name);
+        }
+        font.coords = coords;
+        font
     }
 
     pub(crate) fn mark(&mut self, gid: u16) {
@@ -193,13 +282,19 @@ impl EmbeddedFont {
 
     /// The font program to embed: the used-glyph subset, or the whole file
     /// when a glyph table is malformed in a way parsing did not catch.
+    // ponytail: an instance with malformed variation data embeds the default outlines;
+    // reject such fonts at registration if one turns up.
     pub(crate) fn program(&self) -> Vec<u8> {
-        subset::subset(&self.bytes, &self.used).unwrap_or_else(|| self.bytes.to_vec())
+        let instance = (!self.coords.is_empty())
+            .then(|| Instance::new(&self.bytes, &self.coords))
+            .flatten();
+        subset::subset(&self.bytes, &self.used, instance.as_ref())
+            .unwrap_or_else(|| self.bytes.to_vec())
     }
 
     /// [`Self::program`] deflated, shared with earlier renders that showed the same glyphs.
     pub(crate) fn deflated_program(&self) -> Program {
-        self.shaping.program(&self.used, || {
+        self.shaping.program(&self.used, &self.coords, || {
             let program = self.program();
             (program.len(), deflate(&program, Stream::Table))
         })
@@ -382,5 +477,115 @@ mod tests {
         assert_eq!(font.subset_name().len(), 7 + font.name.len());
         assert!(font.subset_name().ends_with("+Abel-Regular"));
         assert_eq!(font.program(), program);
+    }
+
+    fn roboto_flex() -> EmbeddedFont {
+        EmbeddedFont::parse(
+            include_bytes!("../../../../packages/flashpdf/test/fixtures/RobotoFlex-subset.ttf")
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    /// The points of a simple glyph and the offsets of a composite's components in `program`.
+    fn outline(program: &[u8], gid: u16) -> Vec<(i32, i32)> {
+        use read_fonts::tables::glyf::{Anchor, Glyph};
+        use read_fonts::{types::GlyphId, FontRef, TableProvider};
+        let font = FontRef::new(program).unwrap();
+        let (glyf, loca) = (font.glyf().unwrap(), font.loca(None).unwrap());
+        match loca
+            .get_glyf(GlyphId::new(u32::from(gid)), &glyf)
+            .unwrap()
+            .unwrap()
+        {
+            Glyph::Simple(glyph) => glyph
+                .points()
+                .map(|point| (i32::from(point.x), i32::from(point.y)))
+                .collect(),
+            Glyph::Composite(glyph) => glyph
+                .components()
+                .map(|component| match component.anchor {
+                    Anchor::Offset { x, y } => (i32::from(x), i32::from(y)),
+                    Anchor::Point { .. } => unreachable!("Roboto Flex offsets its components"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn given_roboto_flex_at_bold_condensed_when_instancing_then_outlines_offsets_and_advances_match_fonttools(
+    ) {
+        let font = roboto_flex();
+        let tags: Vec<[u8; 4]> = font.axes.iter().map(|axis| axis.tag).collect();
+        assert_eq!(tags, [*b"wght", *b"wdth", *b"slnt"]);
+        let values = [(*b"wght", 700.0), (*b"wdth", 75.0)];
+        let mut bold = font.instance(font.coordinates(&values), &values);
+        let (a, aring, iacute) = (
+            font.glyph('A').unwrap(),
+            font.glyph('\u{c5}').unwrap(),
+            font.glyph('\u{ed}').unwrap(),
+        );
+        // fontTools' instancer: A advances 1298 of 2048 units, iacute 562.
+        assert_eq!(bold.advance(a), 634);
+        assert_eq!(bold.advance(iacute), 274);
+        assert_eq!(bold.name, "RobotoFlex-Regular_700wght_75wdth");
+        assert!(bold.bold && !font.bold);
+        bold.used.extend([a, aring, iacute]);
+        let program = bold.program();
+        assert!(ttf_table(&program, b"fpgm").is_err());
+        let expected = [
+            (-21, 0),
+            (261, 0),
+            (593, 1016),
+            (603, 1049),
+            (618, 1125),
+            (623, 1156),
+        ];
+        let points = outline(&program, a);
+        assert_eq!(points.len(), 18);
+        for (point, expected) in points.iter().zip(expected) {
+            assert!(
+                (point.0 - expected.0).abs() <= 1 && (point.1 - expected.1).abs() <= 1,
+                "{point:?} {expected:?}"
+            );
+        }
+        assert_eq!(outline(&program, aring), [(0, 0), (128, 0)]);
+        assert_eq!(outline(&program, iacute), [(0, 0), (-230, 0)]);
+        assert_eq!(bold.program(), program);
+    }
+
+    #[test]
+    fn given_an_axis_value_outside_its_range_when_instancing_then_clamps_it_and_the_default_has_no_coordinates(
+    ) {
+        let font = roboto_flex();
+        let slanted = font.coordinates(&[(*b"slnt", -40.0), (*b"wght", 300.0)]);
+        assert_eq!(
+            slanted,
+            font.coordinates(&[(*b"slnt", -10.0), (*b"wght", 300.0)])
+        );
+        let instance = font.instance(slanted, &[(*b"slnt", -40.0), (*b"wght", 300.0)]);
+        assert_eq!(instance.name, "RobotoFlex-Regular_300wght_-10slnt");
+        assert!(instance.italic);
+        assert!(font
+            .coordinates(&[(*b"wght", 400.0)])
+            .iter()
+            .all(|coord| *coord == 0));
+    }
+
+    #[test]
+    fn given_a_variable_font_without_hvar_when_instancing_then_advances_come_from_the_gvar_phantom_points(
+    ) {
+        let mut bytes =
+            include_bytes!("../../../../packages/flashpdf/test/fixtures/RobotoFlex-subset.ttf")
+                .to_vec();
+        let record = (0..usize::from(be_u16(&bytes, 4).unwrap()))
+            .map(|index| 12 + index * 16)
+            .find(|record| &bytes[*record..record + 4] == b"HVAR")
+            .unwrap();
+        bytes[record] = b'X';
+        let font = EmbeddedFont::parse(bytes).unwrap();
+        let values = [(*b"wght", 700.0), (*b"wdth", 75.0)];
+        let bold = font.instance(font.coordinates(&values), &values);
+        assert_eq!(bold.advance(font.glyph('A').unwrap()), 634);
     }
 }

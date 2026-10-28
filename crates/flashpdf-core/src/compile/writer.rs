@@ -125,6 +125,14 @@ pub trait Sink {
     fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, String>;
     /// Registers the raster the host staged as `handle` and returns its image slot.
     fn add_raster(&mut self, handle: u16) -> Result<u16, String>;
+    /// The variation axes of the font in `slot`; none for a built-in or static font.
+    fn axes(&mut self, _slot: u32) -> Vec<[u8; 4]> {
+        Vec::new()
+    }
+    /// The slot of the font in `slot` at these user axis values, each clamped to its axis.
+    fn instance(&mut self, slot: u32, _values: &[([u8; 4], f32)]) -> Result<u32, String> {
+        Ok(slot)
+    }
 }
 
 /// The largest payload, which the decoder also enforces.

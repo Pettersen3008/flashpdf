@@ -75,6 +75,9 @@ struct Commands {
     ended: bool,
     fonts: Vec<crate::EmbeddedFont>,
     font_bytes: usize,
+    /// Variable-font instances made so far: the registered slot, its coordinates, and the
+    /// instance's own slot.
+    instances: Vec<(u8, Box<[i16]>, u8)>,
     /// Images registered before the renderer exists; later ones go straight to it.
     images: Vec<crate::Image>,
     image_bytes: usize,
@@ -237,6 +240,53 @@ impl Commands {
             .push(crate::EmbeddedFont::parse(bytes).map_err(ProtocolError::InvalidFont)?);
         self.font_bytes = total;
         Ok((self.fonts.len() + BUILT_IN - 1) as u8)
+    }
+
+    /// The registered font in `slot`; none for a built-in one.
+    fn embedded(&self, slot: u32) -> Option<&crate::EmbeddedFont> {
+        let index = usize::try_from(slot).ok()?.checked_sub(BUILT_IN)?;
+        match &self.renderer {
+            Some(renderer) => renderer
+                .fonts()
+                .embedded(FontId::new(u8::try_from(slot).ok()?)),
+            None => self.fonts.get(index),
+        }
+    }
+
+    /// The slot of `slot`'s instance at these user axis values, made once per render; the
+    /// font's own slot at its default instance.
+    fn instance(&mut self, slot: u32, values: &[([u8; 4], f32)]) -> Result<u32, ProtocolError> {
+        let Some(font) = self.embedded(slot) else {
+            return Ok(slot);
+        };
+        let coords = font.coordinates(values);
+        if coords.iter().all(|coord| *coord == 0) {
+            return Ok(slot);
+        }
+        if let Some((_, _, own)) = self
+            .instances
+            .iter()
+            .find(|(base, at, _)| u32::from(*base) == slot && *at == coords)
+        {
+            return Ok(u32::from(*own));
+        }
+        let instance = self
+            .embedded(slot)
+            .expect("found above")
+            .instance(coords.clone(), values);
+        let count = self
+            .renderer
+            .as_ref()
+            .map_or(self.fonts.len() + BUILT_IN, crate::Renderer::font_count);
+        if count >= 256 {
+            return Err(ProtocolError::TooManyFonts);
+        }
+        match &mut self.renderer {
+            Some(renderer) => renderer.fonts_mut().push(instance),
+            None => self.fonts.push(instance),
+        }
+        self.instances.push((slot as u8, coords, count as u8));
+        Ok(count as u32)
     }
 
     fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, ProtocolError> {

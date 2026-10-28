@@ -9,6 +9,7 @@ use super::truetype::{be_u16, be_u32, INVALID};
 const MAX_RANGES: usize = 1 << 18;
 
 /// `start..=end` maps to consecutive glyphs from `gid`.
+#[derive(Clone)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub(crate) struct Range {
     start: u32,

@@ -3,6 +3,7 @@ mod shape;
 mod standard;
 mod subset;
 mod truetype;
+mod variable;
 
 pub(crate) use shape::{Shaped, NO_KERNING, NO_LIGATURES, RTL};
 pub(crate) use standard::name as base_font;
@@ -95,6 +96,20 @@ impl FontBook {
             }
         }
         Ok(shaped)
+    }
+
+    /// Adds a font after the others, such as an instance of a variable font.
+    pub(crate) fn push(&mut self, font: EmbeddedFont) {
+        self.fonts.push(Font::Embedded(Box::new(font)));
+        self.used.push(false);
+        self.names.get_mut().push(BTreeMap::new());
+    }
+
+    pub(crate) fn embedded(&self, id: FontId) -> Option<&EmbeddedFont> {
+        match self.get(id)? {
+            Font::Embedded(font) => Some(font),
+            Font::Standard(_) => None,
+        }
     }
 
     pub(crate) fn get(&self, id: FontId) -> Option<&Font> {

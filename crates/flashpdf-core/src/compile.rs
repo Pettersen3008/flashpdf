@@ -14,10 +14,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::css::style::{
-    box_size, box_style, color, counter, decoration, decoration_color, dimension, face, flex_basis,
-    font, kerning, line_height, list_style_position, list_style_type, opacity, point, radius_of,
-    spacing, style as normalize, transform, vertical_align, white_space, Box, Dimension, FontSlots,
-    LineHeight, Rgb, Style, Transform, WhiteSpace, HELVETICA, MARGINS, SHAPES,
+    box_size, box_style, color, counter, decoration, decoration_color, dimension, flex_basis, font,
+    kerning, line_height, list_style_position, list_style_type, opacity, point, radius_of, spacing,
+    style as normalize, transform, vertical_align, white_space, Box, Dimension, Font, FontSlots,
+    LineHeight, Rgb, Slant, Style, Transform, WhiteSpace, HELVETICA, MARGINS, OBLIQUE, SHAPES,
 };
 use crate::css::{
     js_space, list_key, Cascaded, ElemInput, Inline, Key, Prop, Resolver, Tree, Value,
@@ -376,9 +376,11 @@ struct Ctx {
     /// CSS `direction`, or `Auto` from `dir="auto"`.
     direction: Direction,
     color: Rgb,
-    family: FontSlots,
-    bold: bool,
-    italic: bool,
+    font: Font,
+    /// The font slot `font` selects, an instance for a variable font, and whether the
+    /// engine slants it for an italic or oblique the font has no face or axis for.
+    face: u32,
+    oblique: bool,
     kerning: bool,
     underline: bool,
     line_through: bool,
@@ -431,9 +433,9 @@ const ROOT: Ctx = Ctx {
     align: 4,
     direction: Direction::Ltr,
     color: [0, 0, 0],
-    family: HELVETICA,
-    bold: false,
-    italic: false,
+    font: Font::new(HELVETICA),
+    face: 0,
+    oblique: false,
     kerning: true,
     underline: false,
     line_through: false,
@@ -627,13 +629,116 @@ fn physical(align: u8, direction: Direction) -> u8 {
 }
 
 /// `dir` is the element's attribute, which its own CSS `direction` overrides.
-fn inherit(s: &Style, current: &Ctx, fonts: &Fonts, dir: Option<Direction>) -> Result<Ctx> {
+/// The face slot for a font and whether the engine slants it. A missing bold or bold italic
+/// file gives way to a face with a `wght` axis, and a variable face takes the weight, width,
+/// slant, and `font-variation-settings` on its axes through an instance.
+fn select(s: &Style, font: &Font, sink: &mut impl Sink) -> Result<(u32, bool)> {
+    let family = &font.family;
+    let bold = font.bold();
+    let slanted = match font.slant {
+        Slant::Normal => false,
+        Slant::Italic => true,
+        Slant::Oblique(angle) => angle > 0.0,
+    };
+    let mut weighs = |slot: Option<u32>| slot.filter(|slot| sink.axes(*slot).contains(b"wght"));
+    let own = match (slanted, bold) {
+        (true, true) => family.bold_italic.or_else(|| weighs(family.italic)),
+        (true, false) => family.italic,
+        (false, _) => None,
+    };
+    let (slot, mut oblique) = match own {
+        Some(slot) => (slot, false),
+        None if !bold => (family.regular, slanted),
+        None => match family.bold.or_else(|| weighs(Some(family.regular))) {
+            Some(slot) => (slot, slanted),
+            None => {
+                let name = s
+                    .get(p!("fontFamily"))
+                    .map_or_else(|| "inherited".into(), Value::to_string);
+                return Err(format!("font family has no bold face: {name}").into());
+            }
+        },
+    };
+    let axes = sink.axes(slot);
+    let has = |tag: &[u8; 4]| axes.contains(tag);
+    let mut values = Vec::new();
+    if has(b"wght") {
+        values.push((*b"wght", font.weight));
+    }
+    if has(b"wdth") {
+        values.push((*b"wdth", font.stretch));
+    }
+    match font.slant {
+        Slant::Oblique(angle) if has(b"slnt") => {
+            values.push((*b"slnt", -angle));
+            oblique = false;
+        }
+        Slant::Italic if oblique && has(b"ital") => {
+            values.push((*b"ital", 1.0));
+            oblique = false;
+        }
+        Slant::Italic if oblique && has(b"slnt") => {
+            values.push((*b"slnt", -OBLIQUE));
+            oblique = false;
+        }
+        // The engine's slant is one fixed angle, and it cannot lean back.
+        Slant::Oblique(angle) if angle < 0.0 || oblique && angle != OBLIQUE => {
+            return Err(format!(
+                "fontStyle: oblique {angle}deg needs a font with a slnt axis; without one, use oblique, which slants by {OBLIQUE}deg"
+            )
+            .into());
+        }
+        _ => {}
+    }
+    for (tag, value) in font.variations.iter().flat_map(|settings| settings.iter()) {
+        if !has(tag) {
+            let tags: Vec<String> = axes
+                .iter()
+                .map(|tag| String::from_utf8_lossy(tag).into_owned())
+                .collect();
+            let named = String::from_utf8_lossy(tag);
+            return Err(format!(
+                "fontVariationSettings: \"{named}\" {value} names no axis of the selected font (its axes: {})",
+                if tags.is_empty() { "none".into() } else { tags.join(", ") }
+            )
+            .into());
+        }
+        values.retain(|(own, _)| own != tag);
+        values.push((*tag, *value));
+    }
+    if values.is_empty() {
+        return Ok((slot, oblique));
+    }
+    Ok((sink.instance(slot, &values)?, oblique))
+}
+
+const FONT_PROPERTIES: [Prop; 5] = [
+    p!("fontFamily"),
+    p!("fontWeight"),
+    p!("fontStyle"),
+    p!("fontStretch"),
+    p!("fontVariationSettings"),
+];
+
+fn inherit(
+    s: &Style,
+    current: &Ctx,
+    fonts: &Fonts,
+    sink: &mut impl Sink,
+    dir: Option<Direction>,
+) -> Result<Ctx> {
     let direction = match s.get(p!("direction")).and_then(Value::text) {
         Some("rtl") => Direction::Rtl,
         Some(_) => Direction::Ltr,
         None => dir.unwrap_or(current.direction),
     };
-    let selected = font(s, current.family, current.bold, current.italic, fonts)?;
+    let (selected, face, oblique) = if FONT_PROPERTIES.iter().any(|prop| s.get(*prop).is_some()) {
+        let selected = font(s, &current.font, fonts)?;
+        let (face, oblique) = select(s, &selected, sink)?;
+        (selected, face, oblique)
+    } else {
+        (current.font.clone(), current.face, current.oblique)
+    };
     let (underline, line_through) = match s.get(p!("textDecoration")) {
         None => (current.underline, current.line_through),
         Some(value) => {
@@ -657,9 +762,9 @@ fn inherit(s: &Style, current: &Ctx, fonts: &Fonts, dir: Option<Direction>) -> R
         align,
         direction,
         color: s.get(p!("color")).map_or(Ok(current.color), color)?,
-        family: selected.family,
-        bold: selected.weight,
-        italic: selected.italic,
+        font: selected,
+        face,
+        oblique,
         kerning: s
             .get(p!("fontKerning"))
             .map_or(Ok(current.kerning), kerning)?,
@@ -711,10 +816,9 @@ fn inherit(s: &Style, current: &Ctx, fonts: &Fonts, dir: Option<Direction>) -> R
 }
 
 fn run(state: &Ctx, text: impl Into<String>, hard_break: bool) -> Run {
-    let (font, oblique) = face(&state.family, state.bold, state.italic);
     let decorated = state.underline || state.line_through;
     Run {
-        font: font.unwrap_or(0),
+        font: state.face,
         size: state.size,
         line_height: match state.line_height {
             None => 0.0,
@@ -733,7 +837,7 @@ fn run(state: &Ctx, text: impl Into<String>, hard_break: bool) -> Run {
         },
         link: state.link.clone(),
         opacity: state.opacity,
-        oblique,
+        oblique: state.oblique,
         letter_spacing: state.letter_spacing,
         word_spacing: state.word_spacing,
         kerning: state.kerning,
@@ -1131,7 +1235,7 @@ impl<S: Sink> Compiler<S> {
     }
 
     /// Runs of an inline node; None for a layout node (box, page break, or its own alignment).
-    fn inline_runs(&self, node: &StyledNode, context: &Ctx) -> Result<Option<Vec<Run>>> {
+    fn inline_runs(&mut self, node: &StyledNode, context: &Ctx) -> Result<Option<Vec<Run>>> {
         let node = match node {
             StyledNode::Text(text) => return Ok(Some(vec![run(context, text.as_ref(), false)])),
             StyledNode::Element(el) => el,
@@ -1170,7 +1274,7 @@ impl<S: Sink> Compiler<S> {
             {
                 return Ok(None);
             }
-            let mut next = inherit(s, context, &self.fonts, node.el.dir)?;
+            let mut next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
             if let Some(background) = paint
                 .filter(|_| highlight)
                 .and_then(|paint| paint.background)
@@ -1189,7 +1293,7 @@ impl<S: Sink> Compiler<S> {
     }
 
     /// Runs of consecutive inline children; None as soon as one is a layout node.
-    fn collect(&self, children: &[StyledNode], context: &Ctx) -> Result<Option<Vec<Run>>> {
+    fn collect(&mut self, children: &[StyledNode], context: &Ctx) -> Result<Option<Vec<Run>>> {
         let mut runs = Vec::new();
         for child in children {
             let Some(part) = self.inline_runs(child, context)? else {
@@ -1563,7 +1667,8 @@ impl<S: Sink> Compiler<S> {
             "hr" => {
                 row_only(s, context.in_row)?;
                 self.page_break(s, false, depth)?;
-                let size = inherit(s, context, &self.fonts, node.el.dir)?.size;
+                let size =
+                    inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?.size;
                 let paint = Self::layout_box(s, size, context)?;
                 self.boxed(paint, collapses(context), false, |_| Ok(()))?;
                 self.page_break(s, true, depth)
@@ -1584,7 +1689,7 @@ impl<S: Sink> Compiler<S> {
         }
         row_only(s, context.in_row)?;
         self.page_break(s, false, depth)?;
-        let mut next = inherit(s, context, &self.fonts, node.el.dir)?;
+        let mut next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
         Self::list_state(node, &mut next, context)?;
         let owed = if tag == "li" {
             next.marker.clone()
@@ -1761,7 +1866,7 @@ impl<S: Sink> Compiler<S> {
         let tag = node.el.tag.as_str();
         row_only(s, context.in_row)?;
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, &self.fonts, node.el.dir)?;
+        let next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
         let mut inner = next.clone();
         if let Some(href) = &node.el.href {
             inner.link = Some(href.as_str().into());
@@ -1824,7 +1929,7 @@ impl<S: Sink> Compiler<S> {
             }
         }
         self.page_break(s, false, depth)?;
-        let next = inherit(s, context, &self.fonts, node.el.dir)?;
+        let next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
         let length = |prop: Prop| {
             get(s, prop)
                 .map(|value| dimension(value, prop.name(), false))

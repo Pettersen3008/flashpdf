@@ -106,6 +106,8 @@ static PROPERTIES: &[Definition] = &[
     inherited("fontFamily", "font-family"),
     inherited("fontWeight", "font-weight"),
     inherited("fontStyle", "font-style"),
+    inherited("fontStretch", "font-stretch"),
+    inherited("fontVariationSettings", "font-variation-settings"),
     inherited("fontKerning", "font-kerning"),
     inherited("textAlign", "text-align"),
     inherited("direction", "direction"),

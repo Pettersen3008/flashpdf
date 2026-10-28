@@ -219,7 +219,7 @@ fn given_a_font_family_list_when_selecting_a_font_then_takes_the_first_registere
     ]);
     let pick = |family: &str| {
         let s = Style(vec![(Key::Prop(prop!("fontFamily")), t(family))]);
-        font(&s, HELVETICA, false, false, &fonts).unwrap().family
+        font(&s, &Font::new(HELVETICA), &fonts).unwrap().family
     };
     assert_eq!(pick("'Missing', \"Inter\", sans-serif"), inter);
     assert_eq!(pick("Missing, system-ui, sans-serif"), HELVETICA);
@@ -238,14 +238,14 @@ fn given_a_font_family_list_with_no_match_when_selecting_a_font_then_rejects_nam
     let fonts = HashMap::from([("Helvetica".to_string(), HELVETICA)]);
     let pick = |family: &str| {
         let s = Style(vec![(Key::Prop(prop!("fontFamily")), t(family))]);
-        font(&s, TIMES, false, false, &fonts).unwrap_err()
+        font(&s, &Font::new(TIMES), &fonts).unwrap_err()
     };
     assert!(pick("Missing, 'Also Missing', cursive").starts_with(
         "unregistered font family: Missing, 'Also Missing', cursive (register it in fonts"
     ));
     assert!(pick("'serif'").starts_with("unregistered font family: 'serif'"));
     assert_eq!(
-        font(&Style::default(), COURIER, false, false, &fonts)
+        font(&Style::default(), &Font::new(COURIER), &fonts)
             .unwrap()
             .family,
         COURIER
@@ -280,13 +280,13 @@ fn given_a_width_with_more_digits_than_a_float_holds_when_normalizing_then_rejec
 }
 
 #[test]
-fn given_an_oblique_angle_a_percent_spacing_a_wavy_line_or_another_transform_when_normalizing_then_rejects_naming_the_value(
+fn given_an_oblique_angle_past_90deg_a_percent_spacing_a_wavy_line_or_another_transform_when_normalizing_then_rejects_naming_the_value(
 ) {
     for (name, value, message) in [
         (
             "fontStyle",
-            "oblique 10deg",
-            "invalid fontStyle: oblique 10deg",
+            "oblique 100deg",
+            "invalid fontStyle: oblique 100deg",
         ),
         ("letterSpacing", "10%", "invalid letterSpacing: 10%"),
         ("wordSpacing", "20000pt", "invalid wordSpacing: 20000pt"),
@@ -545,5 +545,27 @@ fn given_page_setup_outside_the_supported_subset_when_validating_then_rejects_wi
     ] {
         let seen = page_setup(Some(format), orientation, margin, &[]).unwrap_err();
         assert!(seen.contains(message), "{seen} lacks {message}");
+    }
+}
+
+#[test]
+fn given_font_style_stretch_and_variation_values_when_parsing_then_reads_angles_percents_and_the_last_of_a_repeated_tag(
+) {
+    assert_eq!(slant(&t("oblique -12.5deg")), Ok(Slant::Oblique(-12.5)));
+    assert_eq!(slant(&t("oblique")), Ok(Slant::Oblique(14.0)));
+    assert_eq!(stretch(&t("semi-condensed")), Ok(87.5));
+    assert_eq!(stretch(&t("62.5%")), Ok(62.5));
+    assert_eq!(
+        variations(&t("'wght' 300, \"wdth\" 80, \"wght\" 650")).unwrap()[..],
+        [(*b"wdth", 80.0), (*b"wght", 650.0)]
+    );
+    assert!(variations(&t("normal")).unwrap().is_empty());
+    for (name, value) in [
+        ("fontVariationSettings", "wght 300"),
+        ("fontVariationSettings", "'wgh' 300"),
+        ("fontStretch", "wide"),
+        ("fontStyle", "oblique 10"),
+    ] {
+        rejects(&[(name, t(value))], &format!("invalid {name}: {value}"));
     }
 }

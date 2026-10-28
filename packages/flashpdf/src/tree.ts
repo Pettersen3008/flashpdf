@@ -15,7 +15,7 @@ const supported = new Set(
 	borderBottomStyle borderLeftStyle borderRadius borderTopLeftRadius borderTopRightRadius
 	borderBottomRightRadius borderBottomLeftRadius opacity marginInline marginBlock paddingInline
 	paddingBlock background backgroundColor gap rowGap columnGap fontSize fontFamily fontWeight fontStyle
-	fontKerning textAlign direction textTransform textDecoration textDecorationColor whiteSpace verticalAlign
+	fontStretch fontVariationSettings fontKerning textAlign direction textTransform textDecoration textDecorationColor whiteSpace verticalAlign
 	listStyle listStyleType listStylePosition color lineHeight letterSpacing wordSpacing
 	breakBefore breakAfter breakInside borderCollapse borderSpacing orphans widows`
 		.trim()

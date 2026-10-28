@@ -121,11 +121,26 @@ export type Style = {
 	/** A unitless number is a factor of the font size; `%` and `em` resolve against this element's size. */
 	lineHeight?: number | "normal" | `${number}` | `${number}%` | Length;
 	fontFamily?: string;
-	fontWeight?: number | "normal" | "bold";
+	/** 1 to 1000; a variable font with a `wght` axis takes it exactly, others are bold from 600. */
+	fontWeight?: number | "normal" | "bold" | `${number}`;
+	/** A percent of the normal width or a keyword; it sets a variable font's `wdth` axis. */
+	fontStretch?:
+		| `${number}%`
+		| "normal"
+		| "ultra-condensed"
+		| "extra-condensed"
+		| "condensed"
+		| "semi-condensed"
+		| "semi-expanded"
+		| "expanded"
+		| "extra-expanded"
+		| "ultra-expanded";
+	/** Axis settings such as `'"wght" 650, "wdth" 80'`; each tag must be an axis of the selected font. */
+	fontVariationSettings?: string;
 	/** `auto` and `normal` kern letter pairs within a word. */
 	fontKerning?: "auto" | "normal" | "none";
-	/** `oblique` uses the italic face too; a family without one is slanted. */
-	fontStyle?: "normal" | "italic" | "oblique";
+	/** `oblique` uses the italic face too; a family without one is slanted, or takes its `slnt` or `ital` axis. */
+	fontStyle?: "normal" | "italic" | "oblique" | `oblique ${number}deg`;
 	/** Added after every character; negative values tighten. */
 	letterSpacing?: "normal" | SignedLength;
 	/** Added after every space and no-break space. */

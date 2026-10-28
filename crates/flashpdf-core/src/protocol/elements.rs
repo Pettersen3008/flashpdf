@@ -578,4 +578,14 @@ impl Sink for Commands {
             .ok_or_else(|| ProtocolError::UnknownImage.to_string())?;
         Commands::add_image(self, bytes).map_err(|error| error.to_string())
     }
+
+    fn axes(&mut self, slot: u32) -> Vec<[u8; 4]> {
+        self.embedded(slot)
+            .map(|font| font.axes.iter().map(|axis| axis.tag).collect())
+            .unwrap_or_default()
+    }
+
+    fn instance(&mut self, slot: u32, values: &[([u8; 4], f32)]) -> Result<u32, String> {
+        Commands::instance(self, slot, values).map_err(|error| error.to_string())
+    }
 }
