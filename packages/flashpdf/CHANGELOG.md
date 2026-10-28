@@ -36,6 +36,7 @@
 - An `<img>` with auto width and height and a `maxHeight` equal to the page height no longer throws PageOverflow. Scaling into a max now clamps the result to the max, so `maxHeight: 842` on an A4 page without margins draws the image exactly 842 pt tall.
 
 ### Internal
+- Dependabot ignores all intentionally exact-pinned Rust dependencies, including HarfRust's WASM size pin and pdf-writer's cross-reference format pin.
 - FlashPDF's own GPOS and `kern` table reader is gone; HarfRust kerns embedded fonts. HarfRust and `read-fonts` build with `opt-level = "z"`, about 100 KB less WASM, since the word cache keeps shaping off the warm path.
 
 - The Rust core gains a port of the CSS parser, selector matcher, cascade, `var()`, `calc()`, style normalisation, and the element compiler, with the TypeScript tests for them ported to Rust. `compile.ts`, the TypeScript page setup, and the TypeScript drawing encoder are gone. The TypeScript CSS parser, cascade, and style modules are gone too; only the SVG colour parser stays in TypeScript.
