@@ -96,8 +96,8 @@ const Invoice = ({ total }) => jsxs("main", {
   style: { fontFamily: "Invoice" },
   children: [
     jsx("a", { href: "https://example.com/", children: jsx("img", { src: logo, alt: "Logo", style: { width: 24 } }) }),
-    jsx("h1", { children: "Invoice" }),
-    jsx("p", { className: "total", children: total }),
+    jsx("h1", { style: { borderRadius: 4, backgroundImage: "linear-gradient(30deg, #fff, #eee 40%, #ddd)", boxShadow: "2pt 3pt 0 1pt #888, inset 0 1pt #aaa" }, children: "Invoice" }),
+    jsx("p", { className: "total", style: { background: "radial-gradient(ellipse farthest-corner at 30% 20%, #fff, #cde)" }, children: total }),
   ],
 });
 export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {

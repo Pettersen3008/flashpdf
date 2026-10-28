@@ -59,7 +59,7 @@ pub(crate) struct Lift {
 /// A range of codes and the source text they show, for `/ActualText`.
 pub(crate) type Actual = (Range<u32>, Box<str>);
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PositionedBox {
     pub(crate) origin: Point,
     pub(crate) width: Pt,

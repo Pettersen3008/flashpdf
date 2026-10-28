@@ -90,7 +90,7 @@ fn max(left: f64, right: f64) -> f64 {
     }
 }
 
-fn hex(source: &str) -> Result<Option<Rgb>, Message> {
+fn hex(source: &str, alpha: &mut f64) -> Result<Option<Rgb>, Message> {
     let Some(digits) = source.strip_prefix('#') else {
         return Ok(None);
     };
@@ -107,7 +107,7 @@ fn hex(source: &str) -> Result<Option<Rgb>, Message> {
     };
     let pair = |index: usize| u8::from_str_radix(&digits[index..index + 2], 16).unwrap_or(0);
     if digits.len() == 8 {
-        opaque(f64::from(pair(6)) / 255.0)?;
+        *alpha = f64::from(pair(6)) / 255.0;
     }
     Ok(Some([pair(0), pair(2), pair(4)]))
 }
@@ -152,7 +152,7 @@ fn hue(token: &str) -> f64 {
     js_parse(token.strip_suffix("deg").unwrap_or(token))
 }
 
-fn functional(source: &str) -> Result<Option<Rgb>, Message> {
+fn functional(source: &str, opacity: &mut f64) -> Result<Option<Rgb>, Message> {
     let Some(open) = source.find('(') else {
         return Ok(None);
     };
@@ -176,7 +176,7 @@ fn functional(source: &str) -> Result<Option<Rgb>, Message> {
         return Ok(None);
     }
     if let Some(alpha) = rest.first() {
-        opaque(fraction(alpha, 1.0))?;
+        *opacity = fraction(alpha, 1.0);
     }
     let rgb = if kind.starts_with("rgb") {
         [first, second, third].map(|token| byte(fraction(token, 255.0)))
@@ -196,21 +196,37 @@ fn functional(source: &str) -> Result<Option<Rgb>, Message> {
 }
 
 pub fn color(value: &Value) -> Result<Rgb, Message> {
+    let (rgb, alpha) = color_alpha(value)?;
+    if alpha == 0.0 && value.is("transparent") {
+        return Err("transparent applies only to background and border color".into());
+    }
+    opaque(alpha)?;
+    Ok(rgb)
+}
+
+pub(crate) fn color_alpha(value: &Value) -> Result<(Rgb, f64), Message> {
     let Value::Text(text) = value else {
         return Err(format!("invalid color: {value}").into());
     };
     let source = js_trim(text).to_lowercase();
+    if source == "transparent" {
+        return Ok(([0; 3], 0.0));
+    }
+    let mut alpha = 1.0;
     let rgb = match NAMED.binary_search_by(|(name, _)| name.cmp(&source.as_str())) {
         Ok(index) => {
             let [_, red, green, blue] = NAMED[index].1.to_be_bytes();
             Some([red, green, blue])
         }
-        Err(_) => match hex(&source)? {
+        Err(_) => match hex(&source, &mut alpha)? {
             Some(rgb) => Some(rgb),
-            None => functional(&source)?,
+            None => functional(&source, &mut alpha)?,
         },
     };
-    rgb.ok_or_else(|| {
+    if !alpha.is_finite() {
+        return Err("invalid colour alpha".into());
+    }
+    rgb.map(|rgb| (rgb, alpha.clamp(0.0, 1.0))).ok_or_else(|| {
         if source == "transparent" {
             "transparent applies only to background and border color".into()
         } else {

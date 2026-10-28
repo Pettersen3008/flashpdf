@@ -149,7 +149,7 @@ impl LayoutEngine<'_> {
             Some(block) if position.kind == PositionKind::Absolute => (block, false),
             _ => (page, true),
         };
-        let (style, mut size) = (node.style, node.size);
+        let (style, mut size) = (node.style.clone(), node.size);
         let inset = position.inset;
         let (left, right) = (
             resolve(inset.left, block.width),

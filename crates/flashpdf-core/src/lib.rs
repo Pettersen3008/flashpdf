@@ -2,6 +2,8 @@ mod command;
 mod compile;
 mod css;
 mod document;
+mod effects;
+pub use effects::Effects;
 mod font;
 mod geometry;
 mod html;

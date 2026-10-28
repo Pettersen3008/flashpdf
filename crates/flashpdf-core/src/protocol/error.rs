@@ -81,6 +81,7 @@ impl std::fmt::Display for ProtocolError {
                     crate::renderer::MAX_PAGES
                 )
             }
+            Self::Render(crate::RenderError::InvalidGradientGeometry) => return formatter.write_str("background-image: gradient geometry exceeds finite PDF coordinates"),
             Self::Render(error) => return write!(formatter, "{error:?}"),
             Self::InvalidImage(message) | Self::Message(message) => {
                 return formatter.write_str(message)

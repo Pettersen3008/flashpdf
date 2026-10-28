@@ -816,7 +816,7 @@ impl Commands {
                 // Bit 0 is border-box sizing, bits 1 to 4 are auto margins in `Edges` order, and
                 // bit 5 is a position after the sizes.
                 let flags = cursor.take(1)?[0];
-                if flags > 0x3f {
+                if flags > 0x7f {
                     return Err(ProtocolError::InvalidValue("box flags"));
                 }
                 let size = BoxSize {
@@ -834,8 +834,21 @@ impl Commands {
                         None
                     },
                 };
+                let effects = if flags & 0x40 != 0 {
+                    let em = cursor.positive_f32("effect font size")?;
+                    let current = cursor.take(3)?.try_into().unwrap();
+                    let shadow = cursor.utf8()?;
+                    let image = cursor.utf8()?;
+                    Some(std::rc::Rc::new(
+                        crate::effects::parse(shadow, image, f64::from(em), current)
+                            .map_err(|e| ProtocolError::Message(e.to_string()))?,
+                    ))
+                } else {
+                    None
+                };
                 cursor.done()?;
                 let style = crate::BoxStyle {
+                    effects,
                     margin,
                     padding,
                     border,

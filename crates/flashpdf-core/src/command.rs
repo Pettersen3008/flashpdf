@@ -12,7 +12,7 @@ use crate::{
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
 pub(crate) const MAX_COLUMNS: usize = 256;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command<'a> {
     /// One run in one style; the parser lowers it to a one-run `Paragraph`.
     Text {
@@ -148,7 +148,7 @@ impl OwnedCommand {
                 }
             }
             Self::BoxStart(style, size) => Command::BoxStart {
-                style: *style,
+                style: style.clone(),
                 size: *size,
             },
             Self::BoxEnd => Command::BoxEnd,
@@ -192,7 +192,7 @@ pub(crate) trait CommandSource {
 
 impl<'command> CommandSource for [Command<'command>] {
     fn command(&self, index: usize) -> Option<Command<'_>> {
-        self.get(index).copied()
+        self.get(index).cloned()
     }
 
     fn len(&self) -> usize {
