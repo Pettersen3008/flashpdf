@@ -103,7 +103,7 @@ const Invoice = ({ total }) => jsxs("main", {
 export const renderInvoice = () => render(jsx(Invoice, { total: "$100.00" }), {
   pageFormat: "A4",
   margin: 36,
-  stylesheets: [stylesheet(".total { color: #0000ff; text-align: right }")],
+  stylesheets: [stylesheet("@layer theme, utilities; @layer theme { .total { color:red } } @layer utilities { .total { @supports NOT (display:grid) { color:color-mix(in oklab, red, blue) } text-align:right } }")],
   fonts: [{ family: "Invoice", regular: font, bold: font }],
 });
 `,

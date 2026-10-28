@@ -149,6 +149,18 @@ fn given_oklch_and_oklab_colours_when_resolving_them_then_converts_to_clipped_sr
 #[test]
 fn given_color_mix_when_resolving_then_mixes_opaque_colours_and_rejects_any_transparency() {
     assert_eq!(
+        color(&t("color-mix(in srgb, red\u{a0}50%, blue)")),
+        Ok([128, 0, 128])
+    );
+    assert_eq!(
+        color(&t("color-mix(in oklab, oklch(50% 0 0), black)")),
+        Ok([34, 34, 34])
+    );
+    assert_eq!(
+        color(&t("color-mix(in oklab, oklab(2 0 0), black)")),
+        Ok([99, 99, 99])
+    );
+    assert_eq!(
         color(&t("color-mix(in srgb, rgb(0.49 0 0), rgb(1.49 0 0) 25%)")),
         Ok([1, 0, 0])
     );

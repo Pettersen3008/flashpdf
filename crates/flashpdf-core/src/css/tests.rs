@@ -415,6 +415,7 @@ fn given_selectors_outside_the_subset_when_validating_then_rejects_each_with_rea
         ("p:nth-child(n+) { color: red }", &[":nth-child(n+)"]),
         ("p:nth-of-type() { color: red }", &[":nth-of-type()"]),
         (":is(.a, [dir]) { color: red }", &["attribute selectors"]),
+        (".card:has(.badge) {}", &[":has()"]),
         (r"a[h\72 ef] { color: red }", &["attribute selectors"]),
         ("svg[width] { color: red }", &["attribute selectors"]),
         (":not(.a:has(.b)) { color: red }", &[":has()"]),
@@ -637,6 +638,10 @@ fn given_nested_rules_when_resolving_then_retains_declaration_order_escaped_ampe
     assert!(validate(&large)
         .unwrap_err()
         .contains("expansion exceeds 64 KiB"));
+    let repeated = format!(".{}{{{}}}", "a".repeat(16384), "&{color:red}".repeat(256));
+    assert!(validate(&repeated)
+        .unwrap_err()
+        .contains("selector budget exceeds 1 MiB"));
 }
 
 #[test]

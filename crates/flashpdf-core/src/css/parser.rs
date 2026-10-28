@@ -395,6 +395,7 @@ pub struct Stylesheet {
     layers: Vec<Rc<str>>,
     /// Numbers the selector compounds across every sheet.
     compounds: u32,
+    selector_bytes: usize,
 }
 
 const MAX_MEDIA_DEPTH: usize = 16;
@@ -657,6 +658,7 @@ impl Context<'_> {
         range: Range<usize>,
         scope: &Scope,
     ) -> Result<(), Message> {
+        let empty = source[range.clone()].trim().is_empty();
         let body = Rc::new(Body {
             source,
             range,
@@ -666,10 +668,21 @@ impl Context<'_> {
         let layer = self.rank(scope);
         for raw in split(selectors) {
             let text = raw.trim();
+            // Include rule overhead so many tiny selectors cannot bypass the budget.
+            self.sheet.selector_bytes = self
+                .sheet
+                .selector_bytes
+                .saturating_add(text.len().saturating_mul(2).saturating_add(256));
+            if self.sheet.selector_bytes > 1024 * 1024 {
+                return Err("CSS selector budget exceeds 1 MiB".into());
+            }
             let at = format!(" in selector {}{at}", json_string(text));
             let Some(compiled) = selector(text, &at, &mut self.sheet.compounds)? else {
                 continue;
             };
+            if empty {
+                continue;
+            }
             self.sheet.rules.push(Rule {
                 specificity: specificity(&compiled),
                 selector: compiled,

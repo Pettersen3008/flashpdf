@@ -182,13 +182,21 @@ fn functional(source: &str) -> Result<Option<[f64; 3]>, Message> {
     let rgb = if kind.starts_with("rgb") {
         [first, second, third].map(|token| fraction(token, 255.0).clamp(0.0, 1.0) * 255.0)
     } else if kind.starts_with("hsl") {
-        hsl(hue(first), fraction(second, 100.0), fraction(third, 100.0))
+        hsl(
+            hue(first),
+            fraction(second, 100.0).clamp(0.0, 1.0),
+            fraction(third, 100.0).clamp(0.0, 1.0),
+        )
     } else if kind == "oklab" {
-        oklab(fraction(first, 1.0), axis(second), axis(third))
+        oklab(
+            fraction(first, 1.0).clamp(0.0, 1.0),
+            axis(second),
+            axis(third),
+        )
     } else {
         let angle = hue(third) * std::f64::consts::PI / 180.0;
         oklab(
-            fraction(first, 1.0),
+            fraction(first, 1.0).clamp(0.0, 1.0),
             axis(second) * libm::cos(angle),
             axis(second) * libm::sin(angle),
         )
@@ -249,10 +257,12 @@ fn mix(source: &str, nesting: usize) -> Result<Option<[f64; 3]>, Message> {
     let part = |text: &str| -> Result<(Option<[f64; 3]>, Option<f64>), Message> {
         let (head, tail) = match text.rfind(|c: char| js_space(c)) {
             Some(at) if text.ends_with('%') && !text[at..].contains(')') => {
-                (&text[..at], Some(&text[at + 1..]))
+                (&text[..at], Some(js_trim(&text[at..])))
             }
             _ => match text.split_once(|c: char| js_space(c)) {
-                Some((amount, rest)) if amount.ends_with('%') => (rest, Some(amount)),
+                Some((amount, rest)) if amount.ends_with('%') && !amount.contains('(') => {
+                    (rest, Some(amount))
+                }
                 _ => (text, None),
             },
         };
