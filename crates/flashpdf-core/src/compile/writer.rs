@@ -6,6 +6,7 @@ use std::rc::Rc;
 
 use super::Error;
 use crate::css::style::{Box, Dimension, Rgb, Transform, WhiteSpace};
+use crate::{Grid, GridItem};
 
 /// A column: kind 0 points, 1 a grow factor, 2 percent.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -48,6 +49,7 @@ pub struct FlexItem {
 /// One styled stretch of a paragraph; `hard_break` ends the line after it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
+    pub structure: u32,
     pub font: u32,
     pub size: f64,
     /// Points; 0 is `normal`.
@@ -83,6 +85,8 @@ pub enum Record {
     RowEnd,
     FlexStart(Flex, Vec<FlexItem>),
     FlexEnd,
+    GridStart(Grid, Vec<GridItem>),
+    GridEnd,
     PageBreak,
     /// The header or footer block that follows; `first` is the first page's.
     Repeat {
@@ -100,6 +104,7 @@ pub enum Record {
     TableStart(u16, u16, Column),
     TableEnd,
     Image {
+        structure: u32,
         slot: u16,
         width: Option<Dimension>,
         height: Option<f64>,
@@ -122,6 +127,10 @@ pub enum Record {
 
 /// Where records go: the decoder's `read_record(record.opcode(), payload)` in a render.
 pub trait Sink {
+    fn pdfua(&self) -> bool {
+        false
+    }
+    fn structure(&mut self, _nodes: Vec<super::StructureNode>) {}
     fn record(&mut self, record: &Record, payload: &[u8]) -> Result<(), String>;
     /// Registers a drawing's encoded bytes and returns its image slot.
     fn add_image(&mut self, bytes: Vec<u8>) -> Result<u16, String>;
@@ -162,6 +171,8 @@ impl Record {
             Self::Avoid => 23,
             Self::FlexStart(..) => 24,
             Self::FlexEnd => 25,
+            Self::GridStart(..) => 37,
+            Self::GridEnd => 38,
             Self::End => 255,
         }
     }
@@ -209,6 +220,7 @@ impl Record {
                     b.u8(item.align);
                 }
             }
+            Self::GridStart(style, items) => crate::protocol::grid::encode(style, items, b.0),
             Self::Repeat { first, fixed, .. } => b.u8(if *fixed { 2 } else { u8::from(*first) }),
             Self::Paragraph {
                 runs,
@@ -231,6 +243,7 @@ impl Record {
                 link,
                 alt,
                 opacity,
+                ..
             } => {
                 b.u16(f64::from(*slot));
                 for width in [width, max_width] {
@@ -270,6 +283,7 @@ impl Record {
             Self::StackEnd
             | Self::RowEnd
             | Self::FlexEnd
+            | Self::GridEnd
             | Self::PageBreak
             | Self::TableEnd
             | Self::BoxEnd
@@ -448,7 +462,11 @@ fn box_start(b: &mut Bytes, value: &Box) {
     let position = size.and_then(|size| size.position);
     b.u8(size.map_or(0, |size| {
         u8::from(size.border_box) | size.auto_margin << 1 | u8::from(position.is_some()) << 5
-    }));
+    }) | value
+        .effects
+        .as_ref()
+        .map_or(0, |effect| 0x40 | u8::from(effect.image) << 7));
+    b.u8(u8::from(value.paint_effects.is_some()));
     b.size(size.and_then(|size| size.width));
     b.size(size.and_then(|size| size.min_width));
     b.size(size.and_then(|size| size.max_width));
@@ -467,6 +485,21 @@ fn box_start(b: &mut Bytes, value: &Box) {
         for side in position.inset {
             b.size(side);
         }
+    }
+    if let Some(effect) = &value.effects {
+        b.f32(f64::from(effect.font_size));
+        b.u8(u8::from(effect.overflow));
+        b.text(&effect.transform);
+        b.text(&effect.origin);
+        b.text(&effect.clip);
+    }
+    if let Some(effects) = &value.paint_effects {
+        b.f32(effects.em);
+        for channel in effects.current {
+            b.u8(channel);
+        }
+        b.text(&effects.source[0]);
+        b.text(&effects.source[1]);
     }
 }
 
@@ -559,6 +592,7 @@ impl<S: Sink> Writer<S> {
     #[allow(clippy::too_many_arguments)]
     pub fn image(
         &mut self,
+        structure: u32,
         slot: u16,
         width: Option<Dimension>,
         height: Option<f64>,
@@ -569,6 +603,7 @@ impl<S: Sink> Writer<S> {
         opacity: f64,
     ) -> Result<(), Error> {
         self.record(Record::Image {
+            structure,
             slot,
             width,
             height,
@@ -658,6 +693,20 @@ impl<S: Sink> Writer<S> {
     pub fn flex_end(&mut self) -> Result<(), Error> {
         self.flush()?;
         self.record(Record::FlexEnd)
+    }
+
+    pub fn grid_start(&mut self, grid: Grid, items: Vec<GridItem>) -> Result<(), Error> {
+        grid.validate()
+            .map_err(|error| Error::new(error.to_string()))?;
+        crate::protocol::grid::validate_items(&items)
+            .map_err(|error| Error::new(error.to_string()))?;
+        self.flush()?;
+        self.record(Record::GridStart(grid, items))
+    }
+
+    pub fn grid_end(&mut self) -> Result<(), Error> {
+        self.flush()?;
+        self.record(Record::GridEnd)
     }
 
     /// The first `header` children repeat on every page the table continues on.

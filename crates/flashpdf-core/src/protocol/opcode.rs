@@ -39,6 +39,10 @@ pub(super) enum Opcode {
     Html = 35,
     /// An `images` entry an HTML `<img src>` names: a staged raster or a drawing.
     NamedImage = 36,
+    GridStart = 37,
+    GridEnd = 38,
+    /// The `tw` prop of the element just opened.
+    Tw = 39,
     End = 255,
 }
 
@@ -80,6 +84,9 @@ impl TryFrom<u8> for Opcode {
             34 => Self::StrictStylesheet,
             35 => Self::Html,
             36 => Self::NamedImage,
+            37 => Self::GridStart,
+            38 => Self::GridEnd,
+            39 => Self::Tw,
             255 => Self::End,
             _ => return Err(ProtocolError::UnknownOpcode),
         })

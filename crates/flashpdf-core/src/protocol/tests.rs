@@ -29,6 +29,107 @@ fn record(opcode: u8, payload: &[u8]) -> Vec<u8> {
     bytes
 }
 
+#[test]
+fn given_grid_flow_and_boxed_flags_when_round_tripping_then_preserves_each_combination() {
+    for flags in 0..=3 {
+        let mut payload = [0; 28];
+        payload[8] = flags;
+        let (grid, items) = super::grid::decode(&mut super::Cursor::new(&payload)).unwrap();
+        assert_eq!(grid.column_flow, flags & 1 != 0);
+        assert_eq!(grid.boxed, flags & 2 != 0);
+        let mut encoded = Vec::new();
+        super::grid::encode(&grid, &items, &mut encoded);
+        assert_eq!(encoded, payload);
+    }
+}
+
+#[test]
+fn given_malformed_grid_records_when_decoding_then_rejects_them_at_the_boundary() {
+    use crate::{Grid, GridBreadth, GridItem, GridLine, GridTrack};
+
+    let grid = Grid {
+        columns: vec![],
+        rows: vec![],
+        auto_columns: vec![],
+        auto_rows: vec![],
+        column_flow: false,
+        boxed: false,
+        justify_items: 0,
+        align_items: 0,
+        justify_content: 0,
+        align_content: 0,
+        column_gap: 0.0,
+        row_gap: 0.0,
+        min_height: 0.0,
+        max_height: None,
+    };
+    let item = GridItem {
+        column: [GridLine::Auto; 2],
+        row: [GridLine::Auto; 2],
+        justify: 0,
+        align: 0,
+    };
+    let mut payload = Vec::new();
+    super::grid::encode(&grid, &[], &mut payload);
+    let mut decoder = Decoder::default();
+    decoder.push(&header(VERSION, 120.0, 60.0, 10.0)).unwrap();
+    decoder.push(&record(37, &payload)).unwrap();
+    assert!(matches!(
+        decoder.commands.frames.last(),
+        Some(super::Frame::Grid { cells: 0, done: 0 })
+    ));
+
+    let mut malformed = vec![];
+    for (min, max) in [
+        (GridBreadth::Fr(1.0), GridBreadth::Auto),
+        (GridBreadth::Auto, GridBreadth::Length(f32::NAN)),
+        (GridBreadth::Auto, GridBreadth::Percent(-0.1)),
+        (GridBreadth::Auto, GridBreadth::Fr(f32::INFINITY)),
+    ] {
+        let mut invalid = grid.clone();
+        invalid.columns.push(GridTrack { min, max });
+        let mut bytes = vec![];
+        super::grid::encode(&invalid, &[], &mut bytes);
+        malformed.push(bytes);
+    }
+    for line in [
+        GridLine::Line(0),
+        GridLine::Line(-257),
+        GridLine::Span(0),
+        GridLine::Span(257),
+    ] {
+        let mut invalid = item;
+        invalid.column[0] = line;
+        let mut bytes = vec![];
+        super::grid::encode(&grid, &[invalid], &mut bytes);
+        malformed.push(bytes);
+    }
+    malformed.push(257_u16.to_le_bytes().to_vec());
+    for (offset, bytes) in [
+        (8, vec![4]),                               // flow flags
+        (9, vec![6]),                               // item alignment
+        (11, vec![7]),                              // content alignment
+        (13, (-1.0_f32).to_le_bytes().to_vec()),    // gap
+        (21, f32::INFINITY.to_le_bytes().to_vec()), // minimum height
+        (26, 257_u16.to_le_bytes().to_vec()),       // item count
+    ] {
+        let mut invalid = payload.clone();
+        invalid[offset..offset + bytes.len()].copy_from_slice(&bytes);
+        malformed.push(invalid);
+    }
+    let mut invalid = grid.clone();
+    invalid.min_height = 2.0;
+    invalid.max_height = Some(1.0);
+    let mut bytes = vec![];
+    super::grid::encode(&invalid, &[], &mut bytes);
+    malformed.push(bytes);
+    for payload in malformed {
+        let mut decoder = Decoder::default();
+        decoder.push(&header(VERSION, 120.0, 60.0, 10.0)).unwrap();
+        assert!(decoder.push(&record(37, &payload)).is_err());
+    }
+}
+
 fn text(value: &[u8]) -> Vec<u8> {
     let mut bytes = (value.len() as u32).to_le_bytes().to_vec();
     bytes.extend(value);
@@ -124,7 +225,7 @@ fn decorated_box(border: f32, tail: &[u8]) -> Vec<u8> {
     payload.extend([1, 0xee, 0xee, 0xee]);
     payload.extend([0, 0, 0].repeat(4));
     payload.extend(tail);
-    payload.extend([0; 7]);
+    payload.extend([0; 8]);
     record(17, &payload)
 }
 
@@ -344,7 +445,7 @@ fn given_bad_headers_records_and_text_when_decoding_then_rejects() {
     bad_magic[0] = b'X';
     assert_eq!(push_error(&bad_magic), "invalid magic");
 
-    for version in [1_u16, 20] {
+    for version in [1_u16, 20, 25, 26, 27] {
         let mut bad_version = representative();
         bad_version[4..6].copy_from_slice(&version.to_le_bytes());
         assert_eq!(push_error(&bad_version), "unknown version");
@@ -1663,4 +1764,386 @@ fn given_an_axis_the_selected_font_lacks_when_compiling_then_rejects_naming_the_
         flex("font-family: serif; font-style: oblique -10deg").err().unwrap(),
         "fontStyle: oblique -10deg needs a font with a slnt axis; without one, use oblique, which slants by 14deg on <p> in <main>"
     );
+}
+
+fn ua_document(source: &str, pdfa: Option<u8>) -> Result<Vec<u8>, String> {
+    let mut decoder = Decoder::default();
+    let font = include_bytes!("../../../../packages/flashpdf/test/fixtures/Abel-Regular.ttf");
+    decoder.add_font(font.to_vec()).unwrap();
+    let mut bytes = MAGIC.to_vec();
+    bytes.extend(VERSION.to_le_bytes());
+    bytes.extend(record(26, &[text(b"UA"), vec![12, 12, 12, 12]].concat()));
+    bytes.extend(record(35, &[&[0, 0], source.as_bytes()].concat()));
+    bytes.extend(record(27, &[&[0][..], b"@page { size: 200pt 180pt; margin: 12pt } main {font-family:UA;font-size:10pt} p {margin:0}"].concat()));
+    bytes.extend(record(28, &[0, 0, 0, 0]));
+    let mut metadata = vec![2];
+    for value in ["UA test", "", "", "", "en"] {
+        metadata.extend(text(value.as_bytes()));
+    }
+    bytes.extend(record(14, &metadata));
+    if let Some(pdfa) = pdfa {
+        bytes.extend(record(20, &[pdfa]));
+    }
+    bytes.extend(record(29, &[0]));
+    bytes.extend(record(255, &[]));
+    decoder.push(&bytes).map_err(|error| error.to_string())?;
+    decoder.finish().map_err(|error| error.to_string())
+}
+
+fn structure_elements<'a>(
+    pdf: &'a lopdf::Document,
+    role: &[u8],
+) -> Vec<(lopdf::ObjectId, &'a lopdf::Dictionary)> {
+    pdf.objects
+        .iter()
+        .filter_map(|(id, object)| {
+            let dict = object.as_dict().ok()?;
+            (dict.get(b"S").ok()?.as_name().ok()? == role).then_some((*id, dict))
+        })
+        .collect()
+}
+
+#[test]
+fn given_a_ua_paragraph_spanning_pages_when_rendering_then_one_p_owns_mcids_on_each_page() {
+    let bytes = ua_document(
+        &format!("<main><p>{}</p></main>", "Many words to wrap. ".repeat(120)),
+        None,
+    )
+    .unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    assert!(pdf.get_pages().len() > 1);
+    let paragraphs = structure_elements(&pdf, b"P");
+    assert_eq!(paragraphs.len(), 1);
+    let kids = paragraphs[0].1.get(b"K").unwrap().as_array().unwrap();
+    let pages: std::collections::BTreeSet<_> = kids
+        .iter()
+        .map(|kid| {
+            kid.as_dict()
+                .unwrap()
+                .get(b"Pg")
+                .unwrap()
+                .as_reference()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(pages.len(), pdf.get_pages().len());
+    let root = pdf
+        .catalog()
+        .unwrap()
+        .get(b"StructTreeRoot")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    assert_eq!(
+        structure_elements(&pdf, b"Document")[0]
+            .1
+            .get(b"P")
+            .unwrap()
+            .as_reference()
+            .unwrap(),
+        root
+    );
+}
+
+#[test]
+fn given_ua_lists_tables_and_links_when_rendering_then_structure_preserves_roles_scope_language_and_annotation_references(
+) {
+    let rows = "<tr><th scope='row'>Row</th><td>Value</td></tr>".repeat(15);
+    let bytes = ua_document(&format!("<main><h1>Report</h1><p>Before <a href='https://example.com'>link</a> after <span lang='nb'>Hei</span>.</p><ul><li>Item</li></ul><table><thead><tr><th>Head</th><th>Other</th></tr></thead><tbody>{rows}</tbody><tfoot><tr><td>Total</td><td>15</td></tr></tfoot></table></main>"), Some(0)).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    for role in [
+        b"H1".as_slice(),
+        b"L",
+        b"LI",
+        b"Lbl",
+        b"LBody",
+        b"Table",
+        b"THead",
+        b"TBody",
+        b"TFoot",
+        b"TR",
+        b"TH",
+        b"TD",
+        b"Link",
+    ] {
+        assert!(
+            !structure_elements(&pdf, role).is_empty(),
+            "missing {}",
+            String::from_utf8_lossy(role)
+        );
+    }
+    let table = structure_elements(&pdf, b"Table")[0].1;
+    let groups: Vec<_> = table
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kid| {
+            pdf.get_dictionary(kid.as_reference().unwrap())
+                .unwrap()
+                .get(b"S")
+                .unwrap()
+                .as_name()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(groups, [b"THead".as_slice(), b"TBody", b"TFoot"]);
+    let header = structure_elements(&pdf, b"THead")[0].0;
+    let head_cells: Vec<_> = structure_elements(&pdf, b"TH")
+        .into_iter()
+        .filter(|(_, th)| {
+            let row = pdf
+                .get_dictionary(th.get(b"P").unwrap().as_reference().unwrap())
+                .unwrap();
+            row.get(b"P").unwrap().as_reference().unwrap() == header
+        })
+        .collect();
+    for (_, th) in head_cells {
+        assert_eq!(
+            th.get(b"A")
+                .unwrap()
+                .as_dict()
+                .unwrap()
+                .get(b"Scope")
+                .unwrap()
+                .as_name()
+                .unwrap(),
+            b"Column"
+        );
+        let p = pdf
+            .get_dictionary(
+                th.get(b"K").unwrap().as_array().unwrap()[0]
+                    .as_reference()
+                    .unwrap(),
+            )
+            .unwrap();
+        let pages: std::collections::BTreeSet<_> = p
+            .get(b"K")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|kid| {
+                kid.as_dict()
+                    .unwrap()
+                    .get(b"Pg")
+                    .unwrap()
+                    .as_reference()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(pages.len(), 1, "repeated header must be an artifact");
+    }
+    assert!(structure_elements(&pdf, b"Span")
+        .iter()
+        .any(|(_, span)| span.get(b"Lang").is_ok()));
+    let paragraph = structure_elements(&pdf, b"P")
+        .into_iter()
+        .find(|(_, p)| {
+            p.get(b"K").unwrap().as_array().unwrap().iter().any(|kid| {
+                kid.as_reference().ok().is_some_and(|id| {
+                    pdf.get_dictionary(id)
+                        .unwrap()
+                        .get(b"S")
+                        .unwrap()
+                        .as_name()
+                        .unwrap()
+                        == b"Link"
+                })
+            })
+        })
+        .unwrap()
+        .1;
+    let roles: Vec<_> = paragraph
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kid| {
+            pdf.get_dictionary(kid.as_reference().unwrap())
+                .unwrap()
+                .get(b"S")
+                .unwrap()
+                .as_name()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        roles,
+        [b"Span".as_slice(), b"Link", b"Span", b"Span", b"Span"]
+    );
+    let link = structure_elements(&pdf, b"Link")[0].1;
+    let objr = link
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|kid| kid.as_dict().ok().filter(|kid| kid.get(b"Obj").is_ok()))
+        .unwrap();
+    let annotation = pdf
+        .get_dictionary(objr.get(b"Obj").unwrap().as_reference().unwrap())
+        .unwrap();
+    assert!(annotation.get(b"StructParent").is_ok());
+    assert!(annotation.get(b"Contents").is_ok());
+    for (_, page) in pdf.get_pages() {
+        let page = pdf.get_dictionary(page).unwrap();
+        if page.get(b"Annots").is_ok() {
+            assert_eq!(page.get(b"Tabs").unwrap().as_name().unwrap(), b"S");
+        }
+    }
+}
+
+#[test]
+fn given_ua_input_with_skipped_headings_when_rendering_then_rejects() {
+    assert!(ua_document("<main><h2>Skipped</h2></main>", None)
+        .unwrap_err()
+        .contains("cannot skip a level"));
+}
+
+#[test]
+fn given_a_ua_block_link_when_paragraphs_surround_a_block_then_all_children_keep_reading_order() {
+    let bytes = ua_document(
+        "<main><a href='https://example.com'>Before<div>Middle</div>After</a></main>",
+        None,
+    )
+    .unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let link = structure_elements(&pdf, b"Link")[0].1;
+    let children: Vec<_> = link
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|kid| kid.as_reference().ok())
+        .map(|id| {
+            pdf.get_dictionary(id)
+                .unwrap()
+                .get(b"S")
+                .unwrap()
+                .as_name()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(children, [b"P".as_slice(), b"Div", b"P"]);
+    assert_eq!(structure_elements(&pdf, b"P").len(), 3);
+}
+
+#[test]
+fn given_a_ua_table_with_an_empty_cell_when_rendering_then_keeps_both_column_positions() {
+    let bytes = ua_document("<main><table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td></td><td>Value in B</td></tr></tbody></table></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let body = structure_elements(&pdf, b"TBody")[0].1;
+    let row = pdf
+        .get_dictionary(
+            body.get(b"K").unwrap().as_array().unwrap()[0]
+                .as_reference()
+                .unwrap(),
+        )
+        .unwrap();
+    let cells = row.get(b"K").unwrap().as_array().unwrap();
+    assert_eq!(cells.len(), 2);
+    assert!(pdf
+        .get_dictionary(cells[0].as_reference().unwrap())
+        .unwrap()
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!pdf
+        .get_dictionary(cells[1].as_reference().unwrap())
+        .unwrap()
+        .get(b"K")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn given_ua_table_group_and_row_languages_when_rendering_then_preserves_each_language() {
+    let bytes = ua_document("<main><table><thead><tr><th>Greeting</th></tr></thead><tbody lang='nb'><tr lang='fr'><td>Bonjour</td></tr></tbody></table></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    let body = structure_elements(&pdf, b"TBody")[0].1;
+    assert_eq!(body.get(b"Lang").unwrap().as_str().unwrap(), b"nb");
+    let row = pdf
+        .get_dictionary(
+            body.get(b"K").unwrap().as_array().unwrap()[0]
+                .as_reference()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(row.get(b"Lang").unwrap().as_str().unwrap(), b"fr");
+}
+
+#[test]
+fn given_ua_table_body_and_footer_headings_when_rendering_then_checks_levels_in_reading_order() {
+    let bytes = ua_document("<main><h1>Report</h1><table><thead><tr><th>Section</th></tr></thead><tbody><tr><td><h2>Body</h2></td></tr></tbody><tfoot><tr><td><h3>Footer</h3></td></tr></tfoot></table></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    for role in [b"H1".as_slice(), b"H2", b"H3"] {
+        assert_eq!(structure_elements(&pdf, role).len(), 1);
+    }
+}
+
+#[test]
+fn given_an_unknown_box_paint_flag_when_decoding_then_rejects_before_layout() {
+    let mut command = box_start();
+    let flag = command.len() - 7;
+    command[flag] = 2;
+    let mut bytes = header(VERSION, 120.0, 60.0, 10.0);
+    bytes.extend(command);
+    assert_eq!(push_error(&bytes), "invalid box paint flag");
+}
+
+#[test]
+fn given_tw_records_when_decoding_then_accepts_one_before_children_and_rejects_misplaced_or_duplicate_records(
+) {
+    let tw = record(39, &text(b"text-sm"));
+    for records in [
+        vec![tw.clone()],
+        vec![open(P, 0, &[]), tw.clone(), tw.clone()],
+        vec![open(P, 0, &[]), element_text("x"), tw.clone()],
+    ] {
+        let mut bytes = elements(&[]);
+        bytes.extend(record(29, &[0]));
+        bytes.extend(records.concat());
+        assert_eq!(
+            Decoder::default().push(&bytes).unwrap_err().to_string(),
+            "invalid nesting"
+        );
+    }
+    let mut bytes = elements(&[]);
+    bytes.extend(record(29, &[0]));
+    bytes.extend(open(P, 0, &[]));
+    bytes.extend(tw);
+    bytes.extend(element_text("Utility"));
+    bytes.extend(record(32, &[]));
+    bytes.extend(record(255, &[]));
+    let mut decoder = Decoder::default();
+    decoder.push(&bytes).unwrap();
+    assert_eq!(
+        crate::tests::page_text(
+            &lopdf::Document::load_mem(&decoder.finish().unwrap()).unwrap(),
+            1
+        ),
+        "Utility"
+    );
+}
+
+#[test]
+fn given_reversed_grid_rows_in_ua_when_rendered_then_keeps_source_text_links_and_destination_coordinates(
+) {
+    let bytes = ua_document("<main><div style='height:100pt'><div style='display:grid;grid-template-columns:100pt;grid-template-rows:20pt 20pt'><div id='first' style='grid-row:2'><a href='#second'>FIRST</a></div><div id='second' style='grid-row:1'><a href='#first'>SECOND</a></div></div></div></main>", None).unwrap();
+    let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+    assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "FIRST\nSECOND");
+    assert_eq!(structure_elements(&pdf, b"Link").len(), 2);
+    let first = destination(&pdf, b"first");
+    let second = destination(&pdf, b"second");
+    assert_eq!(first, (second.0, 12.0, 148.0));
+    assert_eq!(second.1, 12.0);
+    assert_eq!(second.2, 168.0);
 }

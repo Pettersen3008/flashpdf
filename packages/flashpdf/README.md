@@ -121,6 +121,25 @@ FlashPDF owns this JSX runtime, so it has no framework dependency. Add `jsxImpor
 const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
 ```
 
+## Tailwind without a build
+
+The `tw` prop in JSX, or the `tw` attribute in HTML, takes Tailwind v4 utility names and applies the declarations Tailwind's default theme compiles them to, with no Tailwind install or build step. Its declarations go ahead of `style`, so `style` wins a conflict, and conflicts follow Tailwind utility order regardless of token order.
+
+```tsx
+<div tw="flex justify-between p-4 bg-gray-100 border border-gray-200 rounded-lg">
+  <span tw="text-sm font-semibold text-gray-600">Total</span>
+  <span tw="text-lg font-bold">EUR 1200.00</span>
+</div>
+```
+
+It covers spacing (`p-*`, `m-*`, `gap-*`, including `px` and quarter steps), sizing (`w-*`, `h-*`, `size-*`, `min-*`, `max-*`, `basis-*`, fractions, `full`, container sizes), flex (`flex`, `flex-col`, `flex-wrap`, `flex-1`, `grow`, `shrink-0`, `justify-*`, `items-*`, `self-*`, `content-*`), typography (`text-xs` to `text-9xl`, `font-*` weights and families, `leading-*`, `tracking-*`, `italic`, `underline`, `uppercase`, `whitespace-*`, `text-left` and the other alignments), colours from the default palette (`text-*`, `bg-*`, `border-*`, `decoration-*`, `black`, `white`, `transparent`), borders (`border`, `border-2`, `border-t`, `border-dashed`), radius (`rounded-*`, including `rounded-full`, and its corners), `block`, `opacity-*`, `list-*`, and arbitrary values such as `w-[120px]`, `text-[#0a7]`, and `[orphans:3]`.
+
+Unknown utilities and variants, such as `md:` or `hover:`, reject with the token and element path. Utilities that style children, such as `space-y-*` and `divide-y`, need the built stylesheet. Unsupported display, reverse flex, baseline alignment, and modifier utilities reject.
+
+Arbitrary values support underscores for spaces, `\_` for a literal underscore, and `length:`, `color:`, `number:`, `percentage:`, and `family-name:` hints. Important modifiers, comments, declaration separators, and other escapes reject. Arbitrary values must fit FlashPDF’s CSS subset, so negative margins and percentage font sizes still reject. Tailwind’s private `--tw-*` custom properties are reserved.
+
+Each `tw` string is limited to 16 KiB, 256 utilities, 1024 bytes per utility, and 16 bracket or parenthesis levels.
+
 ## Styling with CSS
 
 Compile stylesheets with the consuming app's build tool and pass the resulting string to `render`:
@@ -147,7 +166,9 @@ FlashPDF rejects any declaration it cannot honour on an element it renders, nami
 | `PageNumber` | `() => Element`                                                                           | Resolves to the current page number inside a header or footer.                                        |
 | `TotalPages` | `() => Element`                                                                           | Resolves to the final page count inside a header or footer.                                           |
 
-`RenderOptions` accepts page format, margin, stylesheets, embedded fonts, a one-line repeating `header` and `footer`, `metadata`, and `tagged`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. Tagged mode requires a language and writes paragraph-line and figure tags with image `alt` text; it is not PDF/UA conformant.
+`RenderOptions` accepts page format, margin, stylesheets, embedded fonts, repeating `header` and `footer`, `metadata`, `tagged`, and `pdfua`. Margins are points, and the default is 36. `PdfMetadata` accepts title, author, subject, keywords, and language. `tagged: true` requires a language and writes basic paragraph-line and figure tags.
+
+`pdfua: true` enables PDF/UA-1 semantic tags for headings, paragraphs across pages, lists, tables, links, figures, and inline language changes. It requires a nonempty `metadata.title`, `metadata.language`, embedded fonts selected with `fontFamily`, and explicit image `alt`. An empty `alt` marks a decorative image. Headings start at `h1` and cannot skip levels. Use `lang="nb"` for a language change and `scope="row"`, `"col"`, or `"both"` on a `th`, defaulting to `"col"`. Headers, footers, page numbers, and repeated table headers and footers are artifacts. Combine it with `pdfa: "2u"` or `"3b"`; 3b also supports attachments. Authors must check the document's reading order and the meaning of its headings, table headers, and alt text.
 
 ```tsx
 import { PageNumber, TotalPages } from "@pettersen3008/flashpdf";

@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use super::{
-    element_column, get, inherit, is, p, row_only, sizeless, static_only, Box, CellPaint, Column,
-    Compiler, Ctx, Error, Result, Sink, Slot, Styled, StyledNode, BLACK,
+    element_column, get, grid_applicability, inherit, is, p, sizeless, static_only, Box, CellPaint,
+    Column, Compiler, Ctx, Error, Result, Sink, Slot, Styled, StyledNode, BLACK,
 };
 use crate::css::style::{border_spacing, box_style, Rgb};
 
@@ -215,9 +215,10 @@ impl<S: Sink> Compiler<S> {
         self.page_break(s, false, depth)?;
         let next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
         let paint = box_style(s, next.size, next.opacity)?;
-        if paint.is_some_and(|paint| {
+        if paint.as_ref().is_some_and(|paint| {
             paint.margin[1] != 0.0
                 || paint.margin[3] != 0.0
+                || paint.paint_effects.is_some()
                 || paint.background.is_some()
                 || paint
                     .padding
@@ -251,7 +252,7 @@ impl<S: Sink> Compiler<S> {
                 let state = match group.group {
                     None => inner.clone(),
                     Some(element) => (|| {
-                        row_only(&element.style, false)?;
+                        grid_applicability(element, &inner)?;
                         static_only(&element.style, &element.el.tag)?;
                         if is(&element.style, p!("breakBefore"), "page")
                             || is(&element.style, p!("breakAfter"), "page")
@@ -280,7 +281,7 @@ impl<S: Sink> Compiler<S> {
                 let count = group.rows.len();
                 for (index, tr) in group.rows.iter().enumerate() {
                     let row = (|| {
-                        row_only(&tr.style, false)?;
+                        grid_applicability(tr, &state)?;
                         static_only(&tr.style, "tr")?;
                         if is(&tr.style, p!("breakBefore"), "page")
                             || is(&tr.style, p!("breakAfter"), "page")
@@ -447,7 +448,11 @@ impl<S: Sink> Compiler<S> {
         } else {
             element_column(node)?
         };
-        if let Some(top) = paint.map(|paint| paint.margin[0]).filter(|top| *top != 0.0) {
+        if let Some(top) = paint
+            .as_ref()
+            .map(|paint| paint.margin[0])
+            .filter(|top| *top != 0.0)
+        {
             self.writer.spacer(top)?;
         }
         // Element path of each table child, indexed as the renderer reports an overflowing row.
@@ -534,6 +539,26 @@ impl<S: Sink> Compiler<S> {
         repeated: bool,
         wheres: &mut Vec<(Rc<str>, bool)>,
     ) -> Result<()> {
+        let structure = group
+            .rows
+            .first()
+            .map_or(0, |row| table.rows[*row].state.structure);
+        let structure = if structure == 0 {
+            0
+        } else {
+            self.structure_node(
+                match group.group.map(|group| group.el.tag.as_str()) {
+                    Some("thead") => "THead",
+                    Some("tfoot") => "TFoot",
+                    _ => "TBody",
+                },
+                structure,
+            )
+        };
+        if structure != 0 {
+            self.structure[structure as usize - 1].lang =
+                group.group.and_then(|group| group.el.lang.clone());
+        }
         let style = group.group.map(|group| &*group.style);
         let says = |prop, value| style.is_some_and(|style| is(style, prop, value));
         if !repeated && says(p!("breakBefore"), "avoid") {
@@ -562,7 +587,7 @@ impl<S: Sink> Compiler<S> {
                 self.writer.stack_start(0.0, false)?;
             }
             for &row in &rows[start..end] {
-                self.row(table, row, joined)?;
+                self.row(table, row, joined, structure)?;
             }
             if joined {
                 self.writer.stack_end(false)?;
@@ -578,14 +603,22 @@ impl<S: Sink> Compiler<S> {
         Ok(())
     }
 
-    fn row(&mut self, table: &Table, index: usize, joined: bool) -> Result<()> {
+    fn row(&mut self, table: &Table, index: usize, joined: bool, parent: u32) -> Result<()> {
         let item = &table.rows[index];
+        let structure = if parent == 0 {
+            0
+        } else {
+            self.structure_node("TR", parent)
+        };
+        if structure != 0 {
+            self.structure[structure as usize - 1].lang = item.node.el.lang.clone();
+        }
         (|| {
             if is(&item.node.style, p!("breakBefore"), "avoid") {
                 self.writer.avoid()?;
             }
             // Collapsed borders belong to the cells.
-            let own = item.paint.map(|paint| {
+            let own = item.paint.clone().map(|paint| {
                 if table.collapsed {
                     Box {
                         border: [0.0; 4],
@@ -595,15 +628,15 @@ impl<S: Sink> Compiler<S> {
                     paint
                 }
             });
-            let shaped = own.is_some_and(|own| {
-                own.margin.iter().chain(&own.padding).chain(&own.border).any(|edge| *edge != 0.0)
+            let shaped = own.as_ref().is_some_and(|own| {
+                own.paint_effects.is_some() || own.margin.iter().chain(&own.padding).chain(&own.border).any(|edge| *edge != 0.0)
             });
             if joined && shaped {
                 return Err(Error::new(
                     "a <tr> that rowSpan joins to other rows takes only a background; style its cells",
                 ));
             }
-            let background = own.and_then(|own| own.background);
+            let background = own.as_ref().and_then(|own| own.background);
             // Joined rows lay out as one block, so each row's background paints in its own cells.
             let value = if joined || !(shaped || background.is_some()) {
                 None
@@ -620,6 +653,7 @@ impl<S: Sink> Compiler<S> {
                         paint.background = background;
                     }
                     let context = Ctx {
+                        structure,
                         in_row: true,
                         cell: Some(paint),
                         ..item.state.clone()

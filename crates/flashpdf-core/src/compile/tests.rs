@@ -73,6 +73,7 @@ fn rejects(nodes: Vec<Node>) -> String {
 /// compile.unit.test.mjs `run`: a 12pt black run in a font slot.
 fn r(font: u32, value: &str) -> Run {
     Run {
+        structure: 0,
         font,
         size: 12.0,
         line_height: 0.0,
@@ -116,6 +117,8 @@ fn names(records: &[Record]) -> Vec<&'static str> {
             Record::RowEnd => "rowEnd",
             Record::FlexStart(..) => "flexStart",
             Record::FlexEnd => "flexEnd",
+            Record::GridStart(..) => "gridStart",
+            Record::GridEnd => "gridEnd",
             Record::PageBreak => "pageBreak",
             Record::Repeat { .. } => "repeat",
             Record::Paragraph { .. } => "paragraph",
@@ -146,7 +149,7 @@ fn boxes(records: &[Record]) -> Vec<Box> {
     records
         .iter()
         .filter_map(|record| match record {
-            Record::BoxStart(value) => Some(*value),
+            Record::BoxStart(value) => Some(value.clone()),
             _ => None,
         })
         .collect()
@@ -278,6 +281,7 @@ fn given_a_link_around_an_image_when_compiling_then_emits_the_image_record_with_
     assert_eq!(
         records(vec![link]),
         [Record::Image {
+            structure: 0,
             slot: 7,
             width: Some(Dimension {
                 kind: 2,
@@ -1705,4 +1709,244 @@ fn given_a_fixed_box_in_the_body_when_compiling_then_its_records_follow_the_body
         ]
     );
     assert!(matches!(records[2], Record::Repeat { fixed: true, .. }));
+}
+
+#[test]
+fn given_grid_container_properties_on_inline_text_when_compiling_then_rejects_with_value_and_path()
+{
+    for (property, name, value) in [
+        ("grid-template-columns", "gridTemplateColumns", "1fr"),
+        ("grid-template-rows", "gridTemplateRows", "auto"),
+        ("grid-auto-columns", "gridAutoColumns", "10pt"),
+        ("grid-auto-rows", "gridAutoRows", "10pt"),
+        ("grid-auto-flow", "gridAutoFlow", "column"),
+        ("justify-items", "justifyItems", "center"),
+    ] {
+        assert_eq!(
+            rejects(vec![node(
+                "p",
+                "",
+                vec![node(
+                    "span",
+                    &format!("{property}: {value}"),
+                    vec![text("foo")]
+                )],
+            )]),
+            format!("{name}: {value} applies only to a grid container on <span> in <p>")
+        );
+    }
+}
+
+#[test]
+fn given_grid_declarations_on_table_parts_when_compiling_then_rejects_with_value_and_path() {
+    for tag in ["table", "thead", "tbody", "tfoot", "tr", "td", "th"] {
+        for (style, reason) in [
+            (
+                "display: grid",
+                format!("display: grid is not supported on <{tag}>; use a wrapping div"),
+            ),
+            (
+                "grid-template-columns: 1fr",
+                "gridTemplateColumns: 1fr applies only to a grid container".into(),
+            ),
+            (
+                "grid-column-start: 2",
+                "gridColumnStart: 2 applies only to a grid item".into(),
+            ),
+        ] {
+            if style == "display: grid" && matches!(tag, "td" | "th") {
+                continue;
+            }
+            let group = if matches!(tag, "thead" | "tbody" | "tfoot") {
+                tag
+            } else {
+                "tbody"
+            };
+            let cell = if tag == "th" { "th" } else { "td" };
+            let own = |part| if tag == part { style } else { "" };
+            let input = node(
+                "table",
+                own("table"),
+                vec![node(
+                    group,
+                    own(group),
+                    vec![node(
+                        "tr",
+                        own("tr"),
+                        vec![node(cell, own(cell), vec![text("x")])],
+                    )],
+                )],
+            );
+            let path = match tag {
+                "table" => "on <table>".into(),
+                "thead" | "tbody" | "tfoot" => format!("on <{tag}> in <table>"),
+                "tr" => "on <tr> in <tbody> > <table>".into(),
+                _ => format!("on <{tag}> in <tr> > <tbody> > <table>"),
+            };
+            assert_eq!(rejects(vec![input]), format!("{reason} {path}"));
+        }
+    }
+}
+
+#[test]
+fn given_grid_display_on_spans_and_table_cells_when_compiling_then_keeps_their_grid_content() {
+    for tag in ["span", "td", "th"] {
+        let container = node(
+            tag,
+            "display: grid; grid-template-columns: 1fr 1fr",
+            vec![node("span", "grid-column-start: 2", vec![text("foo")])],
+        );
+        let input = if tag == "span" {
+            node("div", "", vec![container])
+        } else {
+            node("table", "", vec![node("tr", "", vec![container])])
+        };
+        let records = records(vec![input]);
+        let grids: Vec<_> = records
+            .iter()
+            .filter_map(|record| match record {
+                Record::GridStart(grid, items) => Some((grid, items)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].0.columns.len(), 2);
+        assert_eq!(grids[0].1.len(), 1);
+        assert_eq!(grids[0].1[0].column[0], crate::grid::GridLine::Line(2));
+        assert_eq!(paragraphs(&records)[0][0].text, "foo");
+    }
+}
+
+#[test]
+fn given_a_table_grid_item_with_vertical_margins_when_compiling_then_wraps_table_and_margins_as_one_item(
+) {
+    let records = records(vec![node(
+        "div",
+        "display: grid; grid-template-columns: 1fr 1fr",
+        vec![
+            node(
+                "table",
+                "margin-top: 10pt; margin-bottom: 20pt; grid-column-start: 2",
+                vec![node("tr", "", vec![node("td", "", vec![text("x")])])],
+            ),
+            node("div", "", vec![text("sibling")]),
+        ],
+    )]);
+    assert_eq!(
+        names(&records),
+        [
+            "gridStart",
+            "stackStart",
+            "spacer",
+            "tableStart",
+            "rowStart",
+            "stackStart",
+            "paragraph",
+            "stackEnd",
+            "rowEnd",
+            "tableEnd",
+            "spacer",
+            "stackEnd",
+            "boxStart",
+            "paragraph",
+            "boxEnd",
+            "gridEnd",
+        ]
+    );
+    assert_eq!(records[2], Record::Spacer(10.0));
+    assert_eq!(records[10], Record::Spacer(20.0));
+    let Record::GridStart(_, items) = &records[0] else {
+        panic!("missing grid");
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].column[0], crate::grid::GridLine::Line(2));
+}
+
+#[test]
+fn given_nested_grids_when_compiling_then_marks_only_their_own_wrappers_without_assigning_height() {
+    let inner = || {
+        node(
+            "div",
+            "display: grid; grid-template-rows: 1fr 1fr",
+            vec![
+                node("div", "", vec![text("a")]),
+                node("div", "", vec![text("b")]),
+            ],
+        )
+    };
+    let records = records(vec![node(
+        "div",
+        "display: grid; grid-template-rows: 100pt; height: 100pt",
+        vec![inner(), node("div", "", vec![inner()])],
+    )]);
+    let grids: Vec<_> = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::GridStart(grid, _) => Some(grid),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(grids.len(), 3);
+    assert!(grids[0].boxed);
+    assert_eq!(
+        (grids[0].min_height, grids[0].max_height),
+        (100.0, Some(100.0))
+    );
+    assert!(grids[1].boxed);
+    assert!(!grids[2].boxed);
+    for grid in &grids[1..] {
+        assert_eq!((grid.min_height, grid.max_height), (0.0, None));
+    }
+}
+
+#[test]
+fn given_a_grid_with_min_height_above_max_height_when_compiling_then_the_minimum_wins() {
+    let records = records(vec![node(
+        "div",
+        "display: grid; min-height: 30pt; max-height: 10pt",
+        vec![text("x")],
+    )]);
+    let grid = records
+        .iter()
+        .find_map(|record| match record {
+            Record::GridStart(grid, _) => Some(grid),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!((grid.min_height, grid.max_height), (30.0, Some(30.0)));
+}
+
+#[test]
+fn given_percentage_image_widths_when_compiling_a_grid_item_then_preserves_them_for_its_grid_area()
+{
+    let image = with(el("img", "width: 50%; max-width: 80%", vec![]), |image| {
+        image.picture = Some(Picture::Image(0))
+    });
+    let records = records(vec![node(
+        "div",
+        "display: grid; grid-template-columns: 100pt",
+        vec![image],
+    )]);
+    let (width, max) = records
+        .iter()
+        .find_map(|record| match record {
+            Record::Image {
+                width, max_width, ..
+            } => Some((*width, *max_width)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (width, max),
+        (
+            Some(Dimension {
+                kind: 2,
+                value: 50.0
+            }),
+            Some(Dimension {
+                kind: 2,
+                value: 80.0
+            })
+        )
+    );
 }

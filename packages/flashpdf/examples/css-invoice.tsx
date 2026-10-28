@@ -1,4 +1,4 @@
-import { render } from "@pettersen3008/flashpdf";
+import { render, type RenderOptions } from "@pettersen3008/flashpdf";
 
 import styles from "./invoice.module.css";
 import invoiceCss from "./invoice.module.css?inline";
@@ -10,9 +10,12 @@ type Invoice = {
 	items: readonly { id: string; name: string; total: string }[];
 };
 
-export function cssInvoice(invoice: Invoice) {
+export function cssInvoice(
+	invoice: Invoice,
+	options?: Pick<RenderOptions, "fonts" | "metadata" | "tagged" | "pdfua" | "pdfa">,
+) {
 	return render(
-		<main className={styles.invoice}>
+		<main className={styles.invoice} style={{ fontFamily: options?.fonts?.[0]?.family }}>
 			<header className={styles.header}>
 				<div>
 					<h1>{invoice.title}</h1>
@@ -41,6 +44,11 @@ export function cssInvoice(invoice: Invoice) {
 				</tbody>
 			</table>
 		</main>,
-		{ pageFormat: "A4", margin: 36, stylesheets: [invoiceCss] },
+		{
+			pageFormat: "A4",
+			margin: 36,
+			...options,
+			stylesheets: [invoiceCss],
+		},
 	);
 }

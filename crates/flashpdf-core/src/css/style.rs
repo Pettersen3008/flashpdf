@@ -8,11 +8,13 @@ mod boxes;
 mod color;
 mod decoration;
 mod font;
+pub mod grid;
 mod length;
 mod list;
 mod normalize;
 
-pub use boxes::{box_size, box_style, position, radius_of, Box, Position, Size};
+pub use boxes::{box_size, box_style, effects, position, radius_of, Box, Position, Size};
+pub(crate) use color::color_alpha;
 pub use color::{color, Rgb};
 pub use decoration::{decoration, decoration_color};
 pub use font::{
@@ -245,6 +247,7 @@ const KEYWORDS: [(Prop, &[&str]); 5] = [
         prop!("justifyContent"),
         &[
             "normal",
+            "stretch",
             "flex-start",
             "start",
             "flex-end",
@@ -304,8 +307,40 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
     }
     // Validated after normalize, so `inherit` and `initial` have become values.
     let mut result = normalize::normalize(value, parent)?;
-    if !absent_or(result.get(prop!("display")), &["block", "flex"]) {
-        return Err("invalid display".into());
+    for (key, value) in &result.0 {
+        let Key::Prop(prop) = key else {
+            continue;
+        };
+        if *prop == prop!("perspective") || *prop == prop!("transformStyle") {
+            return Err(format!(
+                "unsupported {}: {value} (only 2D transforms are supported)",
+                prop.name()
+            )
+            .into());
+        }
+        let allowed = if *prop == prop!("overflow") {
+            &["visible", "hidden"][..]
+        } else if *prop == prop!("transformBox") {
+            &["view-box"][..]
+        } else {
+            continue;
+        };
+        if !allowed.iter().any(|word| value.is(word)) {
+            return Err(format!("unsupported {}: {value}", prop.name()).into());
+        }
+    }
+    result.0.retain(|(key, value)| {
+        !matches!(key, Key::Prop(prop)
+        if ((*prop == prop!("transform") || *prop == prop!("clipPath")) && value.is("none"))
+        || (*prop == prop!("overflow") && value.is("visible")))
+    });
+    effects(&result, 12.0)?;
+    if !absent_or(result.get(prop!("display")), &["block", "flex", "grid"]) {
+        return Err(format!(
+            "invalid display: {} (use block, flex, or grid)",
+            result.get(prop!("display")).unwrap()
+        )
+        .into());
     }
     if !absent_or(result.get(prop!("flexDirection")), &["row", "column"]) {
         return Err("invalid flex direction".into());
@@ -543,13 +578,53 @@ pub fn style(value: &Cascaded, parent: &Style) -> Result<Style, Message> {
             corner(value, 12.0)?;
         }
     }
-    if let Some(background) = result.get(prop!("backgroundColor")).and_then(Value::text) {
-        let lower = background.to_ascii_lowercase();
-        if lower.contains("gradient(") || lower.contains("url(") {
+    let mut effects = false;
+    for (key, value) in &result.0 {
+        let Key::Prop(prop) = key else {
+            continue;
+        };
+        let defaults = if *prop == prop!("backgroundSize") {
+            &["auto", "auto auto"][..]
+        } else if *prop == prop!("backgroundPosition") {
+            &["0% 0%", "0 0", "0%", "0"][..]
+        } else {
+            if (*prop == prop!("boxShadow") || *prop == prop!("backgroundImage"))
+                && !value.is("none")
+            {
+                if value.text().is_none() {
+                    return Err(format!("invalid {}: {value}", prop.name()).into());
+                }
+                effects = true;
+            }
+            continue;
+        };
+        if !value.text().is_some_and(|s| defaults.contains(&s)) {
             return Err(format!(
-                "unsupported background: {background} (gradients and background images are not drawn; use a solid colour)"
-            ).into());
+                "unsupported {}: {value}; only the default is supported",
+                prop.name()
+            )
+            .into());
         }
+    }
+    if effects {
+        crate::backgrounds::parse(
+            result
+                .get(prop!("boxShadow"))
+                .and_then(Value::text)
+                .unwrap_or("none"),
+            result
+                .get(prop!("backgroundImage"))
+                .and_then(Value::text)
+                .unwrap_or("none"),
+            0.0,
+            [0; 3],
+        )?;
+    }
+    if result.0.iter().any(|(key, _)| {
+        key.name().starts_with("grid") || matches!(key.name(), "justifyItems" | "justifySelf")
+    }) {
+        grid::container(&result, 12.0)?;
+        grid::item(&result)?;
     }
     Ok(result)
 }

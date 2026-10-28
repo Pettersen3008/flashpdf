@@ -63,6 +63,8 @@ FlashPDF rejects what it cannot draw and names the element. Each row below shows
 
 ## Tailwind v4
 
+For utilities on single elements, the `tw` prop needs no build at all; see [Tailwind without a build](../packages/flashpdf/README.md#tailwind-without-a-build). For utilities shared by the CSS subset, it gives the same bytes as the built stylesheet. Use the build below for variants and for utilities that style children.
+
 Compile with the Tailwind CLI, then pass the CSS to `render`. Import the theme and the utilities without preflight, which is Tailwind's own way to leave the browser reset out. Its layers, `:root` theme variables, nested `@media`, `@supports` fallbacks, and `@property` defaults all render. `examples/css-integrations/tailwind.mjs` builds and renders an invoice this way, and with the theme inline, and checks both give the same bytes.
 
 ```css
@@ -335,3 +337,46 @@ Four differences cause most surprises:
 - `justifyContent` and `alignItems` work per flex line, and `flexWrap: "wrap"` wraps a row into lines that break across pages. `wrap-reverse` rejects. See [CSS.md](../CSS.md) for sizing and alignment limits.
 
 `Canvas` and `Note` have no equivalent. Use `ul`, `ol`, and `li` for lists; they number themselves and keep each marker with its first line.
+
+
+<a id="pdfua"></a>
+## PDF/UA-1
+
+Set `pdfua: true` to enable semantic tagging. Supply a nonempty title and a language, register fonts, and select those fonts in the body and page furniture. Built-in Helvetica, Times, and Courier reject because they have no embedded font program.
+
+```tsx
+const pdf = await render(
+  <main style={{ fontFamily: "Invoice" }}>
+    <h1>Invoice 42</h1>
+    <p>Thank you. <span lang="nb">Takk for handelen.</span></p>
+    <ul><li>Payment due in 30 days</li></ul>
+    <table>
+      <thead><tr><th scope="col">Item</th><th scope="col">Amount</th></tr></thead>
+      <tbody><tr><td>Consulting</td><td>100.00</td></tr></tbody>
+    </table>
+    <p><a href="https://example.com/pay">Pay invoice 42</a></p>
+  </main>,
+  {
+    pdfua: true,
+    pdfa: "3b",
+    fonts: [{ family: "Invoice", regular, bold }],
+    metadata: { title: "Invoice 42", language: "en-US" },
+  },
+);
+```
+
+`pdfua` enables tagging even when `tagged` is absent. `tagged: true` alone keeps the basic tagging format. PDF/UA keeps a paragraph's lines in one `P` across page breaks. It writes `H1` through `H6`, `L`/`LI`/`Lbl`/`LBody`, table groups and cells, and links with annotation object references. A `th` takes `scope="row"`, `"col"`, or `"both"`, with `"col"` as the default. Use row scope for row headers and both for a header that serves both axes. Spanning cells retain their row and column spans. Complex table relationships need an author review.
+
+Every image needs an explicit `alt`; use `alt=""` for decoration. SVG drawings need an `aria-label`, a `title`, or an explicit empty label. Inline `lang` attributes create `Span` elements with their own language. The document language applies elsewhere. Page headers, footers, and page numbers are pagination artifacts. Continued table pages mark repeated header and footer content as artifacts.
+
+PDF/UA can combine with `pdfa: "2u"` or `"3b"`. Use 3b for attachments or Factur-X. The XMP records both standards and declares the PDF/UA schema when PDF/A needs it.
+
+The integration tests write invoices, a report spanning pages, and combined PDF/A files to `dist/pdfua/`. Validate them with [veraPDF](https://docs.verapdf.org/cli/validation/):
+
+```sh
+verapdf --flavour ua1 dist/pdfua/*.pdf
+verapdf --flavour 3b dist/pdfua/pdfa3b.pdf
+verapdf --flavour 2u dist/pdfua/pdfa2u.pdf
+```
+
+veraPDF checks machine-verifiable rules. Review reading order, image descriptions, heading levels, and table relationships with an accessibility checker and a screen reader before distributing a document that must meet PDF/UA.

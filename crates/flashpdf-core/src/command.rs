@@ -1,18 +1,18 @@
 use std::mem::discriminant;
 
 use crate::document::{
-    Block, BoxNode, Cell, Document, Element, FlexNode, ImageNode, Paragraph, Row, Spacer, Stack,
-    Table,
+    Block, BoxNode, Cell, Document, Element, FlexNode, GridNode, ImageNode, Paragraph, Row, Spacer,
+    Stack, Table,
 };
 use crate::{
-    BoxSize, BoxStyle, Direction, Flex, FlexItem, Fraction, ImageSize, Percent, Pt, TextAlign,
-    TextRun, TextStyle, VerticalAlign,
+    BoxSize, BoxStyle, Direction, Flex, FlexItem, Fraction, Grid, GridItem, ImageSize, Percent, Pt,
+    TextAlign, TextRun, TextStyle, VerticalAlign,
 };
 
 pub(crate) const MAX_LAYOUT_DEPTH: usize = 64;
 pub(crate) const MAX_COLUMNS: usize = 256;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Command<'a> {
     /// One run in one style; the parser lowers it to a one-run `Paragraph`.
     Text {
@@ -34,6 +34,11 @@ pub enum Command<'a> {
         style: BoxStyle,
         size: BoxSize,
     },
+    EffectBoxStart {
+        style: BoxStyle,
+        size: BoxSize,
+        effects: &'a crate::BoxEffects,
+    },
     BoxEnd,
     Spacer(Pt),
     StackStart {
@@ -52,6 +57,11 @@ pub enum Command<'a> {
         items: &'a [FlexItem],
     },
     FlexEnd,
+    GridStart {
+        style: &'a Grid,
+        items: &'a [GridItem],
+    },
+    GridEnd,
     /// The first `header_rows` children repeat at the top of every page the table continues on,
     /// the next `footer_rows` after the last body row of every page. Body rows follow them.
     TableStart {
@@ -108,8 +118,9 @@ pub(crate) enum OwnedCommand {
         String,
         Vec<TextRun>,
         Vec<String>,
+        Vec<u32>,
     ),
-    BoxStart(BoxStyle, BoxSize),
+    BoxStart(BoxStyle, BoxSize, Option<std::rc::Rc<crate::BoxEffects>>),
     BoxEnd,
     Spacer(Pt),
     StackStart(Pt),
@@ -118,6 +129,8 @@ pub(crate) enum OwnedCommand {
     RowEnd,
     FlexStart(Flex, Vec<FlexItem>),
     FlexEnd,
+    GridStart(Grid, Vec<GridItem>),
+    GridEnd,
     TableStart(u16, u16, ColumnWidth),
     TableEnd,
     Image(
@@ -129,6 +142,7 @@ pub(crate) enum OwnedCommand {
         Option<String>,
         String,
         u8,
+        u32,
     ),
     Anchor(u16),
 }
@@ -136,7 +150,7 @@ pub(crate) enum OwnedCommand {
 impl OwnedCommand {
     fn borrow(&self) -> Command<'_> {
         match self {
-            Self::Paragraph((align, direction), [orphans, widows], text, runs, links) => {
+            Self::Paragraph((align, direction), [orphans, widows], text, runs, links, _) => {
                 Command::Paragraph {
                     align: *align,
                     direction: *direction,
@@ -147,9 +161,16 @@ impl OwnedCommand {
                     links,
                 }
             }
-            Self::BoxStart(style, size) => Command::BoxStart {
-                style: *style,
-                size: *size,
+            Self::BoxStart(style, size, effects) => match effects {
+                Some(effects) => Command::EffectBoxStart {
+                    style: style.clone(),
+                    size: *size,
+                    effects: effects.as_ref(),
+                },
+                None => Command::BoxStart {
+                    style: style.clone(),
+                    size: *size,
+                },
             },
             Self::BoxEnd => Command::BoxEnd,
             Self::Spacer(value) => Command::Spacer(*value),
@@ -162,13 +183,15 @@ impl OwnedCommand {
                 items,
             },
             Self::FlexEnd => Command::FlexEnd,
+            Self::GridStart(style, items) => Command::GridStart { style, items },
+            Self::GridEnd => Command::GridEnd,
             Self::TableStart(header_rows, footer_rows, width) => Command::TableStart {
                 header_rows: *header_rows,
                 footer_rows: *footer_rows,
                 width: *width,
             },
             Self::TableEnd => Command::TableEnd,
-            Self::Image(slot, width, height, max_width, max_height, link, alt, alpha) => {
+            Self::Image(slot, width, height, max_width, max_height, link, alt, alpha, _) => {
                 Command::Image {
                     slot: *slot,
                     width: *width,
@@ -186,13 +209,16 @@ impl OwnedCommand {
 }
 
 pub(crate) trait CommandSource {
+    fn structure(&self, _index: usize) -> Option<&[u32]> {
+        None
+    }
     fn command(&self, index: usize) -> Option<Command<'_>>;
     fn len(&self) -> usize;
 }
 
 impl<'command> CommandSource for [Command<'command>] {
     fn command(&self, index: usize) -> Option<Command<'_>> {
-        self.get(index).copied()
+        self.get(index).cloned()
     }
 
     fn len(&self) -> usize {
@@ -201,6 +227,16 @@ impl<'command> CommandSource for [Command<'command>] {
 }
 
 impl CommandSource for [OwnedCommand] {
+    fn structure(&self, index: usize) -> Option<&[u32]> {
+        match self.get(index)? {
+            OwnedCommand::Paragraph(_, _, _, _, _, ids) if !ids.is_empty() => Some(ids),
+            OwnedCommand::Image(_, _, _, _, _, _, _, _, id) if *id != 0 => {
+                Some(std::slice::from_ref(id))
+            }
+            _ => None,
+        }
+    }
+
     fn command(&self, index: usize) -> Option<Command<'_>> {
         self.get(index).map(OwnedCommand::borrow)
     }
@@ -257,7 +293,9 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
     }
 
     fn parse_element(&mut self, depth: usize) -> Result<Element<'a>, CommandParseError> {
-        match self.next()? {
+        let structure = self.source.structure(self.index);
+        let command = self.next()?;
+        let mut element = match command {
             Command::Text { text, style } => Ok(Element::Paragraph(Paragraph {
                 align: style.align,
                 direction: Direction::Ltr,
@@ -275,6 +313,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     typography: style.typography,
                 }],
                 links: &[],
+                structure: &[],
             })),
             Command::Paragraph {
                 align,
@@ -292,6 +331,7 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 text,
                 runs: runs.to_vec(),
                 links,
+                structure: &[],
             })),
             Command::Image {
                 slot,
@@ -311,16 +351,25 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                 link,
                 alt,
                 alpha,
+                structure: 0,
             })),
             Command::Spacer(height) => Ok(Element::Spacer(Spacer { height })),
             Command::Anchor(slot) => Ok(Element::Anchor(slot)),
-            Command::BoxStart { style, size } => {
+            Command::BoxStart { ref style, size }
+            | Command::EffectBoxStart {
+                ref style, size, ..
+            } => {
+                let effects = match &command {
+                    Command::EffectBoxStart { effects, .. } => Some(*effects),
+                    _ => None,
+                };
                 self.check_depth(depth)?;
                 let children = self.parse_children(Command::BoxEnd, depth + 1)?;
                 Ok(Element::Box(BoxNode {
-                    style,
+                    style: style.clone(),
                     size,
                     children,
+                    effects,
                 }))
             }
             Command::StackStart { gap } => {
@@ -387,6 +436,28 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
                     children,
                 }))
             }
+            Command::GridStart { style, items } => {
+                self.check_depth(depth)?;
+                style
+                    .validate()
+                    .map_err(|_| CommandParseError::InvalidRow)?;
+                crate::protocol::grid::validate_items(items)
+                    .map_err(|_| CommandParseError::InvalidRow)?;
+                let children = self.parse_children(Command::GridEnd, depth + 1)?;
+                if children
+                    .iter()
+                    .filter(|child| !matches!(child, Element::Anchor(_)))
+                    .count()
+                    != items.len()
+                {
+                    return Err(CommandParseError::InvalidRow);
+                }
+                Ok(Element::Grid(GridNode {
+                    style,
+                    items,
+                    children,
+                }))
+            }
             Command::TableStart {
                 header_rows,
                 footer_rows,
@@ -413,10 +484,19 @@ impl<'a, S: CommandSource + ?Sized> CommandParser<'a, S> {
             | Command::StackEnd
             | Command::RowEnd
             | Command::FlexEnd
+            | Command::GridEnd
             | Command::TableEnd
             | Command::PageBreak
             | Command::Avoid => Err(CommandParseError::UnexpectedCommand),
+        }?;
+        if let Some(ids) = structure {
+            match &mut element {
+                Element::Paragraph(p) if ids.len() == p.runs.len() => p.structure = ids,
+                Element::Image(image) if ids.len() == 1 => image.structure = ids[0],
+                _ => return Err(CommandParseError::UnexpectedCommand),
+            }
         }
+        Ok(element)
     }
 
     /// Comparing variants rather than whole commands keeps `Command`'s `PartialEq` out of the WASM.
@@ -476,6 +556,7 @@ pub(crate) fn uniform_rows(element: &Element<'_>, columns: &mut Option<usize>) -
         | Element::Table(_)
         | Element::Image(_)
         | Element::Anchor(_)
-        | Element::Flex(_) => false,
+        | Element::Flex(_)
+        | Element::Grid(_) => false,
     }
 }

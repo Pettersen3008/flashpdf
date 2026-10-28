@@ -48,6 +48,7 @@ pub struct Renderer {
     tags: Vec<Vec<PageTag>>,
     /// Alphas each page draws with, parallel to `contents`.
     alphas: Vec<Vec<[u8; 2]>>,
+    shadings: Vec<crate::paint::Shadings>,
     layout: LayoutBuffer,
     /// Index 0 paints on every page; index 1 replaces it on the first page.
     header: [Option<Furniture>; 2],
@@ -56,7 +57,8 @@ pub struct Renderer {
     fixed: Vec<Furniture>,
     /// The open page's positioned layers with the origin of the block they belong to; they
     /// paint over its content by z-index, those below zero under it.
-    overlays: Vec<(Layer, Point)>,
+    overlays: Vec<(Layer, Point, bool)>,
+    grid_order: u32,
     metadata: Metadata,
     /// Anchors with no line yet, waiting for the next one painted.
     pending: Vec<u16>,
@@ -100,6 +102,8 @@ struct OpenTable {
 
 /// The header and footer rows a table repeats on every page it has body rows on.
 struct TableEdges {
+    header_painted: std::cell::Cell<bool>,
+    footer_painted: std::cell::Cell<bool>,
     header: LayoutBuffer,
     header_height: Pt,
     footer: LayoutBuffer,
@@ -159,11 +163,13 @@ impl Renderer {
             links: vec![Vec::new()],
             tags: vec![Vec::new()],
             alphas: vec![Vec::new()],
+            shadings: vec![crate::paint::Shadings::default()],
             layout: LayoutBuffer::default(),
             header: Default::default(),
             footer: Default::default(),
             fixed: Vec::new(),
             overlays: Vec::new(),
+            grid_order: 0,
             metadata: Metadata::default(),
             pending: Vec::new(),
             table: None,
@@ -373,7 +379,14 @@ impl Renderer {
     }
 
     fn check_size(&self) -> Result<(), RenderError> {
-        if self.content_bytes + self.contents.last().unwrap().len() > MAX_CONTENT_BYTES {
+        if self.shadings.last().unwrap().invalid {
+            return Err(RenderError::InvalidGradientGeometry);
+        }
+        if self.content_bytes
+            + self.contents.last().unwrap().len()
+            + self.shadings.last().unwrap().bytes
+            > MAX_CONTENT_BYTES
+        {
             return Err(RenderError::DocumentTooLarge);
         }
         Ok(())
@@ -399,9 +412,11 @@ impl Renderer {
         match element {
             Element::Table(table) => return self.render_table(table),
             Element::Box(node)
-                if node.size == crate::BoxSize::AUTO && node.style.radius.is_none() =>
+                if node.size == crate::BoxSize::AUTO
+                    && node.style.radius.is_none()
+                    && node.effects.is_none() =>
             {
-                self.open_box(node.style)?;
+                self.open_box(node.style.clone())?;
                 for child in &node.children {
                     self.render_element(child)?;
                 }
@@ -410,6 +425,44 @@ impl Renderer {
             Element::Spacer(spacer) => {
                 self.page.validate_block(spacer.height)?;
                 return self.hold(Held::Space(spacer.height));
+            }
+            Element::Grid(node)
+                if node.style.min_height == 0.0 && node.style.max_height.is_none() =>
+            {
+                let rows = LayoutEngine::new(&self.fonts, &self.images, self.page.page())
+                    .grid_rows(node, self.column.width)?;
+                if rows.rows.is_empty() {
+                    for child in &node.children {
+                        self.render_element(child)?;
+                    }
+                    return Ok(());
+                }
+                self.grid_order += 1;
+                let mut end = 0.0;
+                for row in &rows.rows {
+                    let gap = Pt(row.start - end);
+                    if gap > Pt::ZERO {
+                        self.page.validate_block(gap)?;
+                        self.hold(Held::Space(gap))?;
+                    }
+                    self.begin(false)?;
+                    self.layout.clear();
+                    let height = LayoutEngine::new(&self.fonts, &self.images, self.page.page())
+                        .layout_grid_root_row(
+                            node,
+                            &rows,
+                            row,
+                            self.column,
+                            &mut self.layout,
+                            self.grid_order,
+                        )?;
+                    let layout = std::mem::take(&mut self.layout);
+                    self.mark_used(&layout);
+                    self.place(element, layout, height)?;
+                    self.chained = false;
+                    end = row.end;
+                }
+                return Ok(());
             }
             // Without a height to share out, a wrapping row is its rows stacked, so it breaks
             // between them.
@@ -464,7 +517,7 @@ impl Renderer {
         }
         let top = style.margin.top + style.border.top + style.padding.top;
         self.validate_block(top + style.padding.bottom + style.border.bottom)?;
-        self.boxes.push((column, style));
+        self.boxes.push((column, style.clone()));
         self.column = column
             .translated(style.margin.left + inset, Pt::ZERO)
             .with_width(inner);
@@ -489,7 +542,7 @@ impl Renderer {
         self.begin(true)?;
         self.room(style.padding.bottom + style.border.bottom, None)?;
         let after = self.forced == Some(self.held.len());
-        self.hold(Held::Close(style))?;
+        self.hold(Held::Close(style.clone()))?;
         self.hold(Held::Space(style.margin.bottom))?;
         if after {
             self.forced = Some(self.held.len());
@@ -544,7 +597,7 @@ impl Renderer {
                 }
                 Held::Space(_) => {}
                 Held::Open(mut fragment) => {
-                    let style = fragment.style;
+                    let style = fragment.style.clone();
                     if !self.truncates() {
                         self.cursor.advance(style.margin.top);
                     }
@@ -568,7 +621,11 @@ impl Renderer {
                 Held::Row(row, height, edges) => {
                     self.table_top(&edges)?;
                     let rows = row.as_ref().unwrap_or(&edges.footer);
-                    self.paint(rows, 0..rows.lines.len(), Pt::ZERO, height)?;
+                    if row.is_none() {
+                        self.paint_repeat(rows, height, &edges.footer_painted)?;
+                    } else {
+                        self.paint(rows, 0..rows.lines.len(), Pt::ZERO, height)?;
+                    }
                     self.trailer = row.is_some().then(|| edges.clone());
                     if let Some(row) = row {
                         self.layout = row;
@@ -597,7 +654,7 @@ impl Renderer {
             height += match item {
                 Held::Lines(_, _, _, height) | Held::Space(height) => *height,
                 Held::Open(fragment) => {
-                    let style = fragment.style;
+                    let style = fragment.style.clone();
                     style.margin.top + style.border.top + style.padding.top
                 }
                 Held::Close(style) => style.padding.bottom + style.border.bottom,
@@ -650,7 +707,7 @@ impl Renderer {
         let mut next = Vec::with_capacity(self.open.len());
         for slot in &mut self.open {
             let fragment = &mut self.fragments[*slot];
-            let mut continued = *fragment;
+            let mut continued = fragment.clone();
             continued.origin.y = Pt::ZERO - self.later.top();
             continued.style.border.top = Pt::ZERO;
             fragment.height = Pt::ZERO - fragment.origin.y - self.page.bottom();
@@ -661,8 +718,19 @@ impl Renderer {
         let mut fragments = std::mem::replace(&mut self.fragments, next);
         fragments.retain(|fragment| fragment.height > Pt::ZERO && painted(&fragment.style));
         let mut overlays = std::mem::take(&mut self.overlays);
-        overlays.sort_by_key(|(layer, _)| layer.z);
-        let below = overlays.partition_point(|(layer, _)| layer.z < 0);
+        let mut groups = std::collections::BTreeMap::new();
+        for (index, (layer, ..)) in overlays.iter().enumerate() {
+            if let Some((group, _)) = layer.order {
+                groups.entry(group).or_insert(index);
+            }
+        }
+        for (index, (layer, ..)) in overlays.iter_mut().enumerate() {
+            layer.order = Some(layer.order.map_or((index as u32, 0), |(group, item)| {
+                (groups[&group] as u32, item)
+            }));
+        }
+        overlays.sort_by_key(|(layer, ..)| (layer.z, layer.order));
+        let below = overlays.partition_point(|(layer, ..)| layer.z < 0);
         let page = self.page.page();
         let mut underlay = Vec::new();
         if !fragments.is_empty() || below > 0 {
@@ -673,10 +741,14 @@ impl Renderer {
                 self.links.last_mut().unwrap(),
                 self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
                 self.alphas.last_mut().unwrap(),
+                self.shadings.last_mut().unwrap(),
                 &mut state,
+                self.metadata.pdfua,
             );
-            for (layer, origin) in &overlays[..below] {
-                painter.paint_layer(layer, *origin, page);
+            for (layer, origin, artifact) in &overlays[..below] {
+                painter
+                    .artifact(*artifact)
+                    .paint_layer(layer, *origin, page);
             }
             painter.paint_boxes(
                 &fragments,
@@ -693,13 +765,19 @@ impl Renderer {
                 self.links.last_mut().unwrap(),
                 self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
                 self.alphas.last_mut().unwrap(),
+                self.shadings.last_mut().unwrap(),
                 &mut self.state,
+                self.metadata.pdfua,
             );
-            for (layer, origin) in &overlays[below..] {
-                painter.paint_layer(layer, *origin, page);
+            for (layer, origin, artifact) in &overlays[below..] {
+                painter
+                    .artifact(*artifact)
+                    .paint_layer(layer, *origin, page);
             }
         }
-        self.content_bytes += self.contents.last().unwrap().len() + underlay.len();
+        self.content_bytes += self.contents.last().unwrap().len()
+            + underlay.len()
+            + self.shadings.last().unwrap().bytes;
         self.underlays.push(underlay);
     }
 
@@ -798,6 +876,8 @@ impl Renderer {
         self.table = Some(OpenTable {
             area,
             edges: Rc::new(TableEdges {
+                header_painted: std::cell::Cell::new(false),
+                footer_painted: std::cell::Cell::new(false),
                 header,
                 header_height,
                 footer,
@@ -855,7 +935,7 @@ impl Renderer {
             return Ok(());
         }
         let header = &edges.header;
-        self.paint(header, 0..header.lines.len(), Pt::ZERO, edges.header_height)
+        self.paint_repeat(header, edges.header_height, &edges.header_painted)
     }
 
     fn layout_rows(
@@ -876,6 +956,19 @@ impl Renderer {
         Ok((buffer, height))
     }
 
+    fn paint_repeat(
+        &mut self,
+        layout: &LayoutBuffer,
+        height: Pt,
+        painted: &std::cell::Cell<bool>,
+    ) -> Result<(), RenderError> {
+        let origin = self.cursor.origin(self.page);
+        let repeated = self.metadata.pdfua && painted.replace(true);
+        self.paint_at_tagged(layout, 0..layout.lines.len(), origin, repeated);
+        self.cursor.advance(height);
+        self.check_size()
+    }
+
     /// Checks the cap per paint: a repeated table header multiplies one block's bytes.
     fn paint(
         &mut self,
@@ -892,22 +985,60 @@ impl Renderer {
 
     /// Paints `lines` at `origin` and keeps the block's positioned layers for the page end.
     fn paint_at(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        self.paint_at_tagged(layout, lines, origin, false);
+    }
+
+    fn paint_at_tagged(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        origin: Point,
+        artifact: bool,
+    ) {
         let first = lines.start == 0;
-        self.painter().paint(layout, lines.clone(), origin);
+        let page = self.page.page();
+        self.painter()
+            .artifact(artifact)
+            .paint(layout, lines.clone(), origin, page);
         self.place_anchors(layout, lines, origin);
         if first {
             for layer in &layout.layers {
                 self.layer_anchors(layer, origin);
-                self.overlays.push((layer.clone(), origin));
+                if layer.flow.is_none() {
+                    self.overlays.push((layer.clone(), origin, artifact));
+                }
             }
         }
     }
 
     fn layer_anchors(&mut self, layer: &Layer, origin: Point) {
+        let matrix = layer.effects.as_ref().and_then(|effect| effect.transform);
+        let unset: Vec<usize> = if matrix.is_some() {
+            self.metadata
+                .anchors
+                .iter()
+                .enumerate()
+                .filter_map(|(index, anchor)| anchor.at.is_none().then_some(index))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let at = layer_origin(layer, origin, self.page.page());
         self.place_anchors(&layer.buffer, 0..layer.buffer.lines.len(), at);
         for inner in &layer.buffer.layers {
             self.layer_anchors(inner, at);
+        }
+        if let Some([a, b, c, d, e, f]) = matrix {
+            let rect = &layer.effects.as_ref().unwrap().rect;
+            let left = (at.x + rect.origin.x).get();
+            let top = (at.y - rect.origin.y).get();
+            for index in unset {
+                if let Some((_, x, y)) = &mut self.metadata.anchors[index].at {
+                    let (local_x, local_y) = (*x - left, top - *y);
+                    *x = left + a * local_x + c * local_y + e;
+                    *y = top - b * local_x - d * local_y - f;
+                }
+            }
         }
     }
 
@@ -943,13 +1074,19 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn set_structure(&mut self, nodes: Vec<crate::compile::StructureNode>) {
+        self.metadata.structure = nodes;
+    }
+
     fn painter(&mut self) -> PdfPainter<'_> {
         PdfPainter::new(
             self.contents.last_mut().unwrap(),
             self.links.last_mut().unwrap(),
             self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
             self.alphas.last_mut().unwrap(),
+            self.shadings.last_mut().unwrap(),
             &mut self.state,
+            self.metadata.pdfua,
         )
     }
 
@@ -961,11 +1098,13 @@ impl Renderer {
         if let Some(edges) = self.trailer.take() {
             let origin = self.cursor.origin(self.page);
             let footer = &edges.footer;
-            self.paint_at(footer, 0..footer.lines.len(), origin);
+            let repeated = self.metadata.pdfua && edges.footer_painted.replace(true);
+            self.paint_at_tagged(footer, 0..footer.lines.len(), origin, repeated);
         }
         self.end_page();
         self.contents.push(Content::with_capacity(0));
         self.alphas.push(Vec::new());
+        self.shadings.push(crate::paint::Shadings::default());
         self.links.push(Vec::new());
         self.tags.push(Vec::new());
         self.page = self.later;
@@ -993,6 +1132,7 @@ impl Renderer {
             let mut number = itoa::Buffer::new();
             let number = number.format(index + 1);
             let before = self.contents[index].len();
+            let shading_before = self.shadings[index].bytes;
             let blocks = furniture
                 .iter()
                 .filter_map(|(slots, footer)| Some((pick(slots, index == 0)?, Some(*footer))))
@@ -1019,14 +1159,23 @@ impl Renderer {
                 };
                 let content = &mut self.contents[index];
                 if self.metadata.tagged {
-                    content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                    if self.metadata.pdfua {
+                        content
+                            .begin_marked_content_with_properties(pdf_writer::Name(b"Artifact"))
+                            .properties()
+                            .pair(pdf_writer::Name(b"Type"), pdf_writer::Name(b"Pagination"));
+                    } else {
+                        content.begin_marked_content(pdf_writer::Name(b"Artifact"));
+                    }
                 }
                 PdfPainter::new(
                     content,
                     &mut self.links[index],
                     None,
                     &mut self.alphas[index],
+                    &mut self.shadings[index],
                     &mut PaintState::default(),
+                    false,
                 )
                 .paint_flow(
                     &layout,
@@ -1040,7 +1189,11 @@ impl Renderer {
                     content.end_marked_content();
                 }
             }
-            bytes += self.contents[index].len() - before;
+            bytes +=
+                self.contents[index].len() - before + self.shadings[index].bytes - shading_before;
+            if self.shadings[index].invalid {
+                return Err(RenderError::InvalidGradientGeometry);
+            }
             if bytes > MAX_CONTENT_BYTES {
                 return Err(RenderError::DocumentTooLarge);
             }
@@ -1084,6 +1237,7 @@ impl Renderer {
             self.links,
             self.tags,
             self.alphas,
+            self.shadings.into_iter().map(|s| s.items).collect(),
             self.metadata,
         ))
     }
@@ -1117,7 +1271,7 @@ fn numbered(
 ) -> Result<Vec<OwnedCommand>, RenderError> {
     let mut copy = commands.to_vec();
     for command in &mut copy {
-        let OwnedCommand::Paragraph(_, _, text, runs, _) = command else {
+        let OwnedCommand::Paragraph(_, _, text, runs, _, _) = command else {
             continue;
         };
         let mut spelled = String::new();

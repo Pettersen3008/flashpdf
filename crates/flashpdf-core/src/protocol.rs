@@ -6,6 +6,7 @@
 mod cursor;
 mod elements;
 mod error;
+pub(crate) mod grid;
 mod opcode;
 
 #[cfg(test)]
@@ -22,8 +23,8 @@ use crate::command::MAX_LAYOUT_DEPTH;
 use crate::image::{ColorSpace, MAX_IMAGE_BYTES};
 use crate::pdf::{Attachment, PdfA};
 use crate::{
-    Align, BoxSize, Edges, Flex, FlexItem, FontId, Justify, LineStyle, Marker, OwnedCommand, Pt,
-    Radii, RunDecoration, TextRun, BUILT_IN, OPAQUE,
+    Align, BoxSize, Edges, Flex, FlexItem, FontId, GridItem, GridTrack, Justify, LineStyle, Marker,
+    OwnedCommand, Pt, Radii, RunDecoration, TextRun, BUILT_IN, OPAQUE,
 };
 
 /// Bytes an adapter accepts per `push`. Sized so no adapter buffers a document.
@@ -39,7 +40,7 @@ const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PAGE_SIDE: f32 = 14_400.0;
 const HEADER_LEN: usize = 6;
 const MAGIC: &[u8; 4] = b"FPDF";
-const VERSION: u16 = 25;
+const VERSION: u16 = 28;
 const MAX_ATTACHMENT_BYTES: usize = 64 * 1024 * 1024;
 /// Longest bookmark title, in bytes: 255 characters at four bytes each.
 const MAX_TITLE_BYTES: usize = 1020;
@@ -89,6 +90,9 @@ struct Commands {
     attachment_bytes: usize,
     metadata: crate::pdf::Metadata,
     pdfa: bool,
+    pdfua: bool,
+    ua_compiled: bool,
+    structure_ids: Vec<u32>,
     body_started: bool,
     /// `(footer, page)` of a Header or Footer record waiting for its block: page 0 is every
     /// page, 1 the first, and 2 every page for a `position: fixed` box of the body.
@@ -104,6 +108,7 @@ enum Frame {
     Box(bool),
     Row { cells: usize, done: usize },
     Flex { cells: usize, done: usize },
+    Grid { cells: usize, done: usize },
     Table { head: Option<usize> },
 }
 
@@ -209,7 +214,8 @@ impl Decoder {
             | Opcode::Close
             | Opcode::Drawing
             | Opcode::Html
-            | Opcode::NamedImage => self.element_record(code, payload),
+            | Opcode::NamedImage
+            | Opcode::Tw => self.element_record(code, payload),
             Opcode::End if compiling => self.element_record(code, payload),
             // A host that sends element records leaves layout to the compiler.
             Opcode::Metadata | Opcode::PdfA | Opcode::Attachment => {
@@ -402,7 +408,8 @@ impl Commands {
             | Opcode::Close
             | Opcode::Drawing
             | Opcode::Html
-            | Opcode::NamedImage => Err(ProtocolError::InvalidNesting),
+            | Opcode::NamedImage
+            | Opcode::Tw => Err(ProtocolError::InvalidNesting),
             Opcode::Spacer => {
                 let space = pt(cursor.nonnegative_f32("spacer")?)?;
                 cursor.done()?;
@@ -474,6 +481,15 @@ impl Commands {
                 cursor.done()?;
                 self.close(OwnedCommand::FlexEnd)
             }
+            Opcode::GridStart => {
+                let (style, items) = grid::decode(&mut cursor)?;
+                cursor.done()?;
+                self.feed(OwnedCommand::GridStart(style, items))
+            }
+            Opcode::GridEnd => {
+                cursor.done()?;
+                self.feed(OwnedCommand::GridEnd)
+            }
             Opcode::RowEnd => {
                 cursor.done()?;
                 self.feed(OwnedCommand::RowEnd)
@@ -528,9 +544,10 @@ impl Commands {
                 Ok(())
             }
             Opcode::Metadata => {
-                let tagged = match cursor.take(1)?[0] {
+                let flag = cursor.take(1)?[0];
+                let tagged = match flag {
                     0 => false,
-                    1 => true,
+                    1 | 2 => true,
                     _ => return Err(ProtocolError::InvalidValue("tagged flag")),
                 };
                 let fields = (0..5)
@@ -545,6 +562,7 @@ impl Commands {
                     keywords: fields[3].clone(),
                     language: fields[4].clone(),
                     tagged,
+                    pdfua: flag == 2,
                     ..std::mem::take(&mut self.metadata)
                 };
                 if tagged && metadata.language.is_empty() {
@@ -553,6 +571,10 @@ impl Commands {
                 if !metadata.language.is_empty() && !valid_language(&metadata.language) {
                     return Err(ProtocolError::InvalidValue("metadata language"));
                 }
+                if metadata.pdfua && metadata.title.trim().is_empty() {
+                    return Err(ProtocolError::InvalidValue("PDF/UA metadata title"));
+                }
+                self.pdfua = metadata.pdfua;
                 self.metadata = metadata;
                 Ok(())
             }
@@ -726,7 +748,8 @@ impl Commands {
                     });
                 }
                 cursor.done()?;
-                self.feed(OwnedCommand::Paragraph(align, keep, text, runs, links))
+                let ids = std::mem::take(&mut self.structure_ids);
+                self.feed(OwnedCommand::Paragraph(align, keep, text, runs, links, ids))
             }
             Opcode::Image => {
                 let slot = cursor.u16()?;
@@ -752,8 +775,9 @@ impl Commands {
                 let alt = cursor.alt()?.to_owned();
                 let alpha = cursor.take(1)?[0];
                 cursor.done()?;
+                let id = self.structure_ids.pop().unwrap_or(0);
                 self.feed(OwnedCommand::Image(
-                    slot, width, height, max_width, max_height, link, alt, alpha,
+                    slot, width, height, max_width, max_height, link, alt, alpha, id,
                 ))
             }
             Opcode::BoxStart => {
@@ -816,9 +840,14 @@ impl Commands {
                 // Bit 0 is border-box sizing, bits 1 to 4 are auto margins in `Edges` order, and
                 // bit 5 is a position after the sizes.
                 let flags = cursor.take(1)?[0];
-                if flags > 0x3f {
+                if flags & 0xc0 == 0x80 {
                     return Err(ProtocolError::InvalidValue("box flags"));
                 }
+                let paint = match cursor.take(1)?[0] {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(ProtocolError::InvalidValue("box paint flag")),
+                };
                 let size = BoxSize {
                     width: cursor.size("width")?,
                     min_width: cursor.size("min width")?,
@@ -834,8 +863,44 @@ impl Commands {
                         None
                     },
                 };
+                let effects = if flags & 0x40 != 0 {
+                    let font_size = cursor.nonnegative_f32("effect font size")?;
+                    let overflow = match cursor.take(1)?[0] {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(ProtocolError::InvalidValue("overflow")),
+                    };
+                    let transform = cursor.utf8()?;
+                    let origin = cursor.utf8()?;
+                    let clip = cursor.utf8()?;
+                    let effect = crate::BoxEffects::parse_inner(
+                        transform,
+                        origin,
+                        clip,
+                        overflow,
+                        font_size,
+                        flags & 0x80 != 0,
+                    )
+                    .map_err(|_| ProtocolError::InvalidValue("box effects"))?;
+                    Some(effect)
+                } else {
+                    None
+                };
+                let paint_effects = if paint {
+                    let em = cursor.positive_f32("effect font size")?;
+                    let current = cursor.take(3)?.try_into().unwrap();
+                    let shadow = cursor.utf8()?;
+                    let image = cursor.utf8()?;
+                    Some(std::rc::Rc::new(
+                        crate::backgrounds::parse(shadow, image, f64::from(em), current)
+                            .map_err(|e| ProtocolError::Message(e.to_string()))?,
+                    ))
+                } else {
+                    None
+                };
                 cursor.done()?;
                 let style = crate::BoxStyle {
+                    effects: paint_effects,
                     margin,
                     padding,
                     border,
@@ -850,7 +915,7 @@ impl Commands {
                         "border radius with unequal borders",
                     ));
                 }
-                self.feed(OwnedCommand::BoxStart(style, size))
+                self.feed(OwnedCommand::BoxStart(style, size, effects))
             }
             Opcode::BoxEnd => {
                 cursor.done()?;
@@ -873,6 +938,11 @@ impl Commands {
     /// The built-in fonts take the first slots; the rest are registered fonts.
     fn font(&self, slot: u8) -> Result<FontId, ProtocolError> {
         let font = FontId::new(slot);
+        if self.pdfua && font.index() < BUILT_IN {
+            return Err(ProtocolError::InvalidValue(
+                "PDF/UA font: register an embedded font and set fontFamily",
+            ));
+        }
         if self.pdfa && font.index() < BUILT_IN {
             return Err(ProtocolError::PdfAFont);
         }
@@ -934,9 +1004,10 @@ impl Commands {
 
     fn push_command(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let payload = match &command {
-            OwnedCommand::Paragraph(_, _, text, runs, links) => {
+            OwnedCommand::Paragraph(_, _, text, runs, links, ids) => {
                 text.len()
                     + runs.len() * size_of::<TextRun>()
+                    + ids.len() * size_of::<u32>()
                     + links
                         .iter()
                         .map(|link| link.len() + size_of::<String>())
@@ -947,7 +1018,18 @@ impl Commands {
                     + slots.len() * size_of::<crate::Slot>()
             }
             OwnedCommand::FlexStart(_, items) => items.len() * size_of::<FlexItem>(),
-            OwnedCommand::Image(_, _, _, _, _, link, alt, _) => {
+            OwnedCommand::BoxStart(_, _, effects) => {
+                effects.as_ref().map_or(0, |effects| effects.capacity())
+            }
+            OwnedCommand::GridStart(style, items) => {
+                (style.columns.len()
+                    + style.rows.len()
+                    + style.auto_columns.len()
+                    + style.auto_rows.len())
+                    * size_of::<GridTrack>()
+                    + items.len() * size_of::<GridItem>()
+            }
+            OwnedCommand::Image(_, _, _, _, _, link, alt, _, _) => {
                 link.as_ref().map_or(0, String::len) + alt.len()
             }
             _ => 0,
@@ -964,8 +1046,9 @@ impl Commands {
     fn feed(&mut self, command: OwnedCommand) -> Result<(), ProtocolError> {
         let frame = match &command {
             OwnedCommand::StackStart(_) => Frame::Stack,
-            OwnedCommand::BoxStart(style, size) => Frame::Box(
-                self.placing()
+            OwnedCommand::BoxStart(style, size, effects) => Frame::Box(
+                effects.is_none()
+                    && self.placing()
                     && self.furniture.is_none()
                     && *size == BoxSize::AUTO
                     && style.radius.is_none(),
@@ -981,6 +1064,14 @@ impl Commands {
                 cells: items.len(),
                 done: 0,
             },
+            OwnedCommand::GridStart(style, items) => {
+                style.validate()?;
+                grid::validate_items(items)?;
+                Frame::Grid {
+                    cells: items.len(),
+                    done: 0,
+                }
+            }
             OwnedCommand::TableStart(header_rows, footer_rows, _) => Frame::Table {
                 head: self
                     .placing()
@@ -990,6 +1081,7 @@ impl Commands {
             | OwnedCommand::BoxEnd
             | OwnedCommand::RowEnd
             | OwnedCommand::FlexEnd
+            | OwnedCommand::GridEnd
             | OwnedCommand::TableEnd => return self.close(command),
             OwnedCommand::Paragraph(..)
             | OwnedCommand::Spacer(_)
@@ -1040,7 +1132,7 @@ impl Commands {
             return Err(ProtocolError::NestingTooDeep);
         }
         match (frame, command) {
-            (Frame::Box(true), OwnedCommand::BoxStart(style, _)) => {
+            (Frame::Box(true), OwnedCommand::BoxStart(style, _, _)) => {
                 self.ensure_renderer()?.open_box(style)?
             }
             (_, command) => self.push_command(command)?,
@@ -1063,8 +1155,10 @@ impl Commands {
             | (OwnedCommand::TableEnd, Frame::Table { .. }) => {}
             (OwnedCommand::RowEnd, Frame::Row { cells, done })
             | (OwnedCommand::FlexEnd, Frame::Flex { cells, done })
+            | (OwnedCommand::GridEnd, Frame::Grid { cells, done })
                 if cells == done => {}
-            (OwnedCommand::RowEnd, Frame::Row { .. }) => {
+            (OwnedCommand::RowEnd, Frame::Row { .. })
+            | (OwnedCommand::GridEnd, Frame::Grid { .. }) => {
                 return Err(ProtocolError::RowCellCountMismatch)
             }
             _ => return Err(ProtocolError::InvalidNesting),
@@ -1073,8 +1167,9 @@ impl Commands {
     }
 
     fn complete_child(&mut self) -> Result<(), ProtocolError> {
-        if let Some(Frame::Row { cells, done } | Frame::Flex { cells, done }) =
-            self.frames.last_mut()
+        if let Some(
+            Frame::Row { cells, done } | Frame::Flex { cells, done } | Frame::Grid { cells, done },
+        ) = self.frames.last_mut()
         {
             *done += 1;
             if *done > *cells {
@@ -1108,6 +1203,11 @@ impl Commands {
     }
 
     fn finish(self) -> Result<Vec<u8>, ProtocolError> {
+        if self.pdfua && !self.ua_compiled {
+            return Err(ProtocolError::InvalidValue(
+                "PDF/UA requires element records",
+            ));
+        }
         if self.page.is_none() || !self.ended {
             return Err(ProtocolError::TruncatedProtocol);
         }
@@ -1118,7 +1218,7 @@ impl Commands {
     }
 }
 
-fn valid_language(value: &str) -> bool {
+pub(crate) fn valid_language(value: &str) -> bool {
     let mut parts = value.split('-');
     parts.next().is_some_and(|part| {
         (2..=8).contains(&part.len()) && part.bytes().all(|byte| byte.is_ascii_alphabetic())
@@ -1151,4 +1251,156 @@ fn justify_code(code: u8) -> Result<Justify, ProtocolError> {
         5 => Justify::SpaceEvenly,
         _ => return Err(ProtocolError::InvalidValue("justify-content")),
     })
+}
+
+#[cfg(test)]
+mod effect_regressions {
+    use super::*;
+    use crate::compile::{Compiler, Drawing, Picture, Styler};
+    use std::collections::HashMap;
+
+    fn compile(source: &str) -> lopdf::Document {
+        let images = HashMap::from([(
+            "picture".into(),
+            Picture::Drawing(Drawing {
+                width: 40.0,
+                height: 20.0,
+                view_box: [0.0, 0.0, 40.0, 20.0],
+                align: None,
+                slice: false,
+                shapes: vec![],
+            }),
+        )]);
+        let document = crate::html::parse(source, &images).unwrap();
+        let mut commands = Commands::default();
+        commands.set_page([240.0, 160.0], [10.0; 4]).unwrap();
+        let mut compiler = Compiler::new(
+            Styler::new(&[], 220.0).unwrap(),
+            HashMap::from([("Helvetica".into(), crate::css::style::HELVETICA)]),
+            commands,
+        );
+        compiler.body(&document.nodes, false).unwrap();
+        compiler.end().unwrap();
+        lopdf::Document::load_mem(&compiler.writer.sink.finish().unwrap()).unwrap()
+    }
+
+    fn content(pdf: &lopdf::Document) -> String {
+        String::from_utf8(pdf.get_page_content(pdf.get_pages()[&1])).unwrap()
+    }
+
+    #[test]
+    fn given_nested_and_distinct_transforms_when_painting_identical_gradients_then_each_pattern_keeps_its_own_matrix(
+    ) {
+        let patterns = |pdf: &lopdf::Document| -> Vec<Vec<f32>> {
+            pdf.objects
+                .values()
+                .filter_map(|object| object.as_stream().ok())
+                .filter(|stream| stream.dict.has(b"PatternType"))
+                .map(|stream| {
+                    stream
+                        .dict
+                        .get(b"Matrix")
+                        .unwrap()
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|value| value.as_float().unwrap())
+                        .collect()
+                })
+                .collect()
+        };
+        for gradient in [
+            "linear-gradient(to right,red,blue)",
+            "radial-gradient(circle,red,blue)",
+        ] {
+            let style = format!("width:100pt;height:20pt;background-image:{gradient}");
+            let pdf = compile(&format!("<div style='transform:translateX(20pt);{style}'></div><div style='transform:translateX(40pt);{style}'></div>"));
+            assert_eq!(
+                patterns(&pdf),
+                [
+                    vec![1.0, 0.0, 0.0, 1.0, 30.0, 130.0],
+                    vec![1.0, 0.0, 0.0, 1.0, 50.0, 110.0]
+                ]
+            );
+            let pdf = compile(&format!("<div style='transform:translateX(20pt);transform-origin:0 0'><div style='transform:scale(2);transform-origin:0 0;{style}'></div></div>"));
+            assert_eq!(patterns(&pdf), [vec![2.0, 0.0, 0.0, 2.0, 30.0, 110.0]]);
+            let pdf = compile(&format!("<div style='display:grid;grid-template-columns:100pt 100pt'><div style='transform:translateX(20pt);clip-path:inset(0);box-shadow:1pt 1pt #0008;{style}'></div><div style='transform:translateX(40pt);{style}'></div></div>"));
+            assert_eq!(
+                patterns(&pdf),
+                [
+                    vec![1.0, 0.0, 0.0, 1.0, 30.0, 130.0],
+                    vec![1.0, 0.0, 0.0, 1.0, 150.0, 130.0]
+                ]
+            );
+            assert!(content(&pdf).contains("W\nn"));
+        }
+    }
+
+    #[test]
+    fn given_reversed_grid_rows_when_atomic_or_span_connected_then_paints_every_child_once_in_source_order(
+    ) {
+        let grid = "<div style='display:grid;grid-template-columns:100pt;grid-template-rows:20pt 20pt'><div style='grid-row:2'>FIRST</div><div style='grid-row:1'>SECOND</div></div>";
+        for style in [
+            "height:100pt",
+            "height:100pt;position:relative",
+            "height:100pt;transform:translateX(2pt)",
+            "position:absolute;left:0;top:0;width:200pt;height:100pt",
+        ] {
+            let pdf = compile(&format!("<div style='{style}'>{grid}</div>"));
+            assert_eq!(
+                pdf.extract_text(&[1]).unwrap().trim(),
+                "FIRST\nSECOND",
+                "{style}"
+            );
+        }
+        let pdf = compile("<div style='height:80pt'>BEFORE</div><div style='display:grid;grid-template-columns:100pt 100pt;grid-template-rows:repeat(8,20pt)'><div style='grid-column:1;grid-row:3 / span 2'>FIRST</div><div style='grid-column:2;grid-row:1 / span 3'>SECOND</div><div style='grid-column:1;grid-row:5 / span 4'>THIRD</div></div>");
+        assert_eq!(pdf.get_pages().len(), 3);
+        for (page, text) in [(1, "BEFORE"), (2, "FIRST\nSECOND"), (3, "THIRD")] {
+            assert_eq!(pdf.extract_text(&[page]).unwrap().trim(), text);
+        }
+    }
+
+    #[test]
+    fn given_overflow_on_bordered_gradients_and_shadows_when_painted_then_only_the_owner_and_each_child_paint_once(
+    ) {
+        for (child, count) in [("", 1), ("<div style='width:10pt;height:10pt;background-image:linear-gradient(white,blue);box-shadow:1pt 1pt green'></div>", 2)] {
+            for effect in ["", "overflow:hidden", "overflow:hidden;transform:translateX(20pt)"] {
+                let pdf = compile(&format!("<div style='width:100pt;height:40pt;border:10pt solid black;background-image:linear-gradient(to right,red,blue);box-shadow:2pt 3pt #0008;{effect}'>{child}</div>"));
+                let content = content(&pdf);
+                assert_eq!(content.matches(" scn").count(), count, "{effect}: {content}");
+                assert_eq!(content.matches("W*\nn").count(), count, "{effect}: {content}");
+            }
+        }
+    }
+
+    #[test]
+    fn given_painted_overflow_with_a_nested_flow_layer_when_compiled_then_keeps_box_marks_valid() {
+        let pdf = compile(
+            "<div style='overflow:hidden;background-color:red;border:1pt solid red;border-radius:3pt'>\
+             <div style='transform:translateX(1pt);background-color:blue'>nested</div>\
+             </div>",
+        );
+        assert_eq!(pdf.extract_text(&[1]).unwrap().trim(), "nested");
+        let content = content(&pdf);
+        assert_eq!(content.matches("1 0 0 rg").count(), 1, "{content}");
+        assert!(content.contains("1 0 0 RG"), "{content}");
+    }
+
+    #[test]
+    fn given_a_transformed_div_containing_one_image_when_compiled_then_uses_the_div_width() {
+        let pdf = compile("<div style='transform:translateX(50%)'><img src='picture'></div>");
+        let content = content(&pdf);
+        assert!(content.contains("1 0 0 1 110 0 cm"), "{content}");
+    }
+
+    #[test]
+    fn given_a_link_target_image_with_effects_when_compiled_then_uses_the_image_width() {
+        let pdf = compile(
+            "<a href='#target'>target</a>\
+             <img id='target' src='picture' style='transform:translateX(50%);clip-path:inset(0)'>",
+        );
+        let content = content(&pdf);
+        assert!(content.contains("1 0 0 1 20 0 cm"), "{content}");
+        assert!(content.contains("40 0 0 20"), "{content}");
+    }
 }

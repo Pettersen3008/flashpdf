@@ -274,6 +274,10 @@ impl<'a> Cursor<'a> {
         }))
     }
 
+    pub(super) fn remaining(&self) -> bool {
+        self.offset < self.bytes.len()
+    }
+
     pub(super) fn done(&self) -> Result<(), ProtocolError> {
         if self.offset == self.bytes.len() {
             Ok(())

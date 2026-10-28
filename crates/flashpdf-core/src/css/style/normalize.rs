@@ -49,6 +49,9 @@ fn initial(key: &Key) -> Option<Value> {
         "lineHeight" => "normal".into(),
         "orphans" | "widows" => 2.0.into(),
         "backgroundColor" => "transparent".into(),
+        "backgroundImage" | "boxShadow" => "none".into(),
+        "backgroundSize" => "auto".into(),
+        "backgroundPosition" => "0% 0%".into(),
         "opacity" | "flexShrink" => 1.0.into(),
         "flexGrow" => 0.0.into(),
         "flexBasis" => "auto".into(),
@@ -103,7 +106,18 @@ fn longhands(key: &Key) -> Vec<Key> {
         Key::Prop(prop) if prop == prop!("borderStyle") => BORDER_STYLES.into(),
         Key::Prop(BORDER_RADIUS) => RADII.into(),
         Key::Prop(FLEX) => vec![prop!("flexGrow"), prop!("flexShrink"), prop!("flexBasis")],
-        Key::Prop(BACKGROUND) => vec![prop!("backgroundColor")],
+        Key::Prop(BACKGROUND) => vec![
+            prop!("backgroundColor"),
+            prop!("backgroundImage"),
+            prop!("backgroundSize"),
+            prop!("backgroundPosition"),
+        ],
+        Key::Prop(prop) if prop == prop!("gridColumn") => {
+            vec![prop!("gridColumnStart"), prop!("gridColumnEnd")]
+        }
+        Key::Prop(prop) if prop == prop!("gridRow") => {
+            vec![prop!("gridRowStart"), prop!("gridRowEnd")]
+        }
         Key::Prop(prop) => match LOGICAL.iter().find(|(own, _)| *own == prop) {
             Some((_, sides)) => sides.to_vec(),
             None => vec![prop],
@@ -281,8 +295,31 @@ pub(super) fn normalize(value: &Cascaded, parent: &Style) -> Result<Style, Messa
             result.set(prop!("flexGrow"), grow.into());
             result.set(prop!("flexShrink"), shrink.into());
             result.set(prop!("flexBasis"), basis);
+        } else if prop == prop!("gridColumn") || prop == prop!("gridRow") {
+            let values = super::grid::placement(&item, prop.name())?;
+            for (key, value) in longhands(key).into_iter().zip(values) {
+                result.set_key(key, value);
+            }
         } else if prop == BACKGROUND {
-            result.set(prop!("backgroundColor"), item);
+            let image = item.text().is_some_and(|s| {
+                let s = s.to_ascii_lowercase();
+                s.contains("gradient(") || s.contains("url(") || s == "none"
+            });
+            result.set(
+                prop!("backgroundColor"),
+                if image {
+                    "transparent".into()
+                } else {
+                    item.clone()
+                },
+            );
+            if image {
+                result.set(prop!("backgroundImage"), item);
+            } else {
+                result.remove(prop!("backgroundImage"));
+            }
+            result.remove(prop!("backgroundSize"));
+            result.remove(prop!("backgroundPosition"));
         } else {
             result.set(prop, item);
         }

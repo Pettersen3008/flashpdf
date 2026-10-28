@@ -1,7 +1,9 @@
 //! Element tree to protocol records: the port of compile.ts, css/cascade.ts `styleResolver`,
 //! and the error helpers of tree.ts and fonts.ts. Messages match the TypeScript ones.
 
+mod structure;
 mod table;
+pub use structure::StructureNode;
 mod text;
 mod writer;
 
@@ -14,11 +16,11 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::css::style::{
-    box_size, box_style, color, counter, decoration, decoration_color, dimension, flex_basis, font,
-    kerning, line_height, list_style_position, list_style_type, opacity, point, position,
-    radius_of, spacing, style as normalize, transform, vertical_align, white_space, Box, Dimension,
-    Font, FontSlots, LineHeight, Rgb, Size, Slant, Style, Transform, WhiteSpace, HELVETICA,
-    MARGINS, OBLIQUE, SHAPES,
+    box_size, box_style, color, counter, decoration, decoration_color, dimension, effects,
+    flex_basis, font, kerning, line_height, list_style_position, list_style_type, opacity, point,
+    position, radius_of, spacing, style as normalize, transform, vertical_align, white_space, Box,
+    Dimension, Font, FontSlots, LineHeight, Rgb, Size, Slant, Style, Transform, WhiteSpace,
+    HELVETICA, MARGINS, OBLIQUE, SHAPES,
 };
 use crate::css::{
     js_space, list_key, Cascaded, ElemInput, Inline, Key, Prop, Resolver, Tree, Value,
@@ -66,9 +68,13 @@ pub enum Bookmark {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Element {
     pub tag: String,
+    pub lang: Option<String>,
+    pub scope: Option<String>,
     pub id: Option<String>,
     pub classes: Vec<String>,
     pub style: InlineStyle,
+    /// The `tw` prop's utilities, which apply before `style`.
+    pub tw: Option<String>,
     pub children: Vec<Node>,
     pub picture: Option<Picture>,
     pub alt: Option<String>,
@@ -276,6 +282,19 @@ impl Styler {
         single_line: bool,
     ) -> Result<Styled<'a>> {
         let at: Rc<str> = tree.path(node).into();
+        let with_tw;
+        let el_style = match &el.tw {
+            Some(tw) => {
+                with_tw = crate::tw::merge(&el.style, tw)
+                    .map_err(|message| Error::new(message).locate(&at))?;
+                &with_tw
+            }
+            None => &el.style,
+        };
+        let at = el
+            .tw
+            .as_ref()
+            .map_or(at.clone(), |tw| format!("{at} with tw=\"{tw}\"").into());
         let matched = self.resolver.matched(tree, node);
         let mut key = format!("{single_line}\n{}\n{}\n", el.tag, list_key(tree, node));
         for index in &matched {
@@ -283,7 +302,7 @@ impl Styler {
             key.push(',');
         }
         key.push('\n');
-        inline_key(&el.style, &mut key);
+        inline_key(el_style, &mut key);
         let computed = match self.computed[parent].children.get(&key) {
             Some(&index) => index,
             None => {
@@ -292,7 +311,7 @@ impl Styler {
                     Some(Value::Number(size)) => Some(*size),
                     _ => None,
                 };
-                let inline = match &el.style {
+                let inline = match el_style {
                     InlineStyle::None => Inline::None,
                     InlineStyle::Text(text) => Inline::Text(text),
                     InlineStyle::Object(entries) => Inline::Object(entries.clone()),
@@ -371,6 +390,8 @@ fn inline_key(value: &InlineStyle, key: &mut String) {
 /// Inherited text state, plus the layout flags that do not inherit.
 #[derive(Clone)]
 struct Ctx {
+    structure: u32,
+    label: u32,
     size: f64,
     /// 0 left, 1 center, 2 right, 3 justify, 4 start, 5 end.
     align: u8,
@@ -411,7 +432,10 @@ struct Ctx {
     cell: Option<CellPaint>,
     item: bool,
     in_column: bool,
+    grid_item: bool,
     height: Option<f64>,
+    transformed_box: bool,
+    clipped_box: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -430,6 +454,10 @@ struct CellPaint {
 }
 
 const ROOT: Ctx = Ctx {
+    transformed_box: false,
+    clipped_box: false,
+    structure: 0,
+    label: 0,
     size: 12.0,
     align: 4,
     direction: Direction::Ltr,
@@ -458,6 +486,7 @@ const ROOT: Ctx = Ctx {
     cell: None,
     item: false,
     in_column: false,
+    grid_item: false,
     height: None,
 };
 
@@ -517,6 +546,7 @@ const SIZES: [Prop; 6] = [
 ];
 const BLACK: Rgb = [0, 0, 0];
 const EMPTY: Box = Box {
+    paint_effects: None,
     margin: [0.0; 4],
     padding: [0.0; 4],
     border: [0.0; 4],
@@ -526,6 +556,7 @@ const EMPTY: Box = Box {
     radius: None,
     opacity: 1.0,
     size: None,
+    effects: None,
 };
 
 fn justify(value: Option<&Value>) -> u8 {
@@ -586,11 +617,95 @@ fn row_only(s: &Style, in_row: bool) -> Result<()> {
     Ok(())
 }
 
+#[inline(never)]
+fn has_effects(s: &Style) -> bool {
+    s.0.iter().any(|(key, _)| matches!(key, Key::Prop(prop) if [p!("transform"), p!("clipPath"), p!("overflow")].contains(prop)))
+}
+
+fn defer_anchor(node: &Styled, s: &Style) -> bool {
+    (node.el.id.is_some() || node.el.tag.starts_with('h')) && has_effects(s)
+}
+
+fn item_only(s: &Style, context: &Ctx) -> Result<()> {
+    if context.grid_item {
+        for prop in [p!("height"), p!("minHeight"), p!("maxHeight")] {
+            if let Some(value) = s
+                .get(prop)
+                .filter(|v| v.text().is_some_and(|v| v.trim_end().ends_with('%')))
+            {
+                return Err(Error::new(format!(
+                    "{}: {value} is not supported on a grid item; use pt or px",
+                    prop.name()
+                )));
+            }
+        }
+        if [p!("flexGrow"), p!("flexShrink"), p!("flexBasis")]
+            .iter()
+            .any(|prop| s.get(*prop).is_some())
+        {
+            return Err(Error::new("flex applies only to a flex item"));
+        }
+    } else {
+        row_only(s, context.in_row)?;
+        for prop in [
+            p!("gridColumnStart"),
+            p!("gridColumnEnd"),
+            p!("gridRowStart"),
+            p!("gridRowEnd"),
+            p!("justifySelf"),
+        ] {
+            if let Some(value) = s.get(prop) {
+                return Err(Error::new(format!(
+                    "{}: {value} applies only to a grid item",
+                    prop.name()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn grid_applicability(node: &Styled, context: &Ctx) -> Result<()> {
+    let s = &node.style;
+    let grid = is(s, p!("display"), "grid");
+    for prop in [
+        p!("gridTemplateColumns"),
+        p!("gridTemplateRows"),
+        p!("gridAutoColumns"),
+        p!("gridAutoRows"),
+        p!("gridAutoFlow"),
+        p!("justifyItems"),
+    ] {
+        if let Some(value) = s.get(prop) {
+            if !grid {
+                return Err(Error::new(format!(
+                    "{}: {value} applies only to a grid container",
+                    prop.name()
+                )));
+            }
+        }
+    }
+    item_only(s, context)?;
+    let tag = node.el.tag.as_str();
+    if grid
+        && [
+            "img", "svg", "br", "hr", "table", "thead", "tbody", "tfoot", "tr",
+        ]
+        .contains(&tag)
+    {
+        return Err(Error::new(format!(
+            "display: grid is not supported on <{tag}>; use a wrapping div"
+        )));
+    }
+    Ok(())
+}
+
 /// Sizes, an auto margin, or a position make a layout node; `box-sizing` alone changes nothing.
 fn sized(s: &Style) -> bool {
     SIZES.iter().any(|prop| s.get(*prop).is_some())
         || MARGINS.iter().any(|prop| is(s, *prop, "auto"))
         || s.get(p!("position")).is_some()
+        || has_effects(s)
 }
 
 /// Whether `position` takes the element out of flow: `absolute` or `fixed`.
@@ -600,6 +715,14 @@ fn out_of_flow(s: &Style) -> bool {
 
 /// Rejects `position` where the element has no box of its own to place.
 fn static_only(s: &Style, tag: &str) -> Result<()> {
+    for prop in [p!("transform"), p!("clipPath"), p!("overflow")] {
+        if let Some(value) = get(s, prop) {
+            return Err(Error::new(format!(
+                "{}: {value} applies to blocks, text elements, and images, not <{tag}>",
+                prop.name()
+            )));
+        }
+    }
     match get(s, p!("position")) {
         Some(value) => Err(Error::new(format!(
             "position: {value} applies to blocks, text elements, and images, not <{tag}>"
@@ -777,7 +900,19 @@ fn inherit(
             .position(|own| *own == align)
             .map_or(255, |index| index as u8),
     };
+    let (mut transformed_box, mut clipped_box) = (current.transformed_box, current.clipped_box);
+    if !(transformed_box && clipped_box) {
+        for (key, value) in &s.0 {
+            if let Key::Prop(prop) = key {
+                transformed_box |= *prop == p!("transform");
+                clipped_box |=
+                    *prop == p!("clipPath") || *prop == p!("overflow") && value.is("hidden");
+            }
+        }
+    }
     Ok(Ctx {
+        transformed_box,
+        clipped_box,
         size,
         align,
         direction,
@@ -817,6 +952,8 @@ fn inherit(
                 Some(value) if !vertical_box_align(value) => vertical_align(value, current.size)?,
                 _ => 0.0,
             },
+        structure: current.structure,
+        label: current.label,
         background: current.background,
         link: current.link.clone(),
         opacity: match s.get(p!("opacity")) {
@@ -831,6 +968,7 @@ fn inherit(
         cell: None,
         item: false,
         in_column: false,
+        grid_item: false,
         height: None,
     })
 }
@@ -838,6 +976,7 @@ fn inherit(
 fn run(state: &Ctx, text: impl Into<String>, hard_break: bool) -> Run {
     let decorated = state.underline || state.line_through;
     Run {
+        structure: state.structure,
         font: state.face,
         size: state.size,
         line_height: match state.line_height {
@@ -872,7 +1011,8 @@ fn run(state: &Ctx, text: impl Into<String>, hard_break: bool) -> Run {
 /// Appends a run, merging it into the previous one when nothing about its paint differs.
 fn push(runs: &mut Vec<Run>, next: Run) {
     if let Some(last) = runs.last_mut() {
-        if !last.hard_break
+        if last.structure == next.structure
+            && !last.hard_break
             && last.font == next.font
             && last.size == next.size
             && last.line_height == next.line_height
@@ -1169,6 +1309,7 @@ pub struct Compiler<S> {
     page_tokens: bool,
     /// Set while compiling a `position: fixed` box.
     fixed: bool,
+    structure: Vec<StructureNode>,
 }
 
 impl<S: Sink> Compiler<S> {
@@ -1180,6 +1321,7 @@ impl<S: Sink> Compiler<S> {
             nav: None,
             page_tokens: false,
             fixed: false,
+            structure: Vec::new(),
         }
     }
 
@@ -1217,7 +1359,29 @@ impl<S: Sink> Compiler<S> {
         let mut nav = link_targets(&styled)?;
         nav.outline = outline;
         self.nav = Some(nav);
-        self.compile(&styled, &ROOT, 0)?;
+        let mut context = ROOT;
+        if self.writer.sink.pdfua() {
+            context.structure = self.structure_node("Document", 0);
+        }
+        self.compile(&styled, &context, 0)?;
+        // Headers and footers compile first for streaming; the footer reads last.
+        let roles: Vec<_> = self.structure.iter().map(|node| node.role).collect();
+        for node in &mut self.structure {
+            if node.role == "Table" {
+                node.children
+                    .sort_by_key(|id| match roles[*id as usize - 1] {
+                        "THead" => 0,
+                        "TFoot" => 2,
+                        _ => 1,
+                    });
+            }
+        }
+        if !self.structure.is_empty() {
+            self.validate_headings()?;
+        }
+        self.writer
+            .sink
+            .structure(std::mem::take(&mut self.structure));
         let nav = self.nav.take().unwrap();
         for (index, (id, owner)) in nav.targets.iter().enumerate() {
             if !nav.anchored.contains(&index) {
@@ -1247,6 +1411,20 @@ impl<S: Sink> Compiler<S> {
     }
 
     fn compile_element(&mut self, el: &Styled, context: &Ctx, depth: usize) -> Result<()> {
+        let structured;
+        let context = if context.structure != 0 {
+            structured = if is(&el.style, p!("position"), "fixed") {
+                Ctx {
+                    structure: 0,
+                    ..context.clone()
+                }
+            } else {
+                self.structure_context(el, context)?
+            };
+            &structured
+        } else {
+            context
+        };
         let result = if out_of_flow(&el.style) {
             self.out_of_flow(el, context, depth)
         } else {
@@ -1265,7 +1443,11 @@ impl<S: Sink> Compiler<S> {
     /// An absolute or fixed box leaves the margins around it to collapse as if it were absent.
     /// A fixed one compiles into a block of its own that the engine paints on every page.
     fn out_of_flow(&mut self, el: &Styled, context: &Ctx, depth: usize) -> Result<()> {
-        let fixed = is(&el.style, p!("position"), "fixed") && !self.fixed;
+        let fixed =
+            is(&el.style, p!("position"), "fixed") && !self.fixed && !context.transformed_box;
+        if fixed && context.clipped_box {
+            return Err(Error::new("position: fixed inside a clipped ancestor without a transform is not supported; use absolute or transform the ancestor"));
+        }
         if fixed && (self.nav.is_none() || self.page_tokens) {
             return Err(Error::new(
                 "position: fixed applies in the document body, not in a header or footer",
@@ -1284,6 +1466,7 @@ impl<S: Sink> Compiler<S> {
             in_row: false,
             item: false,
             in_column: false,
+            grid_item: false,
             cell: None,
             ..context.clone()
         };
@@ -1324,22 +1507,23 @@ impl<S: Sink> Compiler<S> {
         if !inline_tag(tag) {
             return Ok(None);
         }
-        if tag == "br" {
-            return Ok(Some(vec![line_break(node, context)?]));
-        }
         (|| {
             let s = &node.style;
+            grid_applicability(node, context)?;
+            if tag == "br" {
+                return Ok(Some(vec![line_break(node, context)?]));
+            }
             if let Some(value) = s
                 .get(p!("verticalAlign"))
                 .filter(|value| vertical_box_align(value))
             {
                 vertical_align(value, context.size)?;
             }
-            row_only(s, context.in_row)?;
             // A `<mark>` paints its background behind each line of its text, so only box edges make it a box.
             let paint = box_style(s, context.size, 1.0)?;
             let highlight = tag == "mark"
-                && paint.is_some_and(|paint| {
+                && paint.as_ref().is_none_or(|p| p.paint_effects.is_none())
+                && paint.as_ref().is_some_and(|paint| {
                     paint
                         .margin
                         .iter()
@@ -1347,7 +1531,8 @@ impl<S: Sink> Compiler<S> {
                         .chain(&paint.border)
                         .all(|edge| *edge == 0.0)
                 });
-            if (paint.is_some() && !highlight)
+            if is(s, p!("display"), "grid")
+                || (paint.is_some() && !highlight)
                 || sized(s)
                 || is(s, p!("breakBefore"), "page")
                 || is(s, p!("breakAfter"), "page")
@@ -1366,6 +1551,9 @@ impl<S: Sink> Compiler<S> {
             }
             if let Some(href) = &node.el.href {
                 next.link = Some(href.as_str().into());
+            }
+            if next.structure != 0 {
+                next = self.structure_context(node, &next)?;
             }
             self.collect(&node.children, &next)
         })()
@@ -1411,12 +1599,16 @@ impl<S: Sink> Compiler<S> {
             })
             .collect();
         let mut shown = preserve(transformed);
+        self.structure_paragraph(&mut shown, state.structure);
         // The first paragraph of a list item takes its marker, which hangs before that paragraph's first line.
         if let Some(marker) = state
             .marker
             .as_ref()
             .and_then(|marker| marker.borrow_mut().take())
         {
+            if marker.structure != 0 {
+                self.structure[marker.structure as usize - 1].alt = marker.text.trim().into();
+            }
             shown.insert(0, marker);
         }
         self.writer.paragraph(
@@ -1458,7 +1650,7 @@ impl<S: Sink> Compiler<S> {
         avoid: bool,
         body: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
-        let [top, right, bottom, left] = value.map_or([0.0; 4], |value| value.margin);
+        let [top, right, bottom, left] = value.as_ref().map_or([0.0; 4], |value| value.margin);
         let inner = value.map(|value| {
             if collapses {
                 Box {
@@ -1471,8 +1663,10 @@ impl<S: Sink> Compiler<S> {
         });
         let drawn = inner.filter(|inner| {
             !collapses
+                || inner.paint_effects.is_some()
                 || inner.background.is_some()
                 || inner.size.is_some()
+                || inner.effects.is_some()
                 || inner
                     .margin
                     .iter()
@@ -1484,15 +1678,16 @@ impl<S: Sink> Compiler<S> {
             self.writer.margin(top);
         }
         let result: Result<()> = (|| {
-            if let Some(inner) = drawn {
+            if let Some(inner) = &drawn {
                 let through = collapses
                     && inner.size.is_none()
+                    && inner.effects.is_none()
                     && inner.padding[0] == 0.0
                     && inner.border[0] == 0.0;
-                self.writer.box_start(inner, through)?;
+                self.writer.box_start(inner.clone(), through)?;
             }
             body(self)?;
-            if let Some(inner) = drawn {
+            if let Some(inner) = &drawn {
                 self.writer
                     .box_end(collapses && inner.padding[2] == 0.0 && inner.border[2] == 0.0)?;
             }
@@ -1506,7 +1701,7 @@ impl<S: Sink> Compiler<S> {
                     ));
                 }
                 if drawn.is_some() {
-                    let size = value.and_then(|value| value.size);
+                    let size = drawn.as_ref().and_then(|value| value.size);
                     let limited =
                         size.is_some_and(|size| size.height.or(size.max_height).is_some());
                     return Err(Error::new(if limited {
@@ -1530,7 +1725,10 @@ impl<S: Sink> Compiler<S> {
         let paint = box_style(s, size, context.opacity * own)?;
         let sizes = box_size(s, context.height, !context.in_row || context.item)?;
         let sizes = match position(s, size)? {
-            Some(position) => {
+            Some(mut position) => {
+                if position.kind == 3 && context.transformed_box {
+                    position.kind = 2;
+                }
                 Self::check_position(&position, sizes.map_or(0, |sizes| sizes.auto_margin))?;
                 Some(Size {
                     position: Some(position),
@@ -1539,6 +1737,15 @@ impl<S: Sink> Compiler<S> {
             }
             None => sizes,
         };
+        let effect = effects(s, size)?;
+        let mut paint = if effect.is_some() {
+            Some(paint.unwrap_or(EMPTY))
+        } else {
+            paint
+        };
+        if let Some(paint) = &mut paint {
+            paint.effects = effect;
+        }
         Ok(match sizes {
             Some(sizes) => Some(Box {
                 size: Some(sizes),
@@ -1738,6 +1945,7 @@ impl<S: Sink> Compiler<S> {
                 link: None,
                 background: None,
                 rise: 0.0,
+                structure: next.label,
                 marker: if inside { 2 } else { 1 },
                 white_space: WhiteSpace::Normal,
                 transform: Transform::None,
@@ -1751,22 +1959,32 @@ impl<S: Sink> Compiler<S> {
     fn element(&mut self, node: &Styled, context: &Ctx, depth: usize) -> Result<()> {
         let s: &Style = &node.style;
         let tag = node.el.tag.as_str();
-        self.anchor(node)?;
+        if !defer_anchor(node, s) {
+            self.anchor(node)?;
+        }
         if s.get(p!("verticalAlign")).is_some() && !TABLE_PARTS.contains(&tag) && !inline_tag(tag) {
             return Err(Error::new(VERTICAL_ALIGN));
         }
-        let container = [
-            p!("justifyContent"),
-            p!("alignItems"),
-            p!("alignContent"),
-            p!("flexWrap"),
-        ];
-        if container.iter().any(|prop| s.get(*prop).is_some())
-            && (!is(s, p!("display"), "flex") || !BLOCK_TAGS.contains(&tag))
-        {
-            return Err(Error::new(
-                "justify-content, align-items, align-content, and flex-wrap apply only to a flex container",
-            ));
+        let grid = is(s, p!("display"), "grid");
+        let flex = is(s, p!("display"), "flex");
+        for prop in [p!("justifyContent"), p!("alignItems"), p!("alignContent")] {
+            if s.get(prop).is_some() && !grid && (!flex || !BLOCK_TAGS.contains(&tag)) {
+                return Err(Error::new("justify-content, align-items, align-content, and flex-wrap apply only to a flex container or grid"));
+            }
+        }
+        for prop in [p!("flexWrap"), p!("flexDirection")] {
+            if let Some(value) = s.get(prop) {
+                if !flex {
+                    return Err(Error::new(format!(
+                        "{}: {value} applies only to a flex container",
+                        prop.name()
+                    )));
+                }
+            }
+        }
+        grid_applicability(node, context)?;
+        if grid {
+            return self.block(node, s, context, depth);
         }
         match tag {
             "div" | "main" | "section" | "article" | "header" | "footer" | "ul" | "ol" | "li"
@@ -1777,7 +1995,10 @@ impl<S: Sink> Compiler<S> {
             | "h2" | "h3" | "h4" | "h5" | "h6" => self.text_block(node, s, context, depth),
             "img" | "svg" => match position(s, context.size)? {
                 // A picture has no box of its own to position, so an empty one around it moves.
-                Some(position) => {
+                Some(mut position) => {
+                    if position.kind == 3 && context.transformed_box {
+                        position.kind = 2;
+                    }
                     Self::check_position(&position, 0)?;
                     let size = Size {
                         position: Some(position),
@@ -1803,12 +2024,17 @@ impl<S: Sink> Compiler<S> {
             }
             "table" => self.table(node, context, depth),
             "hr" => {
-                row_only(s, context.in_row)?;
+                item_only(s, context)?;
                 self.page_break(s, false, depth)?;
                 let size =
                     inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?.size;
                 let paint = Self::layout_box(s, size, context)?;
-                self.boxed(paint, collapses(context), false, |_| Ok(()))?;
+                self.boxed(paint, collapses(context), false, |this| {
+                    if defer_anchor(node, s) {
+                        this.anchor(node)?;
+                    }
+                    Ok(())
+                })?;
                 self.page_break(s, true, depth)
             }
             _ => Ok(()),
@@ -1825,7 +2051,7 @@ impl<S: Sink> Compiler<S> {
         if context.cell.is_some() {
             sizeless(s, tag, &["width"])?;
         }
-        row_only(s, context.in_row)?;
+        item_only(s, context)?;
         self.page_break(s, false, depth)?;
         let mut next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
         Self::list_state(node, &mut next, context)?;
@@ -1837,10 +2063,12 @@ impl<S: Sink> Compiler<S> {
         let paint = cell_box(Self::layout_box(s, next.size, context)?, context.cell);
         let avoid = is(s, p!("breakInside"), "avoid");
         // A CSS flex item is one element, so one without a box of its own gets an empty one.
-        let value = paint.or(context.item.then_some(EMPTY));
+        let value = paint.clone().or(context.item.then_some(EMPTY));
         let flows = collapses(context) && !out_of_flow(s);
-        self.boxed(value, flows, avoid, |this| {
+        self.boxed(value.clone(), flows, avoid, |this| {
+            if defer_anchor(node, s) { this.anchor(node)?; }
             let flex = is(s, p!("display"), "flex");
+            let grid = is(s, p!("display"), "grid");
             let row = flex && get(s, p!("flexDirection")).is_none_or(|value| value.is("row"));
             let inner = Ctx {
                 height: fixed(heights(paint.as_ref())),
@@ -1865,14 +2093,16 @@ impl<S: Sink> Compiler<S> {
                 .collect();
             if let Some(StyledNode::Element(el)) = items
                 .iter()
-                .find(|item| flex && matches!(item, StyledNode::Element(el) if out_of_flow(&el.style)))
+                .find(|item| (flex || grid) && matches!(item, StyledNode::Element(el) if out_of_flow(&el.style)))
             {
                 return Err(Error::new(
-                    "an absolute or fixed box cannot be a flex item; wrap it in a block",
+                    if grid { "an absolute or fixed box cannot be a grid item; wrap it in a block" } else { "an absolute or fixed box cannot be a flex item; wrap it in a block" },
                 )
                 .locate(&el.at));
             }
-            if flex && !items.is_empty() && css_flex(s, &items, !row)? {
+            if grid {
+                this.grid(s, &items, &next, value.as_ref(), depth)?;
+            } else if flex && !items.is_empty() && css_flex(s, &items, !row)? {
                 this.flexbox(s, &items, &next, paint.as_ref(), depth)?;
             } else if row && !items.is_empty() {
                 // A gap is a fixed-width empty column between items, so flex grow shares what is left.
@@ -1909,6 +2139,51 @@ impl<S: Sink> Compiler<S> {
             Ok(())
         })?;
         self.page_break(s, true, depth)
+    }
+
+    fn grid(
+        &mut self,
+        s: &Style,
+        items: &[&StyledNode],
+        text: &Ctx,
+        layout: Option<&Box>,
+        depth: usize,
+    ) -> Result<()> {
+        let mut grid = crate::css::style::grid::container(s, text.size)?;
+        grid.boxed = layout.is_some();
+        let (min, max) = heights(layout);
+        grid.min_height = min as f32;
+        grid.max_height = max.map(|height| height.max(min) as f32);
+        let empty = Style::default();
+        let specs = items
+            .iter()
+            .map(|item| {
+                crate::css::style::grid::item(match item {
+                    StyledNode::Element(el) => &el.style,
+                    StyledNode::Text(_) => &empty,
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        self.writer.grid_start(grid, specs)?;
+        let inner = Ctx {
+            in_row: true,
+            item: true,
+            grid_item: true,
+            height: fixed((min, max)),
+            ..text.clone()
+        };
+        for child in items {
+            // A table's margin spacers must remain inside its single grid item.
+            let table = matches!(child, StyledNode::Element(el) if el.el.tag == "table");
+            if table {
+                self.writer.stack_start(0.0, false)?;
+            }
+            self.compile(std::slice::from_ref(*child), &inner, depth + 1)?;
+            if table {
+                self.writer.stack_end(false)?;
+            }
+        }
+        self.writer.grid_end()
     }
 
     /// A CSS flex container: one record for the container and its items, then one element per item.
@@ -2012,7 +2287,7 @@ impl<S: Sink> Compiler<S> {
 
     fn text_block(&mut self, node: &Styled, s: &Style, context: &Ctx, depth: usize) -> Result<()> {
         let tag = node.el.tag.as_str();
-        row_only(s, context.in_row)?;
+        item_only(s, context)?;
         self.page_break(s, false, depth)?;
         let next = inherit(s, context, &self.fonts, &mut self.writer.sink, node.el.dir)?;
         let mut inner = next.clone();
@@ -2041,7 +2316,10 @@ impl<S: Sink> Compiler<S> {
         let avoid = is(s, p!("breakInside"), "avoid");
         let value = own.or((context.item && runs.is_none()).then_some(EMPTY));
         let flows = collapses(context) && !out_of_flow(s);
-        self.boxed(value, flows, avoid, |this| {
+        self.boxed(value.clone(), flows, avoid, |this| {
+            if defer_anchor(node, s) {
+                this.anchor(node)?;
+            }
             if avoid {
                 this.writer.stack_start(0.0, false)?;
             }
@@ -2064,7 +2342,12 @@ impl<S: Sink> Compiler<S> {
 
     fn picture(&mut self, node: &Styled, s: &Style, context: &Ctx, depth: usize) -> Result<()> {
         let tag = node.el.tag.as_str();
-        row_only(s, context.in_row)?;
+        if self.writer.sink.pdfua() && node.el.alt.is_none() {
+            return Err(Error::new(
+                r#"PDF/UA requires explicit alt on images; use alt="" for decoration"#,
+            ));
+        }
+        item_only(s, context)?;
         sizeless(s, tag, &["width", "height", "maxWidth", "maxHeight"])?;
         for prop in [p!("height"), p!("maxHeight")] {
             if get(s, prop)
@@ -2085,26 +2368,45 @@ impl<S: Sink> Compiler<S> {
                 .transpose()
         };
         let width = length(p!("width"))?;
-        if context.item && width.is_some_and(|width| width.kind == 2) {
+        if context.item && !context.grid_item && width.is_some_and(|width| width.kind == 2) {
             return Err(Error::new(
                 "an image flex item takes a width in pt or px; wrap it to size it by percent",
             ));
         }
         let height = length(p!("height"))?.map(|height| height.value);
         let max_width = length(p!("maxWidth"))?;
-        if context.item && max_width.is_some_and(|width| width.kind == 2) {
+        if context.item && !context.grid_item && max_width.is_some_and(|width| width.kind == 2) {
             return Err(Error::new(
                 "an image flex item takes a maxWidth in pt or px; wrap it to size it by percent",
             ));
         }
         let max_height = length(p!("maxHeight"))?.map(|height| height.value);
-        if radius_of(s, next.size)?.is_some() {
+        let mut effect = effects(s, next.size)?;
+        if let Some(effect) = &mut effect {
+            Rc::make_mut(effect).image = true;
+        }
+        if radius_of(s, next.size)?.is_some()
+            && !effect
+                .as_ref()
+                .is_some_and(|effect| effect.overflow || effect.clip != "none")
+        {
             return Err(Error::new(format!(
                 "border-radius does not clip <{tag}>: the picture stays rectangular, so remove the radius"
             )));
         }
         let paint = box_style(s, next.size, next.opacity)?;
+        let paint = if effect.is_some() {
+            Some(Box {
+                effects: effect,
+                ..paint.unwrap_or(EMPTY)
+            })
+        } else {
+            paint
+        };
         self.boxed(paint, collapses(context), false, |this| {
+            if defer_anchor(node, s) {
+                this.anchor(node)?;
+            }
             let result: Result<()> = (|| {
                 // A drawing carries its opacity in its shapes, where an image takes it from the page.
                 let (slot, alpha) = match &node.el.picture {
@@ -2118,6 +2420,7 @@ impl<S: Sink> Compiler<S> {
                 };
                 let alt = node.el.alt.as_deref().unwrap_or("");
                 this.writer.image(
+                    context.structure,
                     slot,
                     width,
                     height,

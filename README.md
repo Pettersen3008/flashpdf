@@ -207,7 +207,18 @@ const pdf = await render(<Invoice />, {
 });
 ```
 
-`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. Tagged mode requires `language`. It writes a structure tree with paragraph lines and figures, plus image descriptions and page furniture marked as artifacts. This is basic tagging, not PDF/UA conformance: headings, lists, tables, and link annotations do not yet have full semantic structure. Use an accessibility checker before distributing documents that must meet an accessibility standard.
+`PdfMetadata` accepts `title`, `author`, `subject`, `keywords`, and `language` strings. `tagged: true` requires `language` and writes basic paragraph-line and figure tags. Use `pdfua: true` for PDF/UA-1: it enables semantic tagging and requires a nonempty title, language, embedded fonts for every text style, and explicit image `alt`. Set `alt=""` for decorative images. Headings must start at `h1` and cannot skip levels.
+
+```tsx
+const pdf = await render(<Invoice />, {
+  pdfua: true,
+  pdfa: "3b",
+  fonts: [{ family: "Invoice", regular, bold }],
+  metadata: { title: "Invoice 42", language: "en-US" },
+});
+```
+
+Select that embedded family with `fontFamily` in the document and its header and footer. PDF/UA keeps one `P` per paragraph across pages, heading levels, list and table structure, and link annotations. `lang` marks a language change. A `th` takes `scope="row"`, `"col"`, or `"both"`; the default is `"col"`. Page furniture and repeated table headers and footers become artifacts. PDF/UA works with `pdfa: "2u"` and `"3b"`, including attachments with 3b. Authors still need to check reading order, heading choices, table relationships, and alt text. See the [PDF/UA guide](docs/guide.md#pdfua).
 
 ## Embedded fonts
 

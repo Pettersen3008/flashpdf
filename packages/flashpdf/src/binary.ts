@@ -96,7 +96,7 @@ export class Binary {
 	}
 	header() {
 		for (const byte of [70, 80, 68, 70]) this.u8(byte);
-		this.u16(25);
+		this.u16(28);
 		this.flush();
 	}
 	record(opcode: number, payload: () => void = () => {}) {

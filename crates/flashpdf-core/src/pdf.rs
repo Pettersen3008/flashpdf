@@ -19,6 +19,8 @@ pub(crate) struct Metadata {
     pub(crate) keywords: String,
     pub(crate) language: String,
     pub(crate) tagged: bool,
+    pub(crate) pdfua: bool,
+    pub(crate) structure: Vec<crate::compile::StructureNode>,
     pub(crate) pdfa: Option<PdfA>,
     /// Factur-X conformance level and embedded file name.
     pub(crate) facturx: Option<(&'static str, &'static str)>,
@@ -73,11 +75,32 @@ pub(crate) fn finish_pdf(
     used_fonts: Vec<bool>,
     images: Vec<Image>,
     used_images: Vec<bool>,
-    links: Vec<Vec<PageLink>>,
+    mut links: Vec<Vec<PageLink>>,
     tags: Vec<Vec<PageTag>>,
     alphas: Vec<Vec<[u8; 2]>>,
-    metadata: Metadata,
+    shadings: Vec<Vec<crate::paint::Shading>>,
+    mut metadata: Metadata,
 ) -> Vec<u8> {
+    if metadata.pdfua {
+        for link in links.iter_mut().flatten() {
+            if link_node(&metadata.structure, link.structure).is_none() {
+                let id = metadata.structure.len() as u32 + 1;
+                metadata.structure.push(crate::compile::StructureNode {
+                    at: None,
+                    role: "Link",
+                    parent: 1,
+                    children: Vec::new(),
+                    alt: link.uri.clone(),
+                    lang: None,
+                    scope: None,
+                    columns: 1,
+                    rows: 1,
+                });
+                metadata.structure[0].children.push(id);
+                link.structure = id;
+            }
+        }
+    }
     let used: Vec<FontId> = (0..fonts.len())
         .filter(|slot| used_fonts[*slot])
         .map(|slot| FontId::new(slot as u8))
@@ -158,6 +181,13 @@ pub(crate) fn finish_pdf(
             (slot as u16, image, mask)
         })
         .collect();
+    let shading_refs: Vec<Vec<Ref>> = shadings
+        .iter()
+        .map(|page| page.iter().map(|_| allocate()).collect())
+        .collect();
+    for (page, refs) in shadings.iter().zip(&shading_refs) {
+        crate::paint::write_shadings(&mut pdf, page, refs);
+    }
     let info = [
         &metadata.title,
         &metadata.author,
@@ -174,14 +204,33 @@ pub(crate) fn finish_pdf(
     } else {
         Vec::new()
     };
-    let tag_refs: Vec<Vec<Ref>> = if metadata.tagged {
+    let tag_refs: Vec<Vec<Ref>> = if metadata.tagged && !metadata.pdfua {
         tags.iter()
             .map(|page| page.iter().map(|_| allocate()).collect())
             .collect()
     } else {
         Vec::new()
     };
+    let ua_refs: Vec<Ref> = if metadata.pdfua {
+        metadata
+            .structure
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                if index == 0 {
+                    structure.unwrap().1
+                } else {
+                    allocate()
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let archive = metadata.pdfa.map(|_| (allocate(), allocate()));
+    let xmp = archive
+        .map(|(xmp, _)| xmp)
+        .or_else(|| metadata.pdfua.then(&mut allocate));
     let files: Vec<(Ref, Ref)> = metadata
         .attachments
         .iter()
@@ -214,8 +263,13 @@ pub(crate) fn finish_pdf(
         catalog_writer.pair(Name(b"StructTreeRoot"), root);
         catalog_writer.mark_info().marked(true);
     }
-    if let Some((xmp, profile)) = archive {
+    if metadata.pdfua {
+        catalog_writer.viewer_preferences().display_doc_title(true);
+    }
+    if let Some(xmp) = xmp {
         catalog_writer.metadata(xmp);
+    }
+    if let Some((_, profile)) = archive {
         catalog_writer
             .output_intents()
             .push()
@@ -290,46 +344,61 @@ pub(crate) fn finish_pdf(
     if let (Some((root, document)), Some(stream)) = (structure, object_stream) {
         let mut chunk = Chunk::with_settings(Settings { pretty: false });
         let mut starts = vec![0];
-        let mut tree = chunk.indirect(root).start::<StructTreeRoot>();
-        tree.child(document).parent_tree_next_key(count as i32);
-        let mut parents = tree.parent_tree();
-        let mut nums = parents.nums();
-        for (index, reference) in parent_arrays.iter().enumerate() {
-            nums.insert(index as i32, *reference);
-        }
-        drop(nums);
-        drop(parents);
-        drop(tree);
-        starts.push(chunk.len());
-        let mut doc = chunk.struct_element(document);
-        doc.kind(StructRole::Document).parent(root);
-        doc.children().items(tag_refs.iter().flatten().copied());
-        drop(doc);
-        starts.push(chunk.len());
-        packed.extend([root, document]);
-        for (page_index, page_tags) in tags.iter().enumerate() {
-            chunk
-                .indirect(parent_arrays[page_index])
-                .array()
-                .items(tag_refs[page_index].iter().copied());
+        if metadata.pdfua {
+            write_ua_structure(
+                &mut chunk,
+                &metadata,
+                &tags,
+                &links,
+                &ua_refs,
+                &parent_arrays,
+                root,
+                first_page,
+                &mut packed,
+                &mut starts,
+            );
+        } else {
+            let mut tree = chunk.indirect(root).start::<StructTreeRoot>();
+            tree.child(document).parent_tree_next_key(count as i32);
+            let mut parents = tree.parent_tree();
+            let mut nums = parents.nums();
+            for (index, reference) in parent_arrays.iter().enumerate() {
+                nums.insert(index as i32, *reference);
+            }
+            drop(nums);
+            drop(parents);
+            drop(tree);
             starts.push(chunk.len());
-            packed.push(parent_arrays[page_index]);
-            for (mcid, tag) in page_tags.iter().enumerate() {
-                let mut item = chunk.struct_element(tag_refs[page_index][mcid]);
-                item.kind(match tag {
-                    PageTag::Paragraph => StructRole::P,
-                    PageTag::Figure(_) => StructRole::Figure,
-                })
-                .parent(document)
-                .page(Ref::new(first_page + page_index as i32 * 2));
-                if let PageTag::Figure(alt) = tag {
-                    item.alt(TextStr(alt));
-                }
-                // An integer child is a marked-content sequence on the element's /Pg.
-                item.pair(Name(b"K"), mcid as i32);
-                drop(item);
+            let mut doc = chunk.struct_element(document);
+            doc.kind(StructRole::Document).parent(root);
+            doc.children().items(tag_refs.iter().flatten().copied());
+            drop(doc);
+            starts.push(chunk.len());
+            packed.extend([root, document]);
+            for (page_index, page_tags) in tags.iter().enumerate() {
+                chunk
+                    .indirect(parent_arrays[page_index])
+                    .array()
+                    .items(tag_refs[page_index].iter().copied());
                 starts.push(chunk.len());
-                packed.push(tag_refs[page_index][mcid]);
+                packed.push(parent_arrays[page_index]);
+                for (mcid, tag) in page_tags.iter().enumerate() {
+                    let mut item = chunk.struct_element(tag_refs[page_index][mcid]);
+                    item.kind(match tag {
+                        PageTag::Paragraph | PageTag::Semantic(_) => StructRole::P,
+                        PageTag::Figure(_) => StructRole::Figure,
+                    })
+                    .parent(document)
+                    .page(Ref::new(first_page + page_index as i32 * 2));
+                    if let PageTag::Figure(alt) = tag {
+                        item.alt(TextStr(alt));
+                    }
+                    // An integer child is a marked-content sequence on the element's /Pg.
+                    item.pair(Name(b"K"), mcid as i32);
+                    drop(item);
+                    starts.push(chunk.len());
+                    packed.push(tag_refs[page_index][mcid]);
+                }
             }
         }
         let (data, first) = pack_objects(chunk.as_bytes(), &packed, &starts);
@@ -369,8 +438,10 @@ pub(crate) fn finish_pdf(
     }
     drop(images);
 
-    if let Some((xmp, profile)) = archive {
+    if let Some(xmp) = xmp {
         pdf.metadata(xmp, xmp_packet(&metadata).as_bytes());
+    }
+    if let Some((_, profile)) = archive {
         pdf.icc_profile(profile, SRGB).n(3);
     }
     for ((attachment, (spec, file)), data) in metadata.attachments.iter().zip(&files).zip(attached)
@@ -390,6 +461,7 @@ pub(crate) fn finish_pdf(
         }
     }
 
+    let mut annotation_key = count as i32;
     for (index, ((stream, page_links), page_alphas)) in
         streams.into_iter().zip(links).zip(alphas).enumerate()
     {
@@ -421,6 +493,12 @@ pub(crate) fn finish_pdf(
             x_objects.finish();
         }
         write_alphas(&mut resources, &page_alphas);
+        if !shading_refs[index].is_empty() {
+            let mut patterns = resources.patterns();
+            for (i, reference) in shading_refs[index].iter().enumerate() {
+                patterns.pair(Name(format!("Gr{i}").as_bytes()), *reference);
+            }
+        }
         resources.finish();
         let annotations: Vec<Ref> = page_links
             .iter()
@@ -431,6 +509,9 @@ pub(crate) fn finish_pdf(
             })
             .collect();
         if !annotations.is_empty() {
+            if metadata.pdfua {
+                output_page.pair(Name(b"Tabs"), Name(b"S"));
+            }
             output_page.annotations(annotations.iter().copied());
         }
         output_page.finish();
@@ -443,6 +524,18 @@ pub(crate) fn finish_pdf(
                 .rect(Rect::new(x1, y1, x2, y2))
                 .flags(AnnotationFlags::PRINT)
                 .border(0.0, 0.0, 0.0, None);
+            if metadata.pdfua {
+                let node = link_node(&metadata.structure, link.structure);
+                let alt = node
+                    .map(|id| metadata.structure[id as usize - 1].alt.as_str())
+                    .filter(|alt| !alt.trim().is_empty())
+                    .unwrap_or(&link.uri);
+                annotation
+                    .pair(Name(b"StructParent"), annotation_key)
+                    .pair(Name(b"P"), page_ref)
+                    .pair(Name(b"Contents"), TextStr(alt));
+                annotation_key += 1;
+            }
             let mut action = annotation.action();
             match link.uri.strip_prefix('#') {
                 Some(name) => action
@@ -471,6 +564,158 @@ pub(crate) fn finish_pdf(
         pdf.set_file_id((id.to_vec(), id.to_vec()));
     }
     pdf.finish()
+}
+
+fn link_node(nodes: &[crate::compile::StructureNode], mut id: u32) -> Option<u32> {
+    while id != 0 {
+        let node = nodes.get(id as usize - 1)?;
+        if node.role == "Link" {
+            return Some(id);
+        }
+        id = node.parent;
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_ua_structure(
+    chunk: &mut Chunk,
+    metadata: &Metadata,
+    tags: &[Vec<PageTag>],
+    links: &[Vec<PageLink>],
+    refs: &[Ref],
+    arrays: &[Ref],
+    root: Ref,
+    first_page: i32,
+    packed: &mut Vec<Ref>,
+    starts: &mut Vec<usize>,
+) {
+    let nodes = &metadata.structure;
+    let mut marked = vec![Vec::new(); nodes.len()];
+    let mut objects = vec![Vec::new(); nodes.len()];
+    let mut live = vec![false; nodes.len()];
+    let mut include = |mut id: u32| {
+        while id != 0 && !live[id as usize - 1] {
+            live[id as usize - 1] = true;
+            id = nodes[id as usize - 1].parent;
+        }
+    };
+    include(1);
+    // Empty cells keep their column positions; empty list bodies still belong to their items.
+    for (index, node) in nodes.iter().enumerate() {
+        if matches!(
+            node.role,
+            "TH" | "TD" | "LBody" | "H1" | "H2" | "H3" | "H4" | "H5" | "H6"
+        ) {
+            include(index as u32 + 1);
+        }
+    }
+    for (page, tags) in tags.iter().enumerate() {
+        for (mcid, tag) in tags.iter().enumerate() {
+            if let PageTag::Semantic(id) = tag {
+                include(*id);
+                marked[*id as usize - 1].push((page, mcid));
+            }
+        }
+    }
+    let mut annotation = first_page + tags.len() as i32 * 2;
+    let mut key = tags.len() as i32;
+    let mut parents = Vec::new();
+    for (page, links) in links.iter().enumerate() {
+        for link in links {
+            let id = link_node(nodes, link.structure).unwrap();
+            include(id);
+            objects[id as usize - 1].push((page, Ref::new(annotation)));
+            parents.push((key, refs[id as usize - 1]));
+            key += 1;
+            annotation += 1;
+        }
+    }
+    let mut tree = chunk.indirect(root).start::<StructTreeRoot>();
+    tree.child(refs[0]).parent_tree_next_key(key);
+    let mut parent_tree = tree.parent_tree();
+    let mut nums = parent_tree.nums();
+    for (page, reference) in arrays.iter().enumerate() {
+        nums.insert(page as i32, *reference);
+    }
+    for (key, reference) in parents {
+        nums.insert(key, reference);
+    }
+    drop(nums);
+    drop(parent_tree);
+    drop(tree);
+    packed.push(root);
+    starts.push(chunk.len());
+    for (page, tags) in tags.iter().enumerate() {
+        let mut array = chunk.indirect(arrays[page]).array();
+        for tag in tags {
+            if let PageTag::Semantic(id) = tag {
+                array.item(refs[*id as usize - 1]);
+            }
+        }
+        drop(array);
+        packed.push(arrays[page]);
+        starts.push(chunk.len());
+    }
+    for (index, node) in nodes.iter().enumerate().filter(|(index, _)| live[*index]) {
+        let mut item = chunk.struct_element(refs[index]);
+        item.pair(Name(b"S"), Name(node.role.as_bytes()));
+        item.parent(if node.parent == 0 {
+            root
+        } else {
+            refs[node.parent as usize - 1]
+        });
+        if !node.alt.is_empty() {
+            item.alt(TextStr(&node.alt));
+        }
+        if let Some(lang) = &node.lang {
+            item.pair(Name(b"Lang"), TextStr(lang));
+        }
+        if matches!(node.role, "TH" | "TD") {
+            let mut attributes = item.insert(Name(b"A")).dict();
+            attributes.pair(Name(b"O"), Name(b"Table"));
+            if let Some(scope) = &node.scope {
+                attributes.pair(
+                    Name(b"Scope"),
+                    Name(match scope.as_str() {
+                        "row" => b"Row",
+                        "both" => b"Both",
+                        _ => b"Column",
+                    }),
+                );
+            }
+            if node.columns > 1 {
+                attributes.pair(Name(b"ColSpan"), i32::from(node.columns));
+            }
+            if node.rows > 1 {
+                attributes.pair(Name(b"RowSpan"), i32::from(node.rows));
+            }
+        }
+        let mut kids = item.insert(Name(b"K")).array();
+        for child in &node.children {
+            if live[*child as usize - 1] {
+                kids.item(refs[*child as usize - 1]);
+            }
+        }
+        for &(page, mcid) in &marked[index] {
+            kids.push()
+                .dict()
+                .pair(Name(b"Type"), Name(b"MCR"))
+                .pair(Name(b"Pg"), Ref::new(first_page + page as i32 * 2))
+                .pair(Name(b"MCID"), mcid as i32);
+        }
+        for &(page, reference) in &objects[index] {
+            kids.push()
+                .dict()
+                .pair(Name(b"Type"), Name(b"OBJR"))
+                .pair(Name(b"Pg"), Ref::new(first_page + page as i32 * 2))
+                .pair(Name(b"Obj"), reference);
+        }
+        drop(kids);
+        drop(item);
+        packed.push(refs[index]);
+        starts.push(chunk.len());
+    }
 }
 
 /// Object stream data for `packed`, written compact into `chunk` with `packed[i]` spanning
@@ -625,7 +870,8 @@ fn xmp_packet(metadata: &Metadata) -> String {
     xmp.push_str(match metadata.pdfa {
         Some(PdfA::A2b) => "<pdfaid:part>2</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
         Some(PdfA::A2u) => "<pdfaid:part>2</pdfaid:part><pdfaid:conformance>U</pdfaid:conformance>",
-        _ => "<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
+        Some(PdfA::A3b) => "<pdfaid:part>3</pdfaid:part><pdfaid:conformance>B</pdfaid:conformance>",
+        None => "",
     });
     for (value, open, close) in [
         (
@@ -665,6 +911,26 @@ fn xmp_packet(metadata: &Metadata) -> String {
         xmp.push_str(close);
     }
     xmp.push_str("</rdf:Description>");
+    if metadata.pdfua {
+        xmp.push_str(concat!(
+            "<rdf:Description rdf:about=\"\" xmlns:pdfuaid=\"http://www.aiim.org/pdfua/ns/id/\">",
+            "<pdfuaid:part>1</pdfuaid:part></rdf:Description>",
+        ));
+        if metadata.pdfa.is_some() {
+            xmp.push_str(concat!(
+                "<rdf:Description rdf:about=\"\" xmlns:pdfaExtension=\"http://www.aiim.org/pdfa/ns/extension/\"",
+                " xmlns:pdfaSchema=\"http://www.aiim.org/pdfa/ns/schema#\" xmlns:pdfaProperty=\"http://www.aiim.org/pdfa/ns/property#\">",
+                "<pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType=\"Resource\">",
+                "<pdfaSchema:schema>PDF/UA identification schema</pdfaSchema:schema>",
+                "<pdfaSchema:namespaceURI>http://www.aiim.org/pdfua/ns/id/</pdfaSchema:namespaceURI>",
+                "<pdfaSchema:prefix>pdfuaid</pdfaSchema:prefix><pdfaSchema:property><rdf:Seq>",
+                "<rdf:li rdf:parseType=\"Resource\"><pdfaProperty:name>part</pdfaProperty:name>",
+                "<pdfaProperty:valueType>Integer</pdfaProperty:valueType><pdfaProperty:category>internal</pdfaProperty:category>",
+                "<pdfaProperty:description>PDF/UA part</pdfaProperty:description></rdf:li>",
+                "</rdf:Seq></pdfaSchema:property></rdf:li></rdf:Bag></pdfaExtension:schemas></rdf:Description>",
+            ));
+        }
+    }
     if let Some((level, file)) = metadata.facturx {
         xmp.extend([
             concat!(

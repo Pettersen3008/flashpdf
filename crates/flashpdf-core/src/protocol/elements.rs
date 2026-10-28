@@ -267,6 +267,19 @@ impl Decoder {
                 element.picture = Some(Picture::Drawing(drawing(&bytes)?));
                 Ok(())
             }
+            Opcode::Tw if in_block => {
+                count(elements, payload.len())?;
+                let mut cursor = Cursor::new(payload);
+                let utilities = cursor.utf8()?;
+                cursor.done()?;
+                let element = elements
+                    .open
+                    .last_mut()
+                    .filter(|element| element.children.is_empty() && element.tw.is_none())
+                    .ok_or(ProtocolError::InvalidNesting)?;
+                element.tw = Some(utilities.into());
+                Ok(())
+            }
             Opcode::Close if in_block && payload.is_empty() => {
                 let element = elements.open.pop().ok_or(ProtocolError::InvalidNesting)?;
                 elements.attach(Node::Element(element));
@@ -521,6 +534,22 @@ fn open(payload: &[u8], staged: usize) -> Result<Element, ProtocolError> {
         }
         element.picture = Some(Picture::Image(handle));
     }
+    if cursor.remaining() {
+        let lang = cursor.utf8()?;
+        if !lang.is_empty() {
+            if !super::valid_language(lang) {
+                return Err(ProtocolError::InvalidValue("lang"));
+            }
+            element.lang = Some(lang.into());
+        }
+        let scope = cursor.utf8()?;
+        if !scope.is_empty() {
+            if tag != "th" || !["row", "col", "both"].contains(&scope) {
+                return Err(ProtocolError::InvalidValue("scope"));
+            }
+            element.scope = Some(scope.into());
+        }
+    }
     cursor.done()?;
     Ok(element)
 }
@@ -619,7 +648,26 @@ fn paint(cursor: &mut Cursor) -> Result<Option<Paint>, ProtocolError> {
 
 /// The compiler writes layout records straight into the decoder that validates them.
 impl Sink for Commands {
+    fn pdfua(&self) -> bool {
+        self.pdfua
+    }
+    fn structure(&mut self, nodes: Vec<crate::compile::StructureNode>) {
+        self.ua_compiled = true;
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_structure(nodes);
+        } else {
+            self.metadata.structure = nodes;
+        }
+    }
     fn record(&mut self, record: &Record, payload: &[u8]) -> Result<(), String> {
+        if self.pdfua && self.furniture.is_none() {
+            let ids = match record {
+                Record::Paragraph { runs, .. } => runs.iter().map(|run| run.structure).collect(),
+                Record::Image { structure, .. } => vec![*structure],
+                _ => Vec::new(),
+            };
+            self.structure_ids = ids;
+        }
         self.read_record(record.opcode(), payload)
             .map_err(|error| error.to_string())
     }

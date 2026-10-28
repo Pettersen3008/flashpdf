@@ -160,6 +160,56 @@ test("given a parsed JSON element tree, when rendering, then matches the same tr
 	await assert.rejects(render(deep), /nesting exceeds 64/);
 });
 
+test("given a tw prop or attribute, when rendering, then applies its utilities ahead of style and rejects unknown ones and variants by path", async () => {
+	const tree = (style) =>
+		jsx("main", {
+			children: jsx("p", { tw: "p-4 text-right font-bold", style, children: "Total" }),
+		});
+	assert.deepEqual(
+		await render('<main><p tw="p-4 text-right font-bold">Total</p></main>'),
+		await render(tree()),
+	);
+	assert.deepEqual(
+		await render(tree({ textAlign: "left" })),
+		await render(tree("text-align: left")),
+	);
+	assert.notDeepEqual(await render(tree({ textAlign: "left" })), await render(tree()));
+	await assert.rejects(
+		render(jsx("main", { children: jsx("p", { tw: "p-4 shadow-lg", children: "x" }) })),
+		/unknown tw utility: shadow-lg on <p> in <main>/,
+	);
+	await assert.rejects(
+		render('<main tw="md:p-4"></main>'),
+		/tw takes no variants: md:p-4 on <main>/,
+	);
+});
+
+test("given malformed tw input and arbitrary CSS values, when rendering JSX and HTML, then rejects with token context", async () => {
+	for (const tw of [
+		"[color:red;display:flex]",
+		"p-[1px",
+		"text-[bogus]",
+		"[display:inline-grid]",
+		"[box-shadow:0_0_1pt_red]",
+		"-mt-1",
+		"text-[percentage:120%]",
+	]) {
+		await assert.rejects(render(jsx("p", { tw, children: "x" })), (error) =>
+			error.message.includes(tw),
+		);
+		await assert.rejects(render(`<p tw="${tw}">x</p>`), (error) => error.message.includes(tw));
+	}
+	await assert.rejects(render(jsx("p", { tw: 4, children: "x" })), /tw must be a string/);
+	await assert.rejects(
+		render(jsx("p", { tw: " ".repeat(16_385), children: "x" })),
+		/tw exceeds 16384 bytes/,
+	);
+	await assert.rejects(
+		render('<p tw="' + " ".repeat(16_385) + '">x</p>'),
+		/tw exceeds 16384 bytes/,
+	);
+});
+
 test("given an HTML string with a style element, named images, and an HTML header, when rendering, then matches the same tree from JSX", async () => {
 	const logo = png(1, 1, 2, [0, 255, 0, 0]);
 	const mark = new TextEncoder().encode(
@@ -1233,22 +1283,19 @@ test("given an unpaintable color deep in the tree, when rendering, then names th
 test("given unsupported layout styles, when rendering, then rejects instead of dropping them", async () => {
 	for (const [style, message] of [
 		[{ textDecoration: "overline" }, /overline is not supported on <main>/],
-		[
-			{ boxShadow: "0 1px 2px red" },
-			/boxShadow \(shadows are not drawn; use a border or a background\) on <main>/,
-		],
+		[{ boxShadow: "0 1px 2px red" }, /box-shadow:.*blur is not supported.*on <main>/],
 		[{ outline: "1px solid red" }, /outline \(outlines are not drawn; use a border\) on <main>/],
 		[
 			{ borderImage: "url(a.png) 30" },
 			/borderImage \(border images are not drawn; use a solid, dashed, or dotted border\) on <main>/,
 		],
 		[
-			{ backgroundImage: "linear-gradient(red, blue)" },
-			/backgroundImage \(gradients and background images are not drawn; use background-color\) on <main>/,
+			{ backgroundImage: "conic-gradient(red, blue)" },
+			/background-image:.*conic.*not supported.*on <main>/,
 		],
 		[
-			{ background: "linear-gradient(red, blue)" },
-			/unsupported background: linear-gradient\(red, blue\) \(gradients and background images are not drawn; use a solid colour\) on <main>/,
+			{ background: "repeating-linear-gradient(red, blue)" },
+			/background-image:.*repeating.*not supported.*on <main>/,
 		],
 		[
 			{ borderBottom: "1pt solid red", borderRadius: 4 },
@@ -1279,10 +1326,10 @@ test("given unsupported layout styles, when rendering, then rejects instead of d
 			{ position: "absolute", top: 0 },
 			/an absolute or fixed box needs top or bottom, and left or right/,
 		],
-		[{ display: "grid" }, /invalid display/],
+		[{ display: "inline-grid" }, /invalid display: inline-grid/],
 		[
 			{ justifyContent: "center" },
-			/justify-content, align-items, align-content, and flex-wrap apply only to a flex container on <main>/,
+			/justify-content, align-items, align-content, and flex-wrap apply only to a flex container or grid on <main>/,
 		],
 	])
 		await assert.rejects(
@@ -1654,4 +1701,87 @@ test("given a list and a pre block in an embedded font under PDF/A, when rendere
 	);
 	assert.doesNotMatch(string(pdf), /\/Type1\b/);
 	assert.match(string(pdf), /\nh\nf\n/);
+});
+
+test("given transforms and clips in stylesheets and style objects, when rendering, then writes native PDF effects and rejects unsupported values", async () => {
+	const pdf = await render(
+		jsxs("main", {
+			children: [
+				jsx("div", { className: "effect", children: "CSS" }),
+				jsx("p", {
+					style: {
+						transform: "translate(2pt, 3pt)",
+						transformOrigin: "0 0",
+						clipPath: "polygon(evenodd, 0 0, 100% 0, 50% 100%)",
+					},
+					children: "Object",
+				}),
+			],
+		}),
+		{
+			stylesheets: [
+				".effect { transform: rotate(15deg); clip-path: circle(50%); overflow: hidden }",
+			],
+		},
+	);
+	const stream = string(pdf);
+	assert.match(stream, /1 0 0 1 2 -3 cm/);
+	assert.match(stream, /W\*\nn/);
+	assert.match(stream, /W\nn/);
+	for (const [property, value] of [
+		["transform", "rotateX(20deg)"],
+		["transform", "perspective(10px)"],
+		["transformOrigin", "left right"],
+		["transformBox", "content-box"],
+		["perspective", "20px"],
+		["transformStyle", "preserve-3d"],
+		["clipPath", "url(#clip)"],
+		["clipPath", "inset(0) padding-box"],
+		["overflow", "scroll"],
+	]) {
+		await assert.rejects(
+			render(jsx("main", { style: { [property]: value }, children: "bad" })),
+			(error) => {
+				assert.match(error.message, /on <main>/);
+				assert.ok(error.message.includes(value), error.message);
+				return true;
+			},
+		);
+	}
+});
+
+test("given a fully clipped link and a translated target, when rendering, then removes the hidden annotation and moves the destination", async () => {
+	const pdf = await render(
+		'<div style="clip-path: circle(0)"><a href="https://example.com">hidden</a></div><a href="#target">go</a><p id="target" style="margin:0;transform:translate(10pt, 5pt)">target</p>',
+		{ margin: 10 },
+	);
+	const stream = string(pdf);
+	assert.doesNotMatch(stream, /\/URI/);
+	assert.match(stream, /\/XYZ 20 /);
+});
+
+test("given a translated gradient, when rasterized, then matches a gradient placed at the same coordinates with a margin", async () => {
+	const directory = new URL("../../../dist/gradient-transforms/", import.meta.url);
+	mkdirSync(directory, { recursive: true });
+	const paths = [];
+	for (const [name, position] of [
+		["translated", "transform:translateX(20pt)"],
+		["offset", "margin-left:20pt"],
+	]) {
+		const pdf = await render(
+			`<div style="width:100pt;height:40pt;background-image:linear-gradient(to right,red,blue);${position}"></div>`,
+			{ pageFormat: { width: 160, height: 100 }, margin: 10 },
+		);
+		const path = new URL(`${name}.pdf`, directory);
+		writeFileSync(path, pdf);
+		paths.push(path.pathname);
+	}
+	if (spawnSync("mutool", ["-v"]).error === undefined) {
+		const rasters = paths.map((path) => {
+			const raster = spawnSync("mutool", ["draw", "-q", "-r", "72", "-F", "ppm", "-o", "-", path]);
+			assert.equal(raster.status, 0, raster.stderr.toString());
+			return raster.stdout;
+		});
+		assert.deepEqual(rasters[0], rasters[1]);
+	}
 });

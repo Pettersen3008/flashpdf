@@ -157,12 +157,13 @@ pub fn radius_of(s: &Style, parent: f64) -> Result<Option<Radius>, Message> {
         .then_some(radius))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Box {
     pub margin: [f64; 4],
     pub padding: [f64; 4],
     pub border: [f64; 4],
     pub background: Option<Rgb>,
+    pub paint_effects: Option<std::rc::Rc<crate::Effects>>,
     pub border_color: [Rgb; 4],
     /// Per side, top first: 0 solid, 1 dashed, 2 dotted.
     pub border_style: [u8; 4],
@@ -170,6 +171,48 @@ pub struct Box {
     /// 0 to 1, with every ancestor's opacity multiplied in.
     pub opacity: f64,
     pub size: Option<Size>,
+    pub effects: Option<std::rc::Rc<EffectInput>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectInput {
+    pub transform: String,
+    pub origin: String,
+    pub clip: String,
+    pub overflow: bool,
+    pub font_size: f32,
+    pub(crate) image: bool,
+}
+
+pub fn effects(s: &Style, size: f64) -> Result<Option<std::rc::Rc<EffectInput>>, Message> {
+    if !s.0.iter().any(|(key, _)| matches!(key, crate::css::Key::Prop(prop)
+        if [prop!("transform"), prop!("transformOrigin"), prop!("clipPath"), prop!("overflow")].contains(prop))) {
+        return Ok(None);
+    }
+    let text = |prop, initial: &str| {
+        s.get(prop)
+            .map_or_else(|| initial.to_owned(), ToString::to_string)
+    };
+    let input = EffectInput {
+        transform: text(prop!("transform"), "none"),
+        origin: text(prop!("transformOrigin"), "50% 50%"),
+        clip: text(prop!("clipPath"), "none"),
+        overflow: s
+            .get(prop!("overflow"))
+            .is_some_and(|value| value.is("hidden")),
+        font_size: size as f32,
+        image: false,
+    };
+    crate::BoxEffects::parse_inner(
+        &input.transform,
+        &input.origin,
+        &input.clip,
+        input.overflow,
+        input.font_size,
+        false,
+    )?;
+    let active = input.transform != "none" || input.clip != "none" || input.overflow;
+    Ok(active.then(|| std::rc::Rc::new(input)))
 }
 
 /// The box's edges, paint, and radii, or None when the style sets none of them.
@@ -178,7 +221,12 @@ pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, Me
     let boxed = [MARGINS, PADDINGS, BORDER_WIDTHS, BORDER_COLORS]
         .iter()
         .flatten()
-        .chain([&prop!("backgroundColor")])
+        .chain([
+            &prop!("backgroundColor"),
+            &prop!("backgroundImage"),
+            &prop!("boxShadow"),
+        ])
+        .chain(&RADII)
         .any(|prop| s.get(*prop).is_some());
     if !boxed {
         return Ok(None);
@@ -220,15 +268,39 @@ pub fn box_style(s: &Style, parent: f64, opacity: f64) -> Result<Option<Box>, Me
         .filter(|paint| !paint.is("transparent"))
         .map(color)
         .transpose()?;
+    let effects = if s.get(prop!("boxShadow")).is_some_and(|v| !v.is("none"))
+        || s.get(prop!("backgroundImage"))
+            .is_some_and(|v| !v.is("none"))
+    {
+        let effects = crate::backgrounds::parse(
+            s.get(prop!("boxShadow"))
+                .and_then(Value::text)
+                .unwrap_or("none"),
+            s.get(prop!("backgroundImage"))
+                .and_then(Value::text)
+                .unwrap_or("none"),
+            parent,
+            s.get(prop!("color"))
+                .map(color)
+                .transpose()?
+                .unwrap_or([0; 3]),
+        )?;
+        (!effects.shadows.is_empty() || effects.gradient.is_some())
+            .then(|| std::rc::Rc::new(effects))
+    } else {
+        None
+    };
     Ok(Some(Box {
         margin,
         padding,
         border,
         background,
+        paint_effects: effects,
         border_color,
         border_style,
         radius,
         opacity,
         size: None,
+        effects: None,
     }))
 }

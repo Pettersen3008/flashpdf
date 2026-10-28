@@ -1,6 +1,6 @@
 use crate::{
-    BoxSize, BoxStyle, ColumnWidth, Direction, Flex, FlexItem, ImageSize, Pt, TextAlign, TextRun,
-    VerticalAlign,
+    BoxSize, BoxStyle, ColumnWidth, Direction, Flex, FlexItem, Grid, GridItem, ImageSize, Pt,
+    TextAlign, TextRun, VerticalAlign,
 };
 
 pub(crate) struct Document<'a> {
@@ -26,6 +26,7 @@ pub(crate) enum Element<'a> {
     /// A destination slot; zero height.
     Anchor(u16),
     Flex(FlexNode<'a>),
+    Grid(GridNode<'a>),
 }
 
 pub(crate) struct Paragraph<'a> {
@@ -37,6 +38,7 @@ pub(crate) struct Paragraph<'a> {
     pub(crate) text: &'a str,
     pub(crate) runs: Vec<TextRun>,
     pub(crate) links: &'a [String],
+    pub(crate) structure: &'a [u32],
 }
 
 pub(crate) struct ImageNode<'a> {
@@ -48,6 +50,7 @@ pub(crate) struct ImageNode<'a> {
     pub(crate) link: Option<&'a str>,
     pub(crate) alt: &'a str,
     pub(crate) alpha: u8,
+    pub(crate) structure: u32,
 }
 
 pub(crate) struct Spacer {
@@ -57,6 +60,7 @@ pub(crate) struct Spacer {
 pub(crate) struct BoxNode<'a> {
     pub(crate) style: BoxStyle,
     pub(crate) size: BoxSize,
+    pub(crate) effects: Option<&'a crate::BoxEffects>,
     pub(crate) children: Vec<Element<'a>>,
 }
 
@@ -74,6 +78,13 @@ pub(crate) struct Row<'a> {
 pub(crate) struct FlexNode<'a> {
     pub(crate) style: Flex,
     pub(crate) items: &'a [FlexItem],
+    pub(crate) children: Vec<Element<'a>>,
+}
+
+/// `items` pair with non-anchor `children` by index.
+pub(crate) struct GridNode<'a> {
+    pub(crate) style: &'a Grid,
+    pub(crate) items: &'a [GridItem],
     pub(crate) children: Vec<Element<'a>>,
 }
 

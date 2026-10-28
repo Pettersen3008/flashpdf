@@ -39,14 +39,39 @@ export type Alignment =
 	| "end"
 	| "center";
 
+/** A bounded track list, including minmax() and integer repeat(); validated by the core. */
+export type GridTracks = number | string;
+export type GridLine = number | "auto" | `${number}` | `span ${number}` | `${number} span`;
+export type GridPlacement = GridLine | `${GridLine} / ${GridLine}`;
+
 export type BorderStyle = "none" | "hidden" | "solid" | "dashed" | "dotted";
 
 export type Style = {
-	display?: "block" | "flex";
+	/** 2D CSS transform functions, applied after layout. */
+	transform?: string;
+	transformOrigin?: string | 0;
+	transformBox?: "view-box";
+	clipPath?: string;
+	overflow?: "visible" | "hidden";
+	display?: "block" | "flex" | "grid";
+	gridTemplateColumns?: GridTracks;
+	gridTemplateRows?: GridTracks;
+	gridAutoColumns?: GridTracks;
+	gridAutoRows?: GridTracks;
+	gridAutoFlow?: "row" | "column";
+	gridColumn?: GridPlacement;
+	gridRow?: GridPlacement;
+	gridColumnStart?: GridLine;
+	gridColumnEnd?: GridLine;
+	gridRowStart?: GridLine;
+	gridRowEnd?: GridLine;
+	justifyItems?: Alignment;
+	justifySelf?: Alignment | "auto";
 	flexDirection?: "row" | "column";
 	flexWrap?: "nowrap" | "wrap";
 	justifyContent?:
 		| "normal"
+		| "stretch"
 		| "flex-start"
 		| "start"
 		| "flex-end"
@@ -115,6 +140,10 @@ export type Style = {
 	opacity?: number | string;
 	background?: string;
 	backgroundColor?: string;
+	backgroundImage?: string;
+	backgroundSize?: "auto" | "auto auto";
+	backgroundPosition?: "0% 0%" | "0 0" | "0%" | "0";
+	boxShadow?: string;
 	/** One length for both gaps, or the row gap then the column gap. */
 	gap?: Length | `${Length} ${Length}`;
 	rowGap?: Length;
@@ -204,7 +233,10 @@ export type CommonProps = {
 	key?: string | number | undefined;
 	id?: string | undefined;
 	className?: string | undefined;
+	/** Tailwind v4 utilities without a build step, such as `"p-4 text-sm font-bold"`; `style` wins a conflict. */
+	tw?: string | undefined;
 	/** The base direction; `auto` takes it from the first strong character, and CSS `direction` overrides it. */
+	lang?: string | undefined;
 	dir?: "ltr" | "rtl" | "auto" | undefined;
 	style?: StyleInput | undefined;
 };
@@ -223,6 +255,7 @@ export type ImageProps = VoidProps & { src: Uint8Array; alt?: string | undefined
 export type CellProps = BlockProps & {
 	colSpan?: number | undefined;
 	rowSpan?: number | undefined;
+	scope?: "row" | "col" | "both" | undefined;
 };
 /** `href` must be an absolute `http:`, `https:`, or `mailto:` URL, or `#id` for the element with that id. */
 export type LinkProps = BlockProps & { href: string };

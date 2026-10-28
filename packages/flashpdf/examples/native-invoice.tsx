@@ -63,7 +63,10 @@ function Party({ title, name, address }: { title: string; name: string; address:
 	);
 }
 
-export function nativeInvoice(invoice: Invoice, options?: Pick<RenderOptions, "fonts">) {
+export function nativeInvoice(
+	invoice: Invoice,
+	options?: Pick<RenderOptions, "fonts" | "metadata" | "tagged" | "pdfua" | "pdfa">,
+) {
 	const amounts = invoice.items.map((item) => rounded(item.quantity * item.unitPrice));
 	const net = amounts.reduce((total, amount) => total + amount, 0);
 	const tax = rounded(net * invoice.taxRate);
@@ -142,6 +145,6 @@ export function nativeInvoice(invoice: Invoice, options?: Pick<RenderOptions, "f
 				<Line cells={["", "", "Total due", money(invoice.currency, rounded(net + tax))]} bold />
 			</div>
 		</main>,
-		{ pageFormat: "A4", margin: 36, fonts: options?.fonts },
+		{ pageFormat: "A4", margin: 36, ...options },
 	);
 }

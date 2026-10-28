@@ -59,7 +59,7 @@ pub(crate) struct Lift {
 /// A range of codes and the source text they show, for `/ActualText`.
 pub(crate) type Actual = (Range<u32>, Box<str>);
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PositionedBox {
     pub(crate) origin: Point,
     pub(crate) width: Pt,
@@ -71,7 +71,12 @@ pub(crate) struct PositionedBox {
 /// around it, ordered by `z` and then as laid out.
 #[derive(Clone)]
 pub(crate) struct Layer {
+    /// Grid instance and source child, so fragmented rows retain source paint order.
+    pub(crate) order: Option<(u32, usize)>,
     pub(crate) z: i32,
+    /// A flow layer paints at these buffer indices, rather than at page end.
+    pub(crate) flow: Option<Marks>,
+    pub(crate) effects: Option<std::boxed::Box<LayerEffects>>,
     /// How far right and down the buffer paints from where it was laid out.
     pub(crate) offset: Point,
     /// The buffer is laid out from the page area's top left corner, not the block's.
@@ -79,10 +84,22 @@ pub(crate) struct Layer {
     pub(crate) buffer: LayoutBuffer,
 }
 
+#[derive(Clone)]
+pub(crate) struct LayerEffects {
+    pub(crate) source: usize,
+    pub(crate) rect: PositionedBox,
+    pub(crate) transform: Option<[f32; 6]>,
+    pub(crate) clip: Option<std::rc::Rc<crate::effects::ResolvedClip>>,
+    pub(crate) clip_border: bool,
+    pub(crate) overflow: bool,
+    pub(crate) paint: bool,
+}
+
 /// Paint attributes of the segment at the same index. The text layouter owns
 /// `Segment`, so these ride beside it instead of inside it. Strokes are in 1/1000 em.
 #[derive(Clone)]
 pub(crate) struct Decoration {
+    pub(crate) structure: u32,
     pub(crate) underline: Option<Stroke>,
     pub(crate) line_through: Option<Stroke>,
     pub(crate) color: Rgb,
@@ -97,6 +114,7 @@ pub(crate) struct Decoration {
 
 #[derive(Clone)]
 pub(crate) struct PositionedImage {
+    pub(crate) structure: u32,
     pub(crate) origin: Point,
     pub(crate) width: Pt,
     pub(crate) height: Pt,
@@ -196,10 +214,22 @@ impl LayoutBuffer {
             + self.boxes.capacity() * size_of::<PositionedBox>()
             + self.images.capacity() * size_of::<PositionedImage>()
             + self.links.capacity() * size_of::<String>()
+            + self.layers.capacity() * size_of::<Layer>()
             + self
                 .layers
                 .iter()
-                .map(|layer| layer.buffer.capacity())
+                .map(|layer| {
+                    layer.buffer.capacity()
+                        + layer.effects.as_ref().map_or(0, |effects| {
+                            size_of::<LayerEffects>()
+                                + effects.clip.as_ref().map_or(0, |clip| {
+                                    size_of::<crate::effects::ResolvedClip>()
+                                        + 2 * size_of::<usize>()
+                                        + clip.operations.capacity()
+                                            * size_of::<crate::vector::PathOp>()
+                                })
+                        })
+                })
                 .sum::<usize>()
     }
 }

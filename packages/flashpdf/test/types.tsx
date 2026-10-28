@@ -6,6 +6,7 @@ import {
 	TotalPages,
 	type ElementData,
 	type EmbeddedFont,
+	type Style,
 } from "@pettersen3008/flashpdf";
 
 const _data: ElementData = {
@@ -17,6 +18,9 @@ void render("<main><img src=logo></main>", {
 	images: { logo: new Uint8Array(1) },
 	footer: "<p>Acme</p>",
 });
+void render(<p tw="p-4 text-sm font-bold">Total</p>);
+// @ts-expect-error tw is one string of utilities.
+const _twList = <p tw={["p-4"]}>Total</p>;
 // @ts-expect-error An images entry holds bytes, not a URL.
 void render("<main></main>", { images: { logo: "logo.png" } });
 // @ts-expect-error An element's type is a supported tag.
@@ -66,13 +70,51 @@ void render(42);
 const _unsupported = <button>Print</button>;
 // @ts-expect-error Unknown intrinsic properties cannot reach runtime validation.
 const _unknownProperty = <main potato={1}>Invoice</main>;
-// @ts-expect-error Grid is not part of FlashPDF's supported CSS subset.
-const _grid = <main style={{ display: "grid" }}>Invoice</main>;
+const _gridStyle: Style = {
+	display: "grid",
+	gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+	gridTemplateRows: "20% 1fr",
+	gridAutoColumns: 30,
+	gridAutoRows: "minmax(10pt, auto)",
+	gridAutoFlow: "column",
+	gap: "2pt 4pt",
+	justifyItems: "start",
+	alignContent: "space-between",
+};
+const _grid = (
+	<main style={_gridStyle}>
+		<div
+			style={{
+				gridColumn: "2 / span 2",
+				gridRowStart: -2,
+				gridRowEnd: -1,
+				justifySelf: "end",
+				alignSelf: "center",
+			}}
+		>
+			Invoice
+		</div>
+	</main>
+);
+// @ts-expect-error Dense placement is outside the bounded grid subset.
+const _denseGrid: Style = { gridAutoFlow: "row dense" };
+// @ts-expect-error Grid areas are outside the bounded grid subset.
+const _gridArea: Style = { gridArea: "invoice" };
 const _decorated = (
 	<main style={{ borderRadius: "4pt 8pt / 50%", borderTopStyle: "dashed", opacity: "50%" }}>x</main>
 );
-// @ts-expect-error Shadows are not drawn.
-const _shadow = <main style={{ boxShadow: "0 1px 2px #000" }}>Invoice</main>;
+const _shadow = (
+	<main
+		style={{
+			boxShadow: "0 1px 0 2px #000",
+			backgroundImage: "linear-gradient(red, blue)",
+			backgroundSize: "auto",
+			backgroundPosition: "0% 0%",
+		}}
+	>
+		Invoice
+	</main>
+);
 // @ts-expect-error Only none, solid, dashed, and dotted borders are drawn.
 const _double = <main style={{ borderTopStyle: "double" }}>Invoice</main>;
 // @ts-expect-error Padding takes one to four lengths, never "auto".

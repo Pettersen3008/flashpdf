@@ -6,7 +6,9 @@ import { isMarkup, markup, vector, type Drawing } from "./svg.js";
 /** The style keys the core supports (css/properties.rs); it rejects any other key by name. */
 const supported = new Set(
 	`
-	display flexDirection flexWrap justifyContent alignItems alignSelf alignContent flex flexGrow flexShrink
+	display gridTemplateColumns gridTemplateRows gridAutoColumns gridAutoRows gridAutoFlow
+	gridColumn gridRow gridColumnStart gridColumnEnd gridRowStart gridRowEnd justifyItems justifySelf
+	flexDirection flexWrap justifyContent alignItems alignSelf alignContent flex flexGrow flexShrink
 	flexBasis width minWidth maxWidth height minHeight maxHeight boxSizing margin marginTop
 	marginRight marginBottom marginLeft padding paddingTop paddingRight paddingBottom paddingLeft
 	border borderWidth borderColor borderTop borderRight borderBottom borderLeft borderStyle
@@ -14,11 +16,11 @@ const supported = new Set(
 	borderRightColor borderBottomColor borderLeftColor borderTopStyle borderRightStyle
 	borderBottomStyle borderLeftStyle borderRadius borderTopLeftRadius borderTopRightRadius
 	borderBottomRightRadius borderBottomLeftRadius opacity marginInline marginBlock paddingInline
-	paddingBlock background backgroundColor gap rowGap columnGap fontSize fontFamily fontWeight fontStyle
+	paddingBlock background backgroundColor backgroundImage backgroundSize backgroundPosition boxShadow gap rowGap columnGap fontSize fontFamily fontWeight fontStyle
 	fontStretch fontVariationSettings fontKerning textAlign direction textTransform textDecoration textDecorationColor whiteSpace verticalAlign
 	listStyle listStyleType listStylePosition color lineHeight letterSpacing wordSpacing
 	breakBefore breakAfter breakInside borderCollapse borderSpacing orphans widows
-	position top right bottom left inset insetInline insetBlock zIndex`
+	position top right bottom left inset insetInline insetBlock zIndex transform transformOrigin transformBox clipPath overflow`
 		.trim()
 		.split(/\s+/),
 );
@@ -104,6 +106,8 @@ export type ElementNode = {
 	readonly id?: string | undefined;
 	readonly classes: readonly string[];
 	readonly style?: Style | string | undefined;
+	/** Tailwind utilities the core turns into declarations ahead of `style`. */
+	readonly tw?: string | undefined;
 	readonly children: readonly Node[];
 	readonly src?: Uint8Array | undefined;
 	readonly alt?: string | undefined;
@@ -118,6 +122,8 @@ export type ElementNode = {
 	readonly value?: number | undefined;
 	readonly colSpan?: number | undefined;
 	readonly rowSpan?: number | undefined;
+	readonly lang?: string | undefined;
+	readonly scope?: "row" | "col" | "both" | undefined;
 	readonly dir?: "ltr" | "rtl" | "auto" | undefined;
 };
 export type Node = TextNode | ElementNode;
@@ -410,17 +416,26 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 							: element.type === "li"
 								? ["value"]
 								: cell
-									? ["colSpan", "rowSpan"]
+									? ["colSpan", "rowSpan", ...(element.type === "th" ? ["scope"] : [])]
 									: [];
 	const input = props(element.props, [
 		"children",
 		"id",
 		"className",
 		"style",
+		"tw",
 		"ref",
 		"dir",
+		"lang",
 		...own,
 	]);
+	if (
+		input.lang !== undefined &&
+		(typeof input.lang !== "string" || !/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/.test(input.lang))
+	)
+		throw new Error(`invalid lang${where}`);
+	if (input.scope !== undefined && !["row", "col", "both"].includes(input.scope as string))
+		throw new Error(`scope must be row, col, or both${where}`);
 	if (input.dir !== undefined && input.dir !== "ltr" && input.dir !== "rtl" && input.dir !== "auto")
 		throw new Error(`dir must be "ltr", "rtl", or "auto"${where}`);
 	if ((element.type === "hr" || element.type === "br") && input.children != null)
@@ -429,6 +444,10 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		throw new Error(`id must be a string${where}`);
 	if (input.className !== undefined && typeof input.className !== "string")
 		throw new Error(`className must be a string${where}`);
+	if (input.tw !== undefined && typeof input.tw !== "string")
+		throw new Error(`tw must be a string${where}`);
+	if (typeof input.tw === "string" && input.tw.length > 16_384)
+		throw new Error(`tw exceeds 16384 bytes${where}`);
 	if (
 		input.style !== undefined &&
 		typeof input.style !== "string" &&
@@ -455,6 +474,9 @@ function host(value: unknown, depth = 0, chain = "", nested = false): Node[] {
 		classes:
 			typeof input.className === "string" ? input.className.split(/\s+/).filter(Boolean) : [],
 		style: input.style as Style | string | undefined,
+		...(input.lang !== undefined ? { lang: input.lang as string } : {}),
+		...(input.scope !== undefined ? { scope: input.scope as "row" | "col" | "both" } : {}),
+		...(input.tw ? { tw: input.tw as string } : {}),
 		...(input.dir !== undefined ? { dir: input.dir as "ltr" | "rtl" | "auto" } : {}),
 		children: [],
 		...(element.type === "img" ? image(input, where, chain, depth) : {}),

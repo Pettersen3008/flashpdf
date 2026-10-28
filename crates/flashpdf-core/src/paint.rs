@@ -1,3 +1,5 @@
+mod effects;
+pub(crate) use effects::{write_shadings, Shading, Shadings};
 use std::ops::Range;
 
 use std::f32::consts::FRAC_PI_4;
@@ -18,9 +20,11 @@ type Corners = [[f32; 2]; 4];
 pub(crate) struct PageLink {
     pub(crate) rect: [f32; 4],
     pub(crate) uri: String,
+    pub(crate) structure: u32,
 }
 
 pub(crate) enum PageTag {
+    Semantic(u32),
     Paragraph,
     Figure(String),
 }
@@ -39,9 +43,12 @@ pub(crate) struct PdfPainter<'a> {
     tags: Option<&'a mut Vec<PageTag>>,
     /// Alphas this page's `/ExtGState` must define.
     alphas: &'a mut Vec<[u8; 2]>,
+    shadings: &'a mut Shadings,
     /// The fill and stroke alpha in force; every `paint` ends opaque.
     alpha: u8,
     state: &'a mut PaintState,
+    ua: bool,
+    artifact: bool,
 }
 
 impl<'a> PdfPainter<'a> {
@@ -50,15 +57,38 @@ impl<'a> PdfPainter<'a> {
         links: &'a mut Vec<PageLink>,
         tags: Option<&'a mut Vec<PageTag>>,
         alphas: &'a mut Vec<[u8; 2]>,
+        shadings: &'a mut Shadings,
         state: &'a mut PaintState,
+        ua: bool,
     ) -> Self {
         Self {
             content,
             links,
             tags,
             alphas,
+            shadings,
             state,
             alpha: OPAQUE,
+            ua,
+            artifact: false,
+        }
+    }
+
+    pub(crate) fn artifact(&mut self, artifact: bool) -> &mut Self {
+        self.artifact = artifact;
+        self
+    }
+
+    fn begin_tag(&mut self, structure: u32, artifact: bool) {
+        if artifact || self.artifact || structure == 0 {
+            self.content.begin_marked_content(Name(b"Artifact"));
+        } else if let Some(tags) = &mut self.tags {
+            let id = tags.len() as i32;
+            tags.push(PageTag::Semantic(structure));
+            self.content
+                .begin_marked_content_with_properties(Name(b"Span"))
+                .properties()
+                .identify(id);
         }
     }
 
@@ -74,13 +104,46 @@ impl<'a> PdfPainter<'a> {
         }
     }
 
-    pub(crate) fn paint(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+    pub(crate) fn paint(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        origin: Point,
+        page: Page,
+    ) {
+        let mut line = lines.start;
+        let mut box_start = 0;
+        for layer in layout.layers.iter().filter(|layer| layer.flow.is_some()) {
+            let at = layer.flow.unwrap();
+            if !lines.contains(&at.lines) {
+                continue;
+            }
+            self.paint_part(layout, line..at.lines, box_start..at.boxes, origin);
+            self.paint_layer(layer, origin, page);
+            line = at.lines + 1;
+            box_start = at.boxes;
+        }
+        self.paint_part(
+            layout,
+            line..lines.end,
+            box_start..layout.boxes.len(),
+            origin,
+        );
+    }
+
+    fn paint_part(
+        &mut self,
+        layout: &LayoutBuffer,
+        lines: Range<usize>,
+        boxes: Range<usize>,
+        origin: Point,
+    ) {
         let mut ids = if self.tags.is_some() {
             vec![None; lines.len()]
         } else {
             Vec::new()
         };
-        if let Some(tags) = &mut self.tags {
+        if let Some(tags) = self.tags.as_mut().filter(|_| !self.ua) {
             let mut images = layout.images.iter().peekable();
             for line in lines.clone() {
                 while images.peek().is_some_and(|image| image.line < line) {
@@ -100,7 +163,7 @@ impl<'a> PdfPainter<'a> {
                 }
             }
         }
-        self.paint_boxes(&layout.boxes, origin);
+        self.paint_boxes(&layout.boxes[boxes], origin);
         self.paint_images(layout, lines.clone(), origin, &ids);
         self.paint_text(layout, lines, origin, &ids);
         self.set_alpha(OPAQUE);
@@ -108,8 +171,12 @@ impl<'a> PdfPainter<'a> {
 
     /// The whole buffer at `origin`, then its positioned layers over it.
     pub(crate) fn paint_flow(&mut self, layout: &LayoutBuffer, origin: Point, page: Page) {
-        self.paint(layout, 0..layout.lines.len(), origin);
-        let mut layers: Vec<&Layer> = layout.layers.iter().collect();
+        self.paint(layout, 0..layout.lines.len(), origin, page);
+        let mut layers: Vec<&Layer> = layout
+            .layers
+            .iter()
+            .filter(|layer| layer.flow.is_none())
+            .collect();
         layers.sort_by_key(|layer| layer.z);
         for layer in layers {
             self.paint_layer(layer, origin, page);
@@ -118,7 +185,170 @@ impl<'a> PdfPainter<'a> {
 
     /// One layer of the block at `origin`, with the layers inside it.
     pub(crate) fn paint_layer(&mut self, layer: &Layer, origin: Point, page: Page) {
-        self.paint_flow(&layer.buffer, layer_origin(layer, origin, page), page);
+        let origin = layer_origin(layer, origin, page);
+        let Some(effect) = &layer.effects else {
+            self.paint_flow(&layer.buffer, origin, page);
+            return;
+        };
+        let x = origin.x.get() + effect.rect.origin.x.get();
+        let y = origin.y.get() - effect.rect.origin.y.get();
+        let matrix = effect
+            .transform
+            .map(|[a, b, c, d, e, f]| [a, -b, -c, d, x - a * x + c * y + e, y + b * x - d * y - f]);
+        if matrix.is_some_and(|m| {
+            f64::from(m[0]) * f64::from(m[3]) - f64::from(m[1]) * f64::from(m[2]) == 0.0
+        }) {
+            return;
+        }
+        let link_start = self.links.len();
+        let shading_start = self.shadings.items.len();
+        self.content.save_state();
+        if let Some(matrix) = matrix {
+            op(self.content, "cm", &matrix);
+        }
+        if let Some(clip) = &effect.clip {
+            use crate::vector::PathOp;
+            if effect.clip_border {
+                let (width, height) = (effect.rect.width.get(), effect.rect.height.get());
+                outline(
+                    self.content,
+                    [x, y - height, width, height],
+                    corners(effect.rect.style.radius, width, height),
+                );
+            } else if let Some(([cx, cy, width, height], radius)) = clip.outline {
+                outline(
+                    self.content,
+                    [x + cx, y - cy - height, width, height],
+                    corners(Some(radius), width, height),
+                );
+            } else {
+                for operation in &clip.operations {
+                    match operation {
+                        PathOp::Move([px, py]) => op(self.content, "m", &[x + px, y - py]),
+                        PathOp::Line([px, py]) => op(self.content, "l", &[x + px, y - py]),
+                        PathOp::Cubic(points) => op(
+                            self.content,
+                            "c",
+                            &std::array::from_fn::<_, 6, _>(|i| {
+                                if i % 2 == 0 {
+                                    x + points[i]
+                                } else {
+                                    y - points[i]
+                                }
+                            }),
+                        ),
+                        PathOp::Close => op(self.content, "h", &[]),
+                    }
+                }
+            }
+            op(self.content, if clip.even_odd { "W*" } else { "W" }, &[]);
+            op(self.content, "n", &[]);
+        }
+        if effect.paint {
+            self.paint_boxes(std::slice::from_ref(&effect.rect), origin);
+        }
+        if effect.overflow {
+            let border = effect.rect.style.border;
+            let width = effect.rect.width.get();
+            let height = effect.rect.height.get();
+            let radii = corners(effect.rect.style.radius, width, height);
+            let [top, right, bottom, left] = border.into_array().map(Pt::get);
+            let inset = [[left, top], [right, top], [right, bottom], [left, bottom]];
+            let radii: Corners = std::array::from_fn(|i| {
+                std::array::from_fn(|j| (radii[i][j] - inset[i][j]).max(0.0))
+            });
+            let (width, height) = (
+                (width - left - right).max(0.0),
+                (height - top - bottom).max(0.0),
+            );
+            let radii = corners(
+                Some(Radii {
+                    values: std::array::from_fn(|i| radii[i / 2][i % 2]),
+                    percent: 0,
+                }),
+                width,
+                height,
+            );
+            outline(
+                self.content,
+                [
+                    x + left,
+                    y - effect.rect.height.get() + bottom,
+                    width,
+                    height,
+                ],
+                radii,
+            );
+            op(self.content, "W", &[]);
+            op(self.content, "n", &[]);
+        }
+        *self.state = PaintState::default();
+        self.paint_flow(&layer.buffer, origin, page);
+        // PDF pattern matrices map to page space, so retain every enclosing layer transform.
+        if let Some(matrix) = matrix {
+            for shading in &mut self.shadings.items[shading_start..] {
+                match crate::effects::multiply(matrix, shading.pattern) {
+                    Ok(pattern) => shading.pattern = pattern,
+                    Err(_) => self.shadings.invalid = true,
+                }
+            }
+        }
+        self.content.restore_state();
+        let clip_bounds = effect.clip.as_ref().map(|clip| {
+            clip.outline
+                .map(|([cx, cy, w, h], _)| [x + cx, y - cy - h, x + cx + w, y - cy])
+                .or_else(|| path_bounds(&clip.operations, x, y))
+        });
+        let padding_bounds = effect.overflow.then(|| {
+            let border = effect.rect.style.border;
+            [
+                x + border.left.get(),
+                y - effect.rect.height.get() + border.bottom.get(),
+                x + effect.rect.width.get() - border.right.get(),
+                y - border.top.get(),
+            ]
+        });
+        let mut index = link_start;
+        while index < self.links.len() {
+            let mut visible = true;
+            for bounds in clip_bounds.into_iter().chain(padding_bounds.map(Some)) {
+                let Some(bounds) = bounds else {
+                    visible = false;
+                    break;
+                };
+                let rect = &mut self.links[index].rect;
+                rect[0] = rect[0].max(bounds[0]);
+                rect[1] = rect[1].max(bounds[1]);
+                rect[2] = rect[2].min(bounds[2]);
+                rect[3] = rect[3].min(bounds[3]);
+                visible &= rect[0] < rect[2] && rect[1] < rect[3];
+            }
+            if visible {
+                index += 1;
+            } else {
+                self.links.remove(index);
+            }
+        }
+        if let Some([a, b, c, d, e, f]) = matrix {
+            for link in &mut self.links[link_start..] {
+                let [left, bottom, right, top] = link.rect;
+                let points = [[left, bottom], [left, top], [right, bottom], [right, top]]
+                    .map(|[x, y]| [a * x + c * y + e, b * x + d * y + f]);
+                link.rect = [
+                    points.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min),
+                    points.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min),
+                    points
+                        .iter()
+                        .map(|p| p[0])
+                        .fold(f32::NEG_INFINITY, f32::max),
+                    points
+                        .iter()
+                        .map(|p| p[1])
+                        .fold(f32::NEG_INFINITY, f32::max),
+                ];
+            }
+        }
+        *self.state = PaintState::default();
     }
 
     /// Backgrounds and borders, as one artifact when tagged.
@@ -132,6 +362,7 @@ impl<'a> PdfPainter<'a> {
             let y = origin.y.get() - paint.origin.y.get() - paint.height.get();
             let (width, height) = (paint.width.get(), paint.height.get());
             self.set_alpha(style.alpha);
+            self.paint_shadows(style, [x, y, width, height], false);
             // Four overlapping rectangles would composite their corners twice under an alpha.
             if style.radius.is_some()
                 || (style.alpha != OPAQUE
@@ -145,6 +376,8 @@ impl<'a> PdfPainter<'a> {
                 self.set_fill(color);
                 self.content.rect(x, y, width, height).fill_nonzero();
             }
+            self.paint_gradient(style, [x, y, width, height]);
+            self.paint_shadows(style, [x, y, width, height], true);
             let [top, right, bottom, left] = style.border.into_array().map(|edge| edge.get());
             for (index, ((color, line), (x, y, width, height))) in style
                 .border_color
@@ -200,6 +433,8 @@ impl<'a> PdfPainter<'a> {
             outline(self.content, rect, corners);
             op(self.content, "f", &[]);
         }
+        self.paint_gradient(style, rect);
+        self.paint_shadows(style, rect, true);
         let border = style.border.top.get();
         if border > 0.0 {
             let half = border / 2.0;
@@ -286,7 +521,9 @@ impl<'a> PdfPainter<'a> {
             .filter(|image| lines.contains(&image.line))
         {
             self.set_alpha(image.alpha);
-            if let Some(id) = ids.get(image.line - lines.start).copied().flatten() {
+            if self.ua {
+                self.begin_tag(image.structure, image.alt.is_empty());
+            } else if let Some(id) = ids.get(image.line - lines.start).copied().flatten() {
                 self.content
                     .begin_marked_content_with_properties(Name(b"Figure"))
                     .properties()
@@ -307,6 +544,7 @@ impl<'a> PdfPainter<'a> {
                 self.links.push(PageLink {
                     rect: [x, y, x + width, y + height],
                     uri: layout.links[link].clone(),
+                    structure: if self.artifact { 0 } else { image.structure },
                 });
             }
             if self.tags.is_some() {
@@ -351,6 +589,13 @@ impl<'a> PdfPainter<'a> {
                     .map_or(line.text_width, |next| next.x);
                 ((x + segment.x).get(), (end - segment.x).get())
             };
+            let background_tag = self.ua
+                && layout.decorations[line.segments.clone()]
+                    .iter()
+                    .any(|decoration| decoration.background.is_some());
+            if background_tag {
+                self.content.begin_marked_content(Name(b"Artifact"));
+            }
             for (index, segment) in segments.iter().enumerate() {
                 let decoration = &layout.decorations[line.segments.start + index];
                 if let Some(color) = decoration.background {
@@ -369,6 +614,9 @@ impl<'a> PdfPainter<'a> {
                     ]);
                     self.content.fill_nonzero();
                 }
+            }
+            if background_tag {
+                self.content.end_marked_content();
             }
             self.content.begin_text();
             let mut previous: Option<&Segment> = None;
@@ -414,6 +662,12 @@ impl<'a> PdfPainter<'a> {
                     }
                     None => &[],
                 };
+                if self.ua {
+                    self.begin_tag(
+                        layout.decorations[line.segments.start + index].structure,
+                        segment.shape != 0,
+                    );
+                }
                 if segment.shape == 0 && lifts.is_empty() && actual.is_empty() {
                     show(
                         self.content,
@@ -431,6 +685,9 @@ impl<'a> PdfPainter<'a> {
                         segment.size.get(),
                     );
                 }
+                if self.ua {
+                    self.content.end_marked_content();
+                }
                 previous = Some(segment);
             }
             // Text state outlives the text object, and every other line starts from Tc 0.
@@ -444,6 +701,12 @@ impl<'a> PdfPainter<'a> {
                 let (start, width) = extent(index);
                 let baseline = baseline + segment.rise;
                 let scale = segment.size.get() / 1000.0;
+                let strokes = [decoration.underline, decoration.line_through];
+                let decoration_tag =
+                    self.ua && (segment.shape != 0 || strokes.iter().any(Option::is_some));
+                if decoration_tag {
+                    self.begin_tag(decoration.structure, segment.shape == 0);
+                }
                 if segment.shape != 0 {
                     self.set_fill(decoration.color);
                     let middle = baseline + decoration.ascent.get() / 2.0;
@@ -454,7 +717,6 @@ impl<'a> PdfPainter<'a> {
                         segment.size.get() * MARKER_SHAPE,
                     );
                 }
-                let strokes = [decoration.underline, decoration.line_through];
                 if strokes.iter().any(Option::is_some) {
                     self.set_fill(decoration.color);
                 }
@@ -469,6 +731,9 @@ impl<'a> PdfPainter<'a> {
                         )
                         .fill_nonzero();
                 }
+                if decoration_tag {
+                    self.content.end_marked_content();
+                }
                 if let Some(link) = decoration.link {
                     self.links.push(PageLink {
                         rect: [
@@ -478,10 +743,15 @@ impl<'a> PdfPainter<'a> {
                             baseline + decoration.ascent.get(),
                         ],
                         uri: layout.links[link].clone(),
+                        structure: if self.artifact {
+                            0
+                        } else {
+                            decoration.structure
+                        },
                     });
                 }
             }
-            if self.tags.is_some() {
+            if self.tags.is_some() && !self.ua {
                 self.content.end_marked_content();
             }
         }
@@ -762,4 +1032,29 @@ fn fit(length: f32, dash: f32, gap: f32, closed: bool) -> f32 {
     } else {
         gap
     }
+}
+
+fn path_bounds(operations: &[crate::vector::PathOp], x: f32, y: f32) -> Option<[f32; 4]> {
+    use crate::vector::PathOp;
+    let mut bounds = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for operation in operations {
+        let points: &[f32] = match operation {
+            PathOp::Move(p) | PathOp::Line(p) => p,
+            PathOp::Cubic(p) => p,
+            PathOp::Close => continue,
+        };
+        for pair in points.chunks_exact(2) {
+            let (px, py) = (x + pair[0], y - pair[1]);
+            bounds[0] = bounds[0].min(px);
+            bounds[1] = bounds[1].min(py);
+            bounds[2] = bounds[2].max(px);
+            bounds[3] = bounds[3].max(py);
+        }
+    }
+    (bounds[0] < bounds[2] && bounds[1] < bounds[3]).then_some(bounds)
 }

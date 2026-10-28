@@ -24,6 +24,7 @@ fn first_header(renderer: &mut Renderer) {
                 "ab".into(),
                 vec![run(true), run(false)],
                 vec![],
+                Vec::new(),
             )],
         )
         .unwrap();
@@ -125,6 +126,7 @@ fn given_a_split_box_and_different_first_header_when_continuing_then_background_
 
 fn background() -> BoxStyle {
     BoxStyle {
+        effects: None,
         margin: Edges::all(Pt::ZERO),
         padding: Edges::all(Pt::ZERO),
         border: Edges::all(Pt::ZERO),
@@ -192,6 +194,7 @@ fn given_a_smaller_later_body_when_an_atomic_block_fits_neither_remaining_nor_la
                     typography: crate::Typography::NORMAL,
                 }],
                 vec![],
+                Vec::new(),
             )],
         )
         .unwrap();
@@ -244,4 +247,54 @@ fn given_tagged_pdfa_output_when_loading_then_struct_elements_resolve_from_the_o
     assert_eq!(paragraph.get(b"S").unwrap().as_name().unwrap(), b"P");
     assert_eq!(paragraph.get(b"K").unwrap().as_i64().unwrap(), 0);
     assert!(!bytes.windows(10).any(|window| window == b"StructElem"));
+}
+
+#[test]
+fn given_a_destination_inside_nested_transforms_when_painted_then_the_destination_moves_with_its_text(
+) {
+    let outer =
+        crate::BoxEffects::parse("translate(10pt, 5pt)", "0 0", "none", false, 10.0).unwrap();
+    let inner = crate::BoxEffects::parse("scale(2)", "0 0", "none", false, 10.0).unwrap();
+    let style = BoxStyle {
+        effects: None,
+        background: None,
+        border: Edges::all(Pt::ZERO),
+        margin: Edges::all(Pt::ZERO),
+        padding: Edges::all(Pt::ZERO),
+        border_color: Edges::all(crate::Rgb::BLACK),
+        border_style: Edges::all(crate::LineStyle::Solid),
+        radius: None,
+        alpha: crate::OPAQUE,
+    };
+    let mut renderer = Renderer::new(Page::A4);
+    renderer.metadata.anchors.push(crate::pdf::Anchor {
+        level: 0,
+        title: String::new(),
+        at: None,
+    });
+    renderer
+        .push(&[
+            Command::EffectBoxStart {
+                style: style.clone(),
+                size: BoxSize::AUTO,
+                effects: &outer,
+            },
+            Command::EffectBoxStart {
+                style,
+                size: BoxSize::AUTO,
+                effects: &inner,
+            },
+            Command::Anchor(0),
+            Command::Text {
+                text: "target",
+                style: TextStyle::plain(Pt(10.0)),
+            },
+            Command::BoxEnd,
+            Command::BoxEnd,
+        ])
+        .unwrap();
+    renderer.commit(renderer.held.len()).unwrap();
+    let (_, x, y) = renderer.metadata.anchors[0].at.unwrap();
+    assert_eq!(x, 46.0);
+    assert_eq!(y, Page::A4.height.get() - Page::A4.margin.top.get() - 5.0);
 }
