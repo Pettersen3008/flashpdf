@@ -16,7 +16,7 @@
 		"playground:build": "pnpm --filter flashpdf-playground build"
 	},
 	"devDependencies": {
-		"@babel/core": "8.0.7",
+		"@babel/core": "8.0.9",
 		"@react-pdf/renderer": "4.9.0",
 		"@stylexjs/babel-plugin": "0.19.1",
 		"@tailwindcss/cli": "4.3.3",
@@ -31,11 +31,11 @@
 		"react-dom": "19.3.1",
 		"styled-components": "6.6.0",
 		"tailwindcss": "4.3.3",
-		"takumi-pdf": "0.18.0",
+		"takumi-pdf": "0.18.3",
 		"typescript": "7.0.2",
-		"vite": "8.3.4",
+		"vite": "8.3.5",
 		"vitest": "5.0.5",
-		"wrangler": "4.151.2"
+		"wrangler": "4.152.0"
 	},
 	"engines": {
 		"node": "^22.18.0 || >=24.11.0"
