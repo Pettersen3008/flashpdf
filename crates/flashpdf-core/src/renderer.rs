@@ -8,7 +8,7 @@ use crate::document::{Block, Document, Element, Table};
 use crate::font::{EmbeddedFont, Font, FontBook};
 use crate::geometry::{LayoutArea, PageCursor, PageLayout, Point};
 use crate::image::Image;
-use crate::layout::{painted, table_width, LayoutBuffer, LayoutEngine, PositionedBox};
+use crate::layout::{painted, table_width, Layer, LayoutBuffer, LayoutEngine, PositionedBox};
 use crate::paint::{PageLink, PageTag, PaintState, PdfPainter};
 use crate::pdf::{finish_pdf, Anchor, Metadata};
 use crate::{BoxStyle, Command, FontId, Page, Pt, RenderError};
@@ -52,6 +52,11 @@ pub struct Renderer {
     /// Index 0 paints on every page; index 1 replaces it on the first page.
     header: [Option<Furniture>; 2],
     footer: [Option<Furniture>; 2],
+    /// `position: fixed` boxes, painted on every page after the header and footer.
+    fixed: Vec<Furniture>,
+    /// The open page's positioned layers with the origin of the block they belong to; they
+    /// paint over its content by z-index, those below zero under it.
+    overlays: Vec<(Layer, Point)>,
     metadata: Metadata,
     /// Anchors with no line yet, waiting for the next one painted.
     pending: Vec<u16>,
@@ -157,6 +162,8 @@ impl Renderer {
             layout: LayoutBuffer::default(),
             header: Default::default(),
             footer: Default::default(),
+            fixed: Vec::new(),
+            overlays: Vec::new(),
             metadata: Metadata::default(),
             pending: Vec::new(),
             table: None,
@@ -202,6 +209,17 @@ impl Renderer {
         for image in &layout.images {
             self.used_images[usize::from(image.slot)] = true;
         }
+        for layer in &layout.layers {
+            self.mark_used(&layer.buffer);
+        }
+    }
+
+    /// A fixed box's block, laid out on every page in `finish` with that page's numbers.
+    pub(crate) fn add_fixed(&mut self, commands: Vec<OwnedCommand>) {
+        self.fixed.push(Furniture {
+            commands,
+            height: Pt::ZERO,
+        });
     }
 
     #[cfg(test)]
@@ -292,11 +310,13 @@ impl Renderer {
             return Err(RenderError::InvalidLayout);
         };
         output.clear();
-        Ok(LayoutEngine::new(&self.fonts, &self.images).layout(
-            &element,
-            LayoutArea::root(self.page.content_width()),
-            output,
-        )?)
+        Ok(
+            LayoutEngine::new(&self.fonts, &self.images, self.page.page()).layout_root(
+                &element,
+                LayoutArea::root(self.page.content_width()),
+                output,
+            )?,
+        )
     }
 
     /// A block too tall for the first page's body can still fit a later, taller one.
@@ -398,7 +418,7 @@ impl Renderer {
                     && node.style.min_height == Pt::ZERO
                     && node.style.max_height.is_none() =>
             {
-                let mut rows = LayoutEngine::new(&self.fonts, &self.images)
+                let mut rows = LayoutEngine::new(&self.fonts, &self.images, self.page.page())
                     .flex_rows(node, self.column.width)?;
                 for index in 0..rows.rows.len() {
                     if index > 0 {
@@ -407,13 +427,8 @@ impl Renderer {
                     }
                     self.begin(false)?;
                     self.layout.clear();
-                    let height = LayoutEngine::new(&self.fonts, &self.images).layout_flex_row(
-                        node,
-                        &mut rows,
-                        index,
-                        self.column,
-                        &mut self.layout,
-                    )?;
+                    let height = LayoutEngine::new(&self.fonts, &self.images, self.page.page())
+                        .layout_flex_row(node, &mut rows, index, self.column, &mut self.layout)?;
                     let layout = std::mem::take(&mut self.layout);
                     self.mark_used(&layout);
                     self.place(element, layout, height)?;
@@ -425,7 +440,7 @@ impl Renderer {
         }
         self.begin(false)?;
         self.layout.clear();
-        let height = LayoutEngine::new(&self.fonts, &self.images).layout(
+        let height = LayoutEngine::new(&self.fonts, &self.images, self.page.page()).layout_root(
             element,
             self.column,
             &mut self.layout,
@@ -645,24 +660,44 @@ impl Renderer {
         }
         let mut fragments = std::mem::replace(&mut self.fragments, next);
         fragments.retain(|fragment| fragment.height > Pt::ZERO && painted(&fragment.style));
+        let mut overlays = std::mem::take(&mut self.overlays);
+        overlays.sort_by_key(|(layer, _)| layer.z);
+        let below = overlays.partition_point(|(layer, _)| layer.z < 0);
+        let page = self.page.page();
         let mut underlay = Vec::new();
-        if !fragments.is_empty() {
+        if !fragments.is_empty() || below > 0 {
             let mut content = Content::new();
-            PdfPainter::new(
+            let mut state = PaintState::default();
+            let mut painter = PdfPainter::new(
                 &mut content,
                 self.links.last_mut().unwrap(),
                 self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
                 self.alphas.last_mut().unwrap(),
-                &mut PaintState::default(),
-            )
-            .paint_boxes(
+                &mut state,
+            );
+            for (layer, origin) in &overlays[..below] {
+                painter.paint_layer(layer, *origin, page);
+            }
+            painter.paint_boxes(
                 &fragments,
                 Point {
-                    x: self.page.page().margin.left,
+                    x: page.margin.left,
                     y: Pt::ZERO,
                 },
             );
             underlay = content.finish().into_vec();
+        }
+        if below < overlays.len() {
+            let mut painter = PdfPainter::new(
+                self.contents.last_mut().unwrap(),
+                self.links.last_mut().unwrap(),
+                self.metadata.tagged.then(|| self.tags.last_mut().unwrap()),
+                self.alphas.last_mut().unwrap(),
+                &mut self.state,
+            );
+            for (layer, origin) in &overlays[below..] {
+                painter.paint_layer(layer, *origin, page);
+            }
         }
         self.content_bytes += self.contents.last().unwrap().len() + underlay.len();
         self.underlays.push(underlay);
@@ -784,8 +819,11 @@ impl Renderer {
         table.index += 1;
         self.begin(false)?;
         self.layout.clear();
-        let height =
-            LayoutEngine::new(&self.fonts, &self.images).layout(row, area, &mut self.layout)?;
+        let height = LayoutEngine::new(&self.fonts, &self.images, self.page.page()).layout_root(
+            row,
+            area,
+            &mut self.layout,
+        )?;
         let layout = std::mem::take(&mut self.layout);
         self.mark_used(&layout);
         let reserved = edges.header_height + edges.footer_height;
@@ -828,7 +866,7 @@ impl Renderer {
         let mut buffer = LayoutBuffer::default();
         let mut height = Pt::ZERO;
         for row in rows {
-            height += LayoutEngine::new(&self.fonts, &self.images).layout(
+            height += LayoutEngine::new(&self.fonts, &self.images, self.page.page()).layout_root(
                 row,
                 area.translated(Pt::ZERO, height),
                 &mut buffer,
@@ -847,10 +885,30 @@ impl Renderer {
         height: Pt,
     ) -> Result<(), RenderError> {
         let origin = self.cursor.origin(self.page).translated(Pt::ZERO, offset);
-        self.painter().paint(layout, lines.clone(), origin);
-        self.place_anchors(layout, lines, origin);
+        self.paint_at(layout, lines, origin);
         self.cursor.advance(height);
         self.check_size()
+    }
+
+    /// Paints `lines` at `origin` and keeps the block's positioned layers for the page end.
+    fn paint_at(&mut self, layout: &LayoutBuffer, lines: Range<usize>, origin: Point) {
+        let first = lines.start == 0;
+        self.painter().paint(layout, lines.clone(), origin);
+        self.place_anchors(layout, lines, origin);
+        if first {
+            for layer in &layout.layers {
+                self.layer_anchors(layer, origin);
+                self.overlays.push((layer.clone(), origin));
+            }
+        }
+    }
+
+    fn layer_anchors(&mut self, layer: &Layer, origin: Point) {
+        let at = layer_origin(layer, origin, self.page.page());
+        self.place_anchors(&layer.buffer, 0..layer.buffer.lines.len(), at);
+        for inner in &layer.buffer.layers {
+            self.layer_anchors(inner, at);
+        }
     }
 
     /// Paints `lines`, then places each anchor on the first line at or after it, with the
@@ -903,8 +961,7 @@ impl Renderer {
         if let Some(edges) = self.trailer.take() {
             let origin = self.cursor.origin(self.page);
             let footer = &edges.footer;
-            self.painter().paint(footer, 0..footer.lines.len(), origin);
-            self.place_anchors(footer, 0..footer.lines.len(), origin);
+            self.paint_at(footer, 0..footer.lines.len(), origin);
         }
         self.end_page();
         self.contents.push(Content::with_capacity(0));
@@ -924,6 +981,7 @@ impl Renderer {
         // The header and footer repeat on every page, so they count against the cap too.
         let mut bytes = self.content_bytes;
         let page = self.page.page();
+        let fixed = std::mem::take(&mut self.fixed);
         let furniture = [
             (std::mem::take(&mut self.header), false),
             (std::mem::take(&mut self.footer), true),
@@ -935,10 +993,11 @@ impl Renderer {
             let mut number = itoa::Buffer::new();
             let number = number.format(index + 1);
             let before = self.contents[index].len();
-            for (slots, footer) in &furniture {
-                let Some(item) = pick(slots, index == 0) else {
-                    continue;
-                };
+            let blocks = furniture
+                .iter()
+                .filter_map(|(slots, footer)| Some((pick(slots, index == 0)?, Some(*footer))))
+                .chain(fixed.iter().map(|item| (item, None)));
+            for (item, footer) in blocks {
                 let commands = numbered(&item.commands, &|token, _| {
                     Ok(if token == crate::PAGE_NUMBER {
                         number
@@ -948,11 +1007,12 @@ impl Renderer {
                     .to_owned())
                 })?;
                 // A shorter number can pull a taller run up a line, so a page can outgrow the measure.
-                if self.lay_out_furniture(&commands, &mut layout)? > item.height {
+                let height = self.lay_out_furniture(&commands, &mut layout)?;
+                if footer.is_some() && height > item.height {
                     return Err(RenderError::PageOverflow);
                 }
                 self.mark_used(&layout);
-                let y = if *footer {
+                let y = if footer == Some(true) {
                     page.margin.bottom + item.height
                 } else {
                     page.height - page.margin.top
@@ -968,13 +1028,13 @@ impl Renderer {
                     &mut self.alphas[index],
                     &mut PaintState::default(),
                 )
-                .paint(
+                .paint_flow(
                     &layout,
-                    0..layout.lines.len(),
                     Point {
                         x: page.margin.left,
                         y,
                     },
+                    page,
                 );
                 if self.metadata.tagged {
                     content.end_marked_content();
@@ -1026,6 +1086,22 @@ impl Renderer {
             self.alphas,
             self.metadata,
         ))
+    }
+}
+
+/// Where a layer's buffer paints: from the block's origin, or from the page area's top left.
+pub(crate) fn layer_origin(layer: &Layer, origin: Point, page: Page) -> Point {
+    let base = if layer.page {
+        Point {
+            x: page.margin.left,
+            y: page.height - page.margin.top,
+        }
+    } else {
+        origin
+    };
+    Point {
+        x: base.x + layer.offset.x,
+        y: base.y - layer.offset.y,
     }
 }
 

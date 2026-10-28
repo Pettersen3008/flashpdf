@@ -28,6 +28,8 @@ export type MarginEdges =
 	| `${Margin} ${Margin}`
 	| `${Margin} ${Margin} ${Margin}`
 	| `${Margin} ${Margin} ${Margin} ${Margin}`;
+/** A `top`, `right`, `bottom`, or `left`: a percent is of the containing block. */
+export type Inset = "auto" | SignedLength | `${number}%` | `-${number}%`;
 export type Alignment =
 	| "normal"
 	| "stretch"
@@ -161,6 +163,18 @@ export type Style = {
 	listStyleType?: ListStyleType;
 	listStylePosition?: "outside" | "inside";
 	color?: string;
+	/** `absolute` and `fixed` need `top` or `bottom`, and `left` or `right`; `fixed` repeats on every page. */
+	position?: "static" | "relative" | "absolute" | "fixed";
+	top?: Inset;
+	right?: Inset;
+	bottom?: Inset;
+	left?: Inset;
+	/** One to four insets, top first, as `margin` takes them. */
+	inset?: number | string;
+	insetInline?: Inset | `${Inset} ${Inset}`;
+	insetBlock?: Inset | `${Inset} ${Inset}`;
+	/** Orders positioned boxes; below zero paints under the normal flow. */
+	zIndex?: "auto" | number;
 	breakBefore?: "auto" | "page" | "avoid" | "avoid-page";
 	breakAfter?: "auto" | "page" | "avoid" | "avoid-page";
 	breakInside?: "auto" | "avoid" | "avoid-page";

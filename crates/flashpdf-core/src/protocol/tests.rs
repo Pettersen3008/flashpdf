@@ -496,7 +496,7 @@ fn given_spacing_beyond_a_page_side_or_an_invalid_furniture_flag_when_decoding_t
         assert_eq!(push_error(&bytes), error);
     }
     let mut invalid_header = header(VERSION, 120.0, 60.0, 10.0);
-    invalid_header.extend(record(13, &[2]));
+    invalid_header.extend(record(13, &[3]));
     assert_eq!(push_error(&invalid_header), "invalid furniture page");
 }
 

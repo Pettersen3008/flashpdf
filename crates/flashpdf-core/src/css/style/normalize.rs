@@ -4,13 +4,15 @@ use super::decoration::decoration;
 use super::length::{edge_values, flex_shorthand};
 use super::list::parse_list_style;
 use super::{
-    Style, BORDER_COLORS, BORDER_SIDES, BORDER_STYLES, BORDER_WIDTHS, MARGINS, PADDINGS, RADII,
+    Style, BORDER_COLORS, BORDER_SIDES, BORDER_STYLES, BORDER_WIDTHS, INSETS, MARGINS, PADDINGS,
+    RADII,
 };
 use crate::css::Message;
 
 const COLOR: Prop = prop!("color");
 const MARGIN: Prop = prop!("margin");
 const PADDING: Prop = prop!("padding");
+const INSET: Prop = prop!("inset");
 const BORDER: Prop = prop!("border");
 const BORDER_RADIUS: Prop = prop!("borderRadius");
 const FLEX: Prop = prop!("flex");
@@ -20,7 +22,9 @@ const LIST_STYLE: Prop = prop!("listStyle");
 /// Each logical shorthand with its start and end sides, for horizontal left-to-right text:
 /// inline runs from left to right, block from top to bottom. `gap` sets the row gap, then
 /// the column gap, the same way.
-const LOGICAL: [(Prop, [Prop; 2]); 5] = [
+const LOGICAL: [(Prop, [Prop; 2]); 7] = [
+    (prop!("insetInline"), [INSETS[3], INSETS[1]]),
+    (prop!("insetBlock"), [INSETS[0], INSETS[2]]),
     (prop!("gap"), [prop!("rowGap"), prop!("columnGap")]),
     (prop!("marginInline"), [MARGINS[3], MARGINS[1]]),
     (prop!("marginBlock"), [MARGINS[0], MARGINS[2]]),
@@ -76,6 +80,7 @@ fn longhands(key: &Key) -> Vec<Key> {
     let props: Vec<Prop> = match *key {
         Key::Prop(MARGIN) => MARGINS.into(),
         Key::Prop(PADDING) => PADDINGS.into(),
+        Key::Prop(INSET) => INSETS.into(),
         Key::Prop(BORDER) => (0..4)
             .flat_map(|side| {
                 [
@@ -187,9 +192,13 @@ pub(super) fn normalize(value: &Cascaded, parent: &Style) -> Result<Style, Messa
             result.set_key(key.clone(), item);
             continue;
         };
-        if prop == MARGIN || prop == PADDING {
+        if prop == MARGIN || prop == PADDING || prop == INSET {
             let values = edge_values(&item, prop.name())?;
-            let sides = if prop == MARGIN { MARGINS } else { PADDINGS };
+            let sides = match prop {
+                MARGIN => MARGINS,
+                PADDING => PADDINGS,
+                _ => INSETS,
+            };
             for (side, value) in sides.into_iter().zip(values) {
                 result.set(side, value);
             }

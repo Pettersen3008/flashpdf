@@ -88,6 +88,8 @@ pub enum Record {
     Repeat {
         footer: bool,
         first: bool,
+        /// A `position: fixed` box, which paints on every page and reserves no height.
+        fixed: bool,
     },
     Paragraph {
         runs: Vec<Run>,
@@ -207,7 +209,7 @@ impl Record {
                     b.u8(item.align);
                 }
             }
-            Self::Repeat { first, .. } => b.u8(u8::from(*first)),
+            Self::Repeat { first, fixed, .. } => b.u8(if *fixed { 2 } else { u8::from(*first) }),
             Self::Paragraph {
                 runs,
                 align,
@@ -443,13 +445,29 @@ fn box_start(b: &mut Bytes, value: &Box) {
         None => b.u8(0),
     }
     let size = value.size;
-    b.u8(size.map_or(0, |size| u8::from(size.border_box) | size.auto_margin << 1));
+    let position = size.and_then(|size| size.position);
+    b.u8(size.map_or(0, |size| {
+        u8::from(size.border_box) | size.auto_margin << 1 | u8::from(position.is_some()) << 5
+    }));
     b.size(size.and_then(|size| size.width));
     b.size(size.and_then(|size| size.min_width));
     b.size(size.and_then(|size| size.max_width));
     b.height(size.and_then(|size| size.height));
     b.height(size.and_then(|size| size.min_height));
     b.height(size.and_then(|size| size.max_height));
+    if let Some(position) = position {
+        b.u8(position.kind);
+        match position.z {
+            Some(z) => {
+                b.u8(1);
+                b.0.extend_from_slice(&z.to_le_bytes());
+            }
+            None => b.u8(0),
+        }
+        for side in position.inset {
+            b.size(side);
+        }
+    }
 }
 
 pub struct Writer<S> {
@@ -465,6 +483,10 @@ pub struct Writer<S> {
     /// Box and stack starts waiting for content, so a held margin lands outside them.
     starts: Vec<Record>,
     payload: Vec<u8>,
+    /// Records of the `position: fixed` box being written.
+    fixed: Option<Vec<Record>>,
+    /// Records of every finished `position: fixed` box, which `end` writes.
+    deferred: Vec<Record>,
 }
 
 impl<S: Sink> Writer<S> {
@@ -478,10 +500,16 @@ impl<S: Sink> Writer<S> {
             held: 0.0,
             starts: Vec::new(),
             payload: Vec::new(),
+            fixed: None,
+            deferred: Vec::new(),
         }
     }
 
     fn record(&mut self, record: Record) -> Result<(), Error> {
+        if let Some(fixed) = &mut self.fixed {
+            fixed.push(record);
+            return Ok(());
+        }
         self.payload.clear();
         record.encode(&mut self.payload);
         if self.payload.len() > MAX_RECORD {
@@ -679,7 +707,11 @@ impl<S: Sink> Writer<S> {
 
     /// The engine takes the next top-level block, this stack, as the header or footer.
     pub fn repeat_start(&mut self, footer: bool, first: bool, option: &str) -> Result<(), Error> {
-        self.record(Record::Repeat { footer, first })?;
+        self.record(Record::Repeat {
+            footer,
+            first,
+            fixed: false,
+        })?;
         self.stack_start(0.0, false)?;
         self.repeating = Some(option.into());
         Ok(())
@@ -690,7 +722,43 @@ impl<S: Sink> Writer<S> {
         self.stack_end(false)
     }
 
+    /// Sets aside the held margin and box starts, so an out-of-flow box neither collapses
+    /// margins nor ends a collapse, and `attach` restores them after it.
+    pub fn detach(&mut self) -> (f64, Vec<Record>) {
+        (
+            std::mem::take(&mut self.held),
+            std::mem::take(&mut self.starts),
+        )
+    }
+
+    pub fn attach(&mut self, (held, starts): (f64, Vec<Record>)) {
+        self.held = held;
+        self.starts = starts;
+    }
+
+    /// A `position: fixed` box's records wait until the body ends, then follow it as a block
+    /// the engine paints on every page.
+    pub fn fixed_start(&mut self) -> Result<(), Error> {
+        self.fixed = Some(self.fixed.take().unwrap_or_default());
+        self.record(Record::Repeat {
+            footer: false,
+            first: false,
+            fixed: true,
+        })?;
+        self.stack_start(0.0, false)
+    }
+
+    pub fn fixed_end(&mut self) -> Result<(), Error> {
+        self.stack_end(false)?;
+        self.held = 0.0;
+        self.deferred.extend(self.fixed.take().unwrap_or_default());
+        Ok(())
+    }
+
     pub fn end(&mut self) -> Result<(), Error> {
+        for record in std::mem::take(&mut self.deferred) {
+            self.record(record)?;
+        }
         self.record(Record::End)
     }
 

@@ -7,9 +7,10 @@ use pdf_writer::{Content, Name, Str, TextStr};
 
 use crate::font::font_name;
 use crate::geometry::Point;
-use crate::layout::{Actual, Gap, LayoutBuffer, Lift, PositionedBox, Segment, MARKER_SHAPE};
+use crate::layout::{Actual, Gap, Layer, LayoutBuffer, Lift, PositionedBox, Segment, MARKER_SHAPE};
+use crate::renderer::layer_origin;
 use crate::vector::{alpha_name, dash, op};
-use crate::{BoxStyle, FontId, LineStyle, Pt, Radii, Rgb, TextAlign, OPAQUE};
+use crate::{BoxStyle, FontId, LineStyle, Page, Pt, Radii, Rgb, TextAlign, OPAQUE};
 
 type Corners = [[f32; 2]; 4];
 
@@ -103,6 +104,21 @@ impl<'a> PdfPainter<'a> {
         self.paint_images(layout, lines.clone(), origin, &ids);
         self.paint_text(layout, lines, origin, &ids);
         self.set_alpha(OPAQUE);
+    }
+
+    /// The whole buffer at `origin`, then its positioned layers over it.
+    pub(crate) fn paint_flow(&mut self, layout: &LayoutBuffer, origin: Point, page: Page) {
+        self.paint(layout, 0..layout.lines.len(), origin);
+        let mut layers: Vec<&Layer> = layout.layers.iter().collect();
+        layers.sort_by_key(|layer| layer.z);
+        for layer in layers {
+            self.paint_layer(layer, origin, page);
+        }
+    }
+
+    /// One layer of the block at `origin`, with the layers inside it.
+    pub(crate) fn paint_layer(&mut self, layer: &Layer, origin: Point, page: Page) {
+        self.paint_flow(&layer.buffer, layer_origin(layer, origin, page), page);
     }
 
     /// Backgrounds and borders, as one artifact when tagged.

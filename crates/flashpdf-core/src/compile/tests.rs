@@ -1604,3 +1604,105 @@ fn given_dir_and_direction_when_compiling_then_paragraphs_carry_the_base_directi
     assert_eq!(align(vec![auto]), 4 | 2 << 3);
     assert!(rejects(vec![node("div", "direction: up", vec![text("a")])]).contains("direction"));
 }
+
+#[test]
+fn given_position_sticky_or_an_absolute_box_with_an_auto_axis_when_compiling_then_rejects_with_the_reason(
+) {
+    assert!(rejects(vec![node("div", "position: sticky", vec![])])
+        .contains("position: sticky is not supported"),);
+    assert!(
+        rejects(vec![node("div", "position: absolute; top: 0", vec![])])
+            .contains("needs top or bottom, and left or right"),
+    );
+    assert!(rejects(vec![node(
+        "div",
+        "display: flex",
+        vec![node("div", "position: absolute; inset: 0", vec![])]
+    )])
+    .contains("cannot be a flex item"));
+}
+
+#[test]
+fn given_inset_and_z_index_when_compiling_then_the_box_carries_each_side_and_the_layer() {
+    let records = records(vec![node(
+        "div",
+        "position: absolute; inset: 4pt -10% auto 1em; bottom: 2pt; z-index: -3",
+        vec![],
+    )]);
+    let Some(Record::BoxStart(value)) = records.first() else {
+        panic!("{records:?}")
+    };
+    let position = value.size.and_then(|size| size.position).unwrap();
+    let length = |kind, value| Some(Dimension { kind, value });
+    assert_eq!(position.kind, 2);
+    assert_eq!(
+        position.inset,
+        [
+            length(1, 4.0),
+            length(2, -10.0),
+            length(1, 2.0),
+            length(1, 12.0)
+        ]
+    );
+    assert_eq!(position.z, Some(-3));
+}
+
+#[test]
+fn given_an_absolute_box_between_margins_when_compiling_then_the_margins_collapse_past_it() {
+    let records = records(vec![
+        node("p", "margin-bottom: 10pt", vec![text("a")]),
+        node(
+            "div",
+            "position: absolute; top: 0; left: 0",
+            vec![text("b")],
+        ),
+        node("p", "margin-top: 8pt", vec![text("c")]),
+    ]);
+    let spacers: Vec<f64> = records
+        .iter()
+        .filter_map(|record| match record {
+            Record::Spacer(height) => Some(*height),
+            _ => None,
+        })
+        .collect();
+    // The first `p` keeps its 1em top margin; 10pt and 8pt collapse to 10pt past the box.
+    assert_eq!(spacers, [12.0, 10.0]);
+}
+
+#[test]
+fn given_a_fixed_box_in_the_body_when_compiling_then_its_records_follow_the_body_as_a_fixed_block()
+{
+    let styler = Styler::new(&[], 523.0).unwrap();
+    let mut compiler = Compiler::new(styler, helvetica(), Collect::default());
+    compiler
+        .body(
+            &[
+                node("div", "", vec![text("a")]),
+                node(
+                    "div",
+                    "position: fixed; bottom: 0; right: 0",
+                    vec![text("b")],
+                ),
+                node("div", "", vec![text("c")]),
+            ],
+            false,
+        )
+        .unwrap();
+    compiler.end().unwrap();
+    let records = compiler.writer.sink.records;
+    assert_eq!(
+        names(&records),
+        [
+            "paragraph",
+            "paragraph",
+            "repeat",
+            "stackStart",
+            "boxStart",
+            "paragraph",
+            "boxEnd",
+            "stackEnd",
+            "end"
+        ]
+    );
+    assert!(matches!(records[2], Record::Repeat { fixed: true, .. }));
+}

@@ -15,9 +15,10 @@ use std::rc::Rc;
 
 use crate::css::style::{
     box_size, box_style, color, counter, decoration, decoration_color, dimension, flex_basis, font,
-    kerning, line_height, list_style_position, list_style_type, opacity, point, radius_of, spacing,
-    style as normalize, transform, vertical_align, white_space, Box, Dimension, Font, FontSlots,
-    LineHeight, Rgb, Slant, Style, Transform, WhiteSpace, HELVETICA, MARGINS, OBLIQUE, SHAPES,
+    kerning, line_height, list_style_position, list_style_type, opacity, point, position,
+    radius_of, spacing, style as normalize, transform, vertical_align, white_space, Box, Dimension,
+    Font, FontSlots, LineHeight, Rgb, Size, Slant, Style, Transform, WhiteSpace, HELVETICA,
+    MARGINS, OBLIQUE, SHAPES,
 };
 use crate::css::{
     js_space, list_key, Cascaded, ElemInput, Inline, Key, Prop, Resolver, Tree, Value,
@@ -585,14 +586,33 @@ fn row_only(s: &Style, in_row: bool) -> Result<()> {
     Ok(())
 }
 
-/// Sizes or an auto margin make a layout node; `box-sizing` alone changes nothing.
+/// Sizes, an auto margin, or a position make a layout node; `box-sizing` alone changes nothing.
 fn sized(s: &Style) -> bool {
     SIZES.iter().any(|prop| s.get(*prop).is_some())
         || MARGINS.iter().any(|prop| is(s, *prop, "auto"))
+        || s.get(p!("position")).is_some()
+}
+
+/// Whether `position` takes the element out of flow: `absolute` or `fixed`.
+fn out_of_flow(s: &Style) -> bool {
+    is(s, p!("position"), "absolute") || is(s, p!("position"), "fixed")
+}
+
+/// Rejects `position` where the element has no box of its own to place.
+fn static_only(s: &Style, tag: &str) -> Result<()> {
+    match get(s, p!("position")) {
+        Some(value) => Err(Error::new(format!(
+            "position: {value} applies to blocks, text elements, and images, not <{tag}>"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Rejects the sizes and auto margins an image or a table part cannot honour.
 fn sizeless(s: &Style, tag: &str, keep: &[&str]) -> Result<()> {
+    if tag != "img" && tag != "svg" {
+        static_only(s, tag)?;
+    }
     for prop in SIZES.iter().chain(&[p!("boxSizing")]) {
         if s.get(*prop).is_some() && !keep.contains(&prop.name()) {
             return Err(Error::new(format!(
@@ -1147,6 +1167,8 @@ pub struct Compiler<S> {
     /// Set only while compiling the document body.
     nav: Option<Navigation>,
     page_tokens: bool,
+    /// Set while compiling a `position: fixed` box.
+    fixed: bool,
 }
 
 impl<S: Sink> Compiler<S> {
@@ -1157,6 +1179,7 @@ impl<S: Sink> Compiler<S> {
             writer: Writer::new(sink),
             nav: None,
             page_tokens: false,
+            fixed: false,
         }
     }
 
@@ -1224,7 +1247,12 @@ impl<S: Sink> Compiler<S> {
     }
 
     fn compile_element(&mut self, el: &Styled, context: &Ctx, depth: usize) -> Result<()> {
-        self.element(el, context, depth).map_err(|error| {
+        let result = if out_of_flow(&el.style) {
+            self.out_of_flow(el, context, depth)
+        } else {
+            self.element(el, context, depth)
+        };
+        result.map_err(|error| {
             if error.located {
                 return error;
             }
@@ -1232,6 +1260,58 @@ impl<S: Sink> Compiler<S> {
             let error = engine_error(&error.message).map_or(error, Error::new);
             error.locate(&el.at)
         })
+    }
+
+    /// An absolute or fixed box leaves the margins around it to collapse as if it were absent.
+    /// A fixed one compiles into a block of its own that the engine paints on every page.
+    fn out_of_flow(&mut self, el: &Styled, context: &Ctx, depth: usize) -> Result<()> {
+        let fixed = is(&el.style, p!("position"), "fixed") && !self.fixed;
+        if fixed && (self.nav.is_none() || self.page_tokens) {
+            return Err(Error::new(
+                "position: fixed applies in the document body, not in a header or footer",
+            ));
+        }
+        for prop in [p!("breakBefore"), p!("breakAfter")] {
+            if is(&el.style, prop, "page") {
+                return Err(Error::new(format!(
+                    "{} does not apply to an absolute or fixed box, which is out of flow",
+                    prop.name()
+                )));
+            }
+        }
+        let saved = self.writer.detach();
+        let inner = Ctx {
+            in_row: false,
+            item: false,
+            in_column: false,
+            cell: None,
+            ..context.clone()
+        };
+        let result = if fixed {
+            self.fixed = true;
+            self.page_tokens = true;
+            let result = self
+                .writer
+                .fixed_start()
+                .and_then(|()| {
+                    self.element(
+                        el,
+                        &Ctx {
+                            height: None,
+                            ..inner
+                        },
+                        0,
+                    )
+                })
+                .and_then(|()| self.writer.fixed_end());
+            self.fixed = false;
+            self.page_tokens = false;
+            result
+        } else {
+            self.element(el, &inner, depth)
+        };
+        self.writer.attach(saved);
+        result
     }
 
     /// Runs of an inline node; None for a layout node (box, page break, or its own alignment).
@@ -1449,6 +1529,16 @@ impl<S: Sink> Compiler<S> {
         let own = get(s, p!("opacity")).map_or(Ok(1.0), opacity)?;
         let paint = box_style(s, size, context.opacity * own)?;
         let sizes = box_size(s, context.height, !context.in_row || context.item)?;
+        let sizes = match position(s, size)? {
+            Some(position) => {
+                Self::check_position(&position, sizes.map_or(0, |sizes| sizes.auto_margin))?;
+                Some(Size {
+                    position: Some(position),
+                    ..sizes.unwrap_or_default()
+                })
+            }
+            None => sizes,
+        };
         Ok(match sizes {
             Some(sizes) => Some(Box {
                 size: Some(sizes),
@@ -1456,6 +1546,31 @@ impl<S: Sink> Compiler<S> {
             }),
             None => paint,
         })
+    }
+
+    /// The engine places an absolute box from its containing block's edges only, and a relative
+    /// one by lengths or by percents of the containing block's width.
+    fn check_position(position: &crate::css::style::Position, auto_margin: u8) -> Result<()> {
+        let [top, right, bottom, left] = position.inset;
+        if position.kind == 1 {
+            if [top, bottom].iter().flatten().any(|inset| inset.kind == 2) {
+                return Err(Error::new(
+                    "a percent top or bottom on a relative box needs a containing block height; use a length",
+                ));
+            }
+            return Ok(());
+        }
+        if top.is_none() && bottom.is_none() || left.is_none() && right.is_none() {
+            return Err(Error::new(
+                "an absolute or fixed box needs top or bottom, and left or right: the engine places it from its containing block, not from where it would sit in flow",
+            ));
+        }
+        if auto_margin != 0 {
+            return Err(Error::new(
+                "auto margins on an absolute or fixed box are not supported; position it with top, right, bottom, and left",
+            ));
+        }
+        Ok(())
     }
 
     /// Block flow: consecutive inline children form one paragraph; layout nodes stand alone.
@@ -1531,6 +1646,11 @@ impl<S: Sink> Compiler<S> {
             }
             _ => 0,
         };
+        if self.fixed && (target.is_some() || level > 0) {
+            return Err(Error::new(
+                "a link target or bookmark inside position: fixed would repeat on every page; move it outside the fixed box",
+            ));
+        }
         let title = match (&node.el.bookmark, level) {
             (_, 0) => String::new(),
             (Bookmark::Title(title), _) => title.clone(),
@@ -1655,7 +1775,25 @@ impl<S: Sink> Compiler<S> {
             "a" | "span" | "b" | "strong" | "em" | "i" | "cite" | "small" | "sub" | "sup" | "u"
             | "ins" | "s" | "del" | "mark" | "code" | "kbd" | "samp" | "pre" | "p" | "h1"
             | "h2" | "h3" | "h4" | "h5" | "h6" => self.text_block(node, s, context, depth),
-            "img" | "svg" => self.picture(node, s, context, depth),
+            "img" | "svg" => match position(s, context.size)? {
+                // A picture has no box of its own to position, so an empty one around it moves.
+                Some(position) => {
+                    Self::check_position(&position, 0)?;
+                    let size = Size {
+                        position: Some(position),
+                        ..Size::default()
+                    };
+                    let wrapper = Box {
+                        size: Some(size),
+                        ..EMPTY
+                    };
+                    let flows = collapses(context) && !out_of_flow(s);
+                    self.boxed(Some(wrapper), flows, false, |this| {
+                        this.picture(node, s, context, depth)
+                    })
+                }
+                None => self.picture(node, s, context, depth),
+            },
             "br" => {
                 let item = line_break(node, context)?;
                 self.paragraph(vec![item], context)
@@ -1700,7 +1838,8 @@ impl<S: Sink> Compiler<S> {
         let avoid = is(s, p!("breakInside"), "avoid");
         // A CSS flex item is one element, so one without a box of its own gets an empty one.
         let value = paint.or(context.item.then_some(EMPTY));
-        self.boxed(value, collapses(context), avoid, |this| {
+        let flows = collapses(context) && !out_of_flow(s);
+        self.boxed(value, flows, avoid, |this| {
             let flex = is(s, p!("display"), "flex");
             let row = flex && get(s, p!("flexDirection")).is_none_or(|value| value.is("row"));
             let inner = Ctx {
@@ -1724,6 +1863,15 @@ impl<S: Sink> Compiler<S> {
                 .iter()
                 .filter(|child| !matches!(child, StyledNode::Text(text) if blank(text)))
                 .collect();
+            if let Some(StyledNode::Element(el)) = items
+                .iter()
+                .find(|item| flex && matches!(item, StyledNode::Element(el) if out_of_flow(&el.style)))
+            {
+                return Err(Error::new(
+                    "an absolute or fixed box cannot be a flex item; wrap it in a block",
+                )
+                .locate(&el.at));
+            }
             if flex && !items.is_empty() && css_flex(s, &items, !row)? {
                 this.flexbox(s, &items, &next, paint.as_ref(), depth)?;
             } else if row && !items.is_empty() {
@@ -1892,7 +2040,8 @@ impl<S: Sink> Compiler<S> {
         let own = Self::layout_box(s, next.size, context)?;
         let avoid = is(s, p!("breakInside"), "avoid");
         let value = own.or((context.item && runs.is_none()).then_some(EMPTY));
-        self.boxed(value, collapses(context), avoid, |this| {
+        let flows = collapses(context) && !out_of_flow(s);
+        self.boxed(value, flows, avoid, |this| {
             if avoid {
                 this.writer.stack_start(0.0, false)?;
             }

@@ -7,6 +7,8 @@ pub(crate) struct Document<'a> {
     pub(crate) blocks: Vec<Block<'a>>,
 }
 
+// Nearly every block is an element, so boxing it would add an allocation per block and save nothing.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Block<'a> {
     Element(Element<'a>),
     PageBreak,
