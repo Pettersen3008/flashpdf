@@ -398,15 +398,38 @@ pub fn stylesheet(source: &str) -> Result<(), Message> {
                     .cloned()
                     .collect(),
             );
-            let checked = style(&known, &Style::default()).and_then(|resolved| {
-                box_style(&resolved, 12.0, 1.0)?;
-                resolved.get(prop!("color")).map(color).transpose()
-            });
-            checked.map_err(|message| format!("{message}{}", rule.at))?;
+            check(&known).map_err(|message| format!("{message}{}", rule.at))?;
         }
     }
     css_page(&sheet.pages)?;
     Ok(())
+}
+
+fn check(declarations: &Cascaded) -> Result<(), Message> {
+    let resolved = style(declarations, &Style::default())?;
+    box_style(&resolved, 12.0, 1.0)?;
+    resolved.get(prop!("color")).map(color).transpose()?;
+    Ok(())
+}
+
+/// `@supports`: whether one declaration renders. A custom property always does, and a value
+/// with `var()` never, since nothing resolves it here.
+fn renders(name: &str, value: &str) -> bool {
+    let Ok(key) = property(name, "") else {
+        return false;
+    };
+    if matches!(key, Key::Custom(_)) {
+        return true;
+    }
+    if value.is_empty() || value.contains("var(") {
+        return false;
+    }
+    let Ok(value) = math::evaluate_math(key.name(), value, 12.0) else {
+        return false;
+    };
+    let mut declarations = Cascaded::default();
+    declarations.set(key, Value::Text(value.as_ref().into()));
+    check(&declarations).is_ok()
 }
 
 /// `/\b(?:var|calc|min|max|clamp|color-mix)\(/i`.

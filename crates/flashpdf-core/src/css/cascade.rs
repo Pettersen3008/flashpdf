@@ -197,11 +197,7 @@ impl Variables<'_> {
             Some(&Value::Number(number)) => return Ok(js_number(number)),
             None => match fallback {
                 Some(fallback) => fallback.to_string(),
-                None => {
-                    return Err(format!(
-                        "undefined CSS variable: {name} (rules inside an @layer block, such as Tailwind's :root theme, are skipped)"
-                    ).into())
-                }
+                None => return Err(format!("undefined CSS variable: {name}").into()),
             },
         };
         self.resolving.push(name.into());
@@ -300,9 +296,11 @@ impl Resolver {
         for source in sheets {
             parse(source, Some(width), &mut sheet)?;
         }
+        // Unlayered rules beat every layer, and a later layer an earlier one.
         sheet.rules.sort_by(|a, b| {
-            a.specificity
-                .cmp(&b.specificity)
+            a.layer
+                .cmp(&b.layer)
+                .then(a.specificity.cmp(&b.specificity))
                 .then(a.order.cmp(&b.order))
         });
         let mut resolver = Self {
@@ -433,7 +431,15 @@ impl Resolver {
             cascade(&mut result, &rule.declarations()?.normal);
         }
         cascade(&mut result, &own.normal);
-        for rule in &matched {
+        // Important declarations of an earlier layer beat a later layer's.
+        let mut important = matched;
+        if important
+            .windows(2)
+            .any(|pair| pair[0].layer != pair[1].layer)
+        {
+            important.sort_by(|a, b| b.layer.cmp(&a.layer));
+        }
+        for rule in &important {
             cascade(&mut result, &rule.declarations()?.important);
         }
         cascade(&mut result, &own.important);
