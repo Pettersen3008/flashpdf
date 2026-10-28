@@ -142,15 +142,6 @@ export function label(node: {
 	return `<${node.tag}${node.id ? `#${node.id}` : ""}${node.classes.map((c) => `.${c}`).join("")}>`;
 }
 
-const located = new WeakSet<Error>();
-/** Appends the element path once. */
-export function locate(error: unknown, where: string): unknown {
-	if (!(error instanceof Error) || located.has(error)) return error;
-	error.message += ` on ${where}`;
-	located.add(error);
-	return error;
-}
-
 function displayName(type: { displayName?: unknown; name?: unknown }): string {
 	if (typeof type.displayName === "string" && type.displayName) return type.displayName;
 	return typeof type.name === "string" && type.name ? type.name : "Anonymous";
