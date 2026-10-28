@@ -11,21 +11,27 @@ import { jsx } from "../../dist/jsx-runtime.js";
 const root = dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))));
 const work = mkdtempSync(join(tmpdir(), "flashpdf-tailwind-"));
 try {
-	const output = join(work, "tailwind.css");
-	execFileSync(
-		"pnpm",
-		[
-			"exec",
-			"tailwindcss",
-			"-i",
-			fileURLToPath(new URL("./tailwind.css", import.meta.url)),
-			"-o",
-			output,
-			"--minify",
-		],
-		{ cwd: root, stdio: "pipe" },
-	);
-	const css = stylesheet(readFileSync(output, "utf8"));
+	const build = (input) => {
+		const output = join(work, input);
+		execFileSync(
+			"pnpm",
+			[
+				"exec",
+				"tailwindcss",
+				"-i",
+				fileURLToPath(new URL(`./${input}`, import.meta.url)),
+				"-o",
+				output,
+				"--minify",
+			],
+			{ cwd: root, stdio: "pipe" },
+		);
+		return stylesheet(readFileSync(output, "utf8"));
+	};
+	const css = build("tailwind.css");
+	// Tailwind's own layered import without preflight: theme variables on :root, utilities in
+	// @layer, nested @media, @supports fallbacks, and @property defaults.
+	const layered = build("tailwind-layers.css");
 
 	const h = (tag, className, children) => jsx(tag, { className, children });
 	const row = (name, amount) =>
@@ -62,6 +68,7 @@ try {
 	const pdf = await render(invoice, { stylesheets: [css] });
 	assert.equal(new TextDecoder().decode(pdf.subarray(0, 5)), "%PDF-");
 	assert.deepEqual(pdf, await render(invoice, { stylesheets: [css] }));
+	assert.deepEqual(pdf, await render(invoice, { stylesheets: [layered] }));
 	// Without the stylesheet the same tree draws no borders, fills, or spacing, so the bytes differ.
 	assert.notDeepEqual(pdf, await render(invoice));
 } finally {

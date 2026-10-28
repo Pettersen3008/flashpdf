@@ -195,6 +195,103 @@ fn functional(source: &str) -> Result<Option<Rgb>, Message> {
     Ok((!rgb.iter().any(|channel| channel.is_nan())).then(|| rgb.map(|channel| channel as u8)))
 }
 
+/// sRGB bytes to OKLab; see https://bottosson.github.io/posts/oklab/.
+fn to_oklab(rgb: Rgb) -> [f64; 3] {
+    let [r, g, b] = rgb.map(|channel| {
+        let value = f64::from(channel) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            libm::pow((value + 0.055) / 1.055, 2.4)
+        }
+    });
+    let l = libm::cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    let m = libm::cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    let s = libm::cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    [
+        0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+        1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+    ]
+}
+
+/// `color-mix(in srgb | oklab, <color> [<percentage>], <color> [<percentage>])` of opaque
+/// colours, or `transparent` at 0%. A mix that keeps any transparency rejects, as alpha does.
+fn mix(source: &str) -> Result<Option<Rgb>, Message> {
+    let Some(inner) = source["color-mix(".len()..].strip_suffix(')') else {
+        return Ok(None);
+    };
+    let mut depth = 0usize;
+    let parts: Vec<&str> = inner
+        .split(|c: char| {
+            depth = match c {
+                '(' => depth + 1,
+                ')' => depth.saturating_sub(1),
+                _ => depth,
+            };
+            c == ',' && depth == 0
+        })
+        .map(js_trim)
+        .collect();
+    let [space, first, second] = parts.as_slice() else {
+        return Ok(None);
+    };
+    let oklab = match *space {
+        "in srgb" => false,
+        "in oklab" => true,
+        _ => return Err(format!("unsupported color-mix space: {space}; use srgb or oklab").into()),
+    };
+    // A colour and an optional percentage, either first.
+    let part = |text: &str| -> Result<(Option<Rgb>, Option<f64>), Message> {
+        let (head, tail) = match text.rfind(|c: char| js_space(c)) {
+            Some(at) if text.ends_with('%') && !text[at..].contains(')') => {
+                (&text[..at], Some(&text[at + 1..]))
+            }
+            _ => match text.split_once(|c: char| js_space(c)) {
+                Some((amount, rest)) if amount.ends_with('%') => (rest, Some(amount)),
+                _ => (text, None),
+            },
+        };
+        let amount = tail.map(|amount| fraction(amount, 1.0));
+        if amount.is_some_and(|amount| !(0.0..=1.0).contains(&amount)) {
+            return Err(format!("invalid color-mix percentage: {text}").into());
+        }
+        let head = js_trim(head);
+        let rgb = (head != "transparent")
+            .then(|| color(&Value::Text(head.into())))
+            .transpose()?;
+        Ok((rgb, amount))
+    };
+    let ((one, p1), (two, p2)) = (part(first)?, part(second)?);
+    let (p1, p2) = match (p1, p2) {
+        (None, None) => (0.5, 0.5),
+        (Some(p1), None) => (p1, 1.0 - p1),
+        (None, Some(p2)) => (1.0 - p2, p2),
+        (Some(p1), Some(p2)) => (p1, p2),
+    };
+    let total = p1 + p2;
+    if total <= 0.0 {
+        return Err(format!("invalid color-mix percentages: {source}").into());
+    }
+    // Percentages summing under 100% scale the alpha down too.
+    let alpha = |rgb: Option<Rgb>| f64::from(u8::from(rgb.is_some()));
+    opaque((p1 * alpha(one) + p2 * alpha(two)) / total * total.min(1.0))?;
+    let (weight, one, two) = match (one, two) {
+        (Some(one), Some(two)) => (p2 / total, one, two),
+        (Some(one), None) => (0.0, one, one),
+        (None, Some(two)) => (1.0, two, two),
+        (None, None) => unreachable!(),
+    };
+    let blend = |a: f64, b: f64| a + (b - a) * weight;
+    let rgb = if oklab {
+        let (a, b) = (to_oklab(one), to_oklab(two));
+        self::oklab(blend(a[0], b[0]), blend(a[1], b[1]), blend(a[2], b[2]))
+    } else {
+        [0, 1, 2].map(|i| byte(blend(f64::from(one[i]), f64::from(two[i])) / 255.0))
+    };
+    Ok(Some(rgb.map(|channel| channel as u8)))
+}
+
 pub fn color(value: &Value) -> Result<Rgb, Message> {
     let Value::Text(text) = value else {
         return Err(format!("invalid color: {value}").into());
@@ -207,6 +304,7 @@ pub fn color(value: &Value) -> Result<Rgb, Message> {
         }
         Err(_) => match hex(&source)? {
             Some(rgb) => Some(rgb),
+            None if source.starts_with("color-mix(") => mix(&source)?,
             None => functional(&source)?,
         },
     };

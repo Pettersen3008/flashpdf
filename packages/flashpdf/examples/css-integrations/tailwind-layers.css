@@ -1,0 +1,4 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source inline("p-4 px-4 py-2 m-2 mt-4 md:p-8 border border-b border-gray-200 bg-gray-100 text-gray-600 text-sm text-lg text-right text-center font-semibold font-bold leading-6 underline line-through flex flex-col flex-1 gap-4 w-1/2 w-32 w-[120px] first:pt-0 last:pb-0 odd:bg-gray-100 even:bg-white space-y-4 divide-y divide-gray-200 hover:bg-gray-200 print:p-0");

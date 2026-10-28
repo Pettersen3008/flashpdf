@@ -147,6 +147,42 @@ fn given_oklch_and_oklab_colours_when_resolving_them_then_converts_to_clipped_sr
 }
 
 #[test]
+fn given_color_mix_when_resolving_then_mixes_opaque_colours_and_rejects_any_transparency() {
+    assert_eq!(
+        color(&t("color-mix(in srgb, red, blue)")),
+        Ok([128, 0, 128])
+    );
+    assert_eq!(
+        color(&t("color-mix(in srgb, red 25%, blue)")),
+        Ok([64, 0, 191])
+    );
+    assert_eq!(
+        color(&t(
+            "color-mix(in oklab, oklch(63.7% 0.237 25.331) 100%, transparent)"
+        )),
+        Ok([0xfb, 0x2c, 0x36])
+    );
+    assert_eq!(
+        color(&t("color-mix(in oklab, black, white)")),
+        Ok([99, 99, 99])
+    );
+    for value in [
+        "color-mix(in oklab, #000 10%, transparent)",
+        "color-mix(in srgb, red 20%, blue 30%)",
+    ] {
+        assert_eq!(
+            color(&t(value)),
+            Err("a colour with alpha is not supported; use the opacity property".into()),
+            "{value}"
+        );
+    }
+    assert_eq!(
+        color(&t("color-mix(in lab, red, blue)")),
+        Err("unsupported color-mix space: in lab; use srgb or oklab".into())
+    );
+}
+
+#[test]
 fn given_a_border_shorthand_with_rgb_spaces_when_normalizing_then_keeps_the_function_as_one_token()
 {
     let s = ok(&[("border", t("1pt solid rgb(0, 0, 255)"))]);

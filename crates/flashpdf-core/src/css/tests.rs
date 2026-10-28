@@ -389,8 +389,8 @@ fn given_selectors_outside_the_subset_when_validating_then_rejects_each_with_rea
             &["attribute selectors", "in selector \"a[href]\" at 1:1"][..],
         ),
         (
-            ".a[data-x='a,b'], .c { color: red }",
-            &["attribute selectors", "in selector \".a[data-x='a,b']\""],
+            ".a[href='a,b'], .c { color: red }",
+            &["attribute selectors", "in selector \".a[href='a,b']\""],
         ),
         (
             ".a:has(.b) { color: red }",
@@ -414,10 +414,10 @@ fn given_selectors_outside_the_subset_when_validating_then_rejects_each_with_rea
         ),
         ("p:nth-child(n+) { color: red }", &[":nth-child(n+)"]),
         ("p:nth-of-type() { color: red }", &[":nth-of-type()"]),
-        (":is(.a, [x]) { color: red }", &["attribute selectors"]),
+        (":is(.a, [dir]) { color: red }", &["attribute selectors"]),
         (":not(.a:has(.b)) { color: red }", &[":has()"]),
         (
-            "@media print { .a[x] { color: red } }",
+            "@media print { .a[alt] { color: red } }",
             &["attribute selectors"],
         ),
         (
@@ -520,7 +520,8 @@ fn given_at_rules_and_selectors_that_match_nothing_when_validating_then_skips_th
 		.a:hover, a[href]::after, .a::before, input[type=text]:focus, :host { line-height: 1; content: "}" }
 		html, body button { -webkit-text-size-adjust: 100%; color: notacolor }
 		@layer utilities { .\[class\*\=\'size-\'\] { width: 1rem } }
-		.a { color: red }"#,
+		[hidden]:where(:not([hidden="until-found"])) { display: none !important }
+		.a { color: red; -webkit-text-decoration: inherit; -moz-osx-font-smoothing: grayscale }"#,
     )
     .unwrap();
 }
@@ -552,6 +553,7 @@ const TAILWIND: &str = r#"/*! tailwindcss v4.1.0 | MIT License | https://tailwin
 @layer base { *, ::before, ::after { box-sizing: border-box; border: 0 solid; } }
 .p-4 { padding: 1rem; }
 .p-5 { padding: calc(var(--spacing) * 5); }
+.p-6 { padding: var(--gap); }
 .md\:flex { display: flex; }
 @property --tw-font-weight { syntax: "*"; inherits: false; initial-value: 0; }
 @media (width >= 48rem) { .md\:flex { display: flex; } }
@@ -565,16 +567,41 @@ fn given_a_tailwind_sheet_when_resolving_then_uses_only_matching_rules_and_names
         text(&one(TAILWIND, "p-4").unwrap(), "padding"),
         Some("1rem")
     );
-    let message = one(TAILWIND, "p-5").unwrap_err();
+    assert_eq!(
+        text(&one(TAILWIND, "p-5").unwrap(), "padding"),
+        Some("15pt")
+    );
+    let message = one(TAILWIND, "p-6").unwrap_err();
     assert!(
-        message.starts_with("undefined CSS variable: --spacing (rules inside an @layer block"),
+        message.starts_with("undefined CSS variable: --gap"),
         "{message}"
     );
-    assert!(message.ends_with(" on <main.p-5>"), "{message}");
+    assert!(message.ends_with(" on <main.p-6>"), "{message}");
     assert_eq!(
         custom(&one(TAILWIND, "md:flex").unwrap(), "--tw-font-weight"),
         Some("0")
     );
+}
+
+#[test]
+fn given_layers_nesting_and_supports_when_resolving_then_orders_layers_and_applies_what_renders() {
+    let sheet = r#"@layer base, utilities;
+@layer utilities { .a { color: red; line-height: 2 !important } }
+@layer base { .a.a { color: blue; line-height: 3 !important } }
+.b { color: green; .x & { color: navy } &.c { color: teal } }
+.d { color: #000; @supports (color: color-mix(in lab, red, red)) { color: red } }
+.e { color: #000; @supports (color: rgb(1 2 3)) and (not (-webkit-hyphens: none)) { color: red } }
+.f { @media (width >= 48rem) { color: red } @media print { color: lime } }"#;
+    let a = one(sheet, "a").unwrap();
+    // A later layer beats specificity in an earlier one, and important reverses the order.
+    assert_eq!(text(&a, "color"), Some("red"));
+    assert_eq!(text(&a, "lineHeight"), Some("3"));
+    assert_eq!(text(&one(sheet, "b").unwrap(), "color"), Some("green"));
+    assert_eq!(text(&one(sheet, "b c").unwrap(), "color"), Some("teal"));
+    assert_eq!(text(&one(sheet, "d").unwrap(), "color"), Some("#000"));
+    assert_eq!(text(&one(sheet, "e").unwrap(), "color"), Some("red"));
+    assert_eq!(text(&one(sheet, "f").unwrap(), "color"), Some("lime"));
+    validate(sheet).unwrap();
 }
 
 #[test]
@@ -1078,7 +1105,7 @@ fn given_calc_and_color_mix_values_when_resolving_styles_then_computes_the_lengt
     assert_eq!(text(&cascaded, "margin"), Some("6pt"));
     assert!(boxed(&cascaded, 12.0)
         .unwrap_err()
-        .contains("unsupported color: color-mix(in oklab"));
+        .contains("a colour with alpha is not supported"));
 }
 
 #[test]

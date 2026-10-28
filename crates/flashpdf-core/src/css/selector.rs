@@ -5,6 +5,26 @@ use std::hash::{BuildHasherDefault, Hasher};
 use super::whitespace;
 
 /// Every element tag, in the order `tree.ts` lists them.
+/// The attributes an element can carry, as JSX props or HTML attributes.
+const CARRIED: [&str; 16] = [
+    "id",
+    "class",
+    "classname",
+    "style",
+    "dir",
+    "href",
+    "src",
+    "alt",
+    "colspan",
+    "rowspan",
+    "start",
+    "reversed",
+    "value",
+    "data-bookmark",
+    "tw",
+    "",
+];
+
 pub const TAGS: &[&str] = &[
     "main",
     "div",
@@ -620,7 +640,19 @@ impl Parser<'_> {
                 }
                 Some(b'[') => {
                     let end = bracket_end(self.bytes(), index).ok_or_else(|| parse.bad())?;
-                    parse.why(|| "attribute selectors (match a class or id instead)".into());
+                    let name = self.source[index + 1..end]
+                        .trim_start()
+                        .split(|c: char| "=~|^$*]".contains(c) || c.is_whitespace())
+                        .next()
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    // An attribute no element carries, such as Tailwind preflight's `[hidden]`,
+                    // never matches; one it may carry is not implemented.
+                    if CARRIED.contains(&name.as_str()) {
+                        parse.why(|| "attribute selectors (match a class or id instead)".into());
+                    } else {
+                        never = true;
+                    }
                     index = end + 1;
                 }
                 _ => break,

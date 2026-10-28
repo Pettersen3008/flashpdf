@@ -28,7 +28,14 @@ pub(super) fn declarations(source: &str, context: &str) -> Result<Declarations, 
         let Some(colon) = colon else {
             return Err(format!("invalid CSS declaration: {}{context}", item.trim()).into());
         };
-        let key = property(item[..colon].trim(), context)?;
+        let name = item[..colon].trim();
+        // A vendor-prefixed property targets one browser engine; the standard one beside it counts.
+        if ["-webkit-", "-moz-", "-ms-", "-o-"].iter().any(|prefix| {
+            name.len() > prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix)
+        }) {
+            continue;
+        }
+        let key = property(name, context)?;
         let value = item[colon + 1..].trim();
         let (target, value) = match important(value) {
             Some(value) => (&mut result.important, value),
@@ -355,8 +362,12 @@ pub struct Rule {
     /// Set for a rule in an `@media` query outside the subset: `declarations()` returns it as the
     /// error, so a render reports it where the rule matches.
     pub blocked: Option<Rc<str>>,
+    /// The cascade layer's rank in first-declaration order; `UNLAYERED` beats every layer.
+    pub layer: u16,
     body: Rc<Body>,
 }
+
+pub const UNLAYERED: u16 = u16::MAX;
 
 impl Rule {
     pub fn declarations(&self) -> Result<Rc<Declarations>, Message> {
@@ -381,6 +392,8 @@ pub struct Stylesheet {
     pub pages: Vec<PageDeclaration>,
     /// `@property` registrations in first-registration order.
     pub properties: Vec<(Rc<str>, Registration)>,
+    /// Cascade layer names, dotted when nested, in the order they first appear.
+    layers: Vec<Rc<str>>,
     /// Numbers the selector compounds across every sheet.
     compounds: u32,
 }
@@ -394,15 +407,94 @@ struct Context<'a> {
     width: Option<f64>,
 }
 
+/// Where a block's rules go: the `@media` reason that blocks them, and their cascade layer.
+#[derive(Clone, Default)]
+struct Scope {
+    blocked: Option<Rc<str>>,
+    layer: Option<Rc<str>>,
+}
+
 impl Context<'_> {
-    /// Parses the rules in `clean[start..stop]`. `@media` blocks recurse and `@property` registers;
-    /// every other at-rule (`@layer`, `@supports`, `@import`, ...) is skipped whole.
+    /// Layer `name` inside `scope`, dotted when nested, registered on first sight.
+    fn layer(&mut self, scope: &Scope, name: &str) -> Rc<str> {
+        let full: Rc<str> = match &scope.layer {
+            Some(outer) => format!("{outer}.{name}").into(),
+            None => name.into(),
+        };
+        if !self.sheet.layers.contains(&full) {
+            self.sheet.layers.push(full.clone());
+        }
+        full
+    }
+
+    fn rank(&self, scope: &Scope) -> u16 {
+        scope.layer.as_ref().map_or(UNLAYERED, |layer| {
+            self.sheet
+                .layers
+                .iter()
+                .position(|own| own == layer)
+                .unwrap() as u16
+        })
+    }
+
+    /// The scope inside the block at-rule at `index`, or None when its block does not apply.
+    /// `@media` and `@supports` evaluate, `@layer` names a layer, and every other at-rule
+    /// (`@import`, `@font-face`, ...) is skipped whole.
+    fn at_rule(
+        &mut self,
+        index: usize,
+        open: usize,
+        depth: usize,
+        scope: &Scope,
+    ) -> Result<Option<Scope>, Message> {
+        let clean = self.clean.clone();
+        let length = clean.as_bytes()[index + 1..]
+            .iter()
+            .take(31)
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_' || **b == b'-')
+            .count();
+        let name = clean[index + 1..index + 1 + length].to_ascii_lowercase();
+        let prelude = clean[index + 1 + length..open].trim();
+        if !matches!(name.as_str(), "media" | "supports" | "layer") {
+            return Ok(None);
+        }
+        if depth >= MAX_MEDIA_DEPTH {
+            return Err(format!(
+                "@{name} nests deeper than {MAX_MEDIA_DEPTH} levels at {}",
+                position(&clean, index)
+            )
+            .into());
+        }
+        let mut inner = scope.clone();
+        match name.as_str() {
+            "media" => match media(prelude, self.width) {
+                Ok(false) => return Ok(None),
+                Ok(true) => {}
+                Err(message) => {
+                    inner.blocked = inner.blocked.or_else(|| {
+                        Some(format!("unsupported media query \"{prelude}\" ({message})").into())
+                    })
+                }
+            },
+            "supports" if !supports(prelude) => return Ok(None),
+            "supports" => {}
+            // An anonymous layer is its own, unnamed in the source.
+            _ if prelude.is_empty() => {
+                let anonymous = format!("\0{}", self.sheet.layers.len());
+                inner.layer = Some(self.layer(scope, &anonymous));
+            }
+            _ => inner.layer = Some(self.layer(scope, prelude)),
+        }
+        Ok(Some(inner))
+    }
+
+    /// Parses the rules in `clean[start..stop]`; `@page` and `@property` register.
     fn block(
         &mut self,
         start: usize,
         stop: usize,
         depth: usize,
-        blocked: Option<Rc<str>>,
+        scope: &Scope,
     ) -> Result<(), Message> {
         let clean = self.clean.clone();
         let bytes = clean.as_bytes();
@@ -428,30 +520,6 @@ impl Context<'_> {
                 };
                 if brace && name == "page" {
                     page_rule(&clean, index, &mut self.sheet.pages)?;
-                } else if brace && name == "media" {
-                    if depth >= MAX_MEDIA_DEPTH {
-                        return Err(format!(
-                            "@media nests deeper than {MAX_MEDIA_DEPTH} levels at {}",
-                            position(&clean, index)
-                        )
-                        .into());
-                    }
-                    let prelude = clean[index + 6..open].trim();
-                    let (applies, reason) = match media(prelude, self.width) {
-                        Ok(applies) => (applies, blocked.clone()),
-                        Err(message) => (
-                            true,
-                            blocked.clone().or_else(|| {
-                                Some(
-                                    format!("unsupported media query \"{prelude}\" ({message})")
-                                        .into(),
-                                )
-                            }),
-                        ),
-                    };
-                    if applies {
-                        self.block(open + 1, end - 1, depth + 1, reason)?;
-                    }
                 } else if brace && name == "property" && depth == 0 {
                     let custom = clean[index + 9..open].trim();
                     let registration = register(custom, &clean[open + 1..end - 1])?;
@@ -459,6 +527,15 @@ impl Context<'_> {
                     match properties.iter_mut().find(|(own, _)| &**own == custom) {
                         Some(entry) => entry.1 = registration,
                         None => properties.push((custom.into(), registration)),
+                    }
+                } else if !brace && name == "layer" {
+                    // `@layer theme, base;` fixes the order before any block.
+                    for layer in clean[index + 6..open].split(',') {
+                        self.layer(scope, layer.trim());
+                    }
+                } else if brace {
+                    if let Some(inner) = self.at_rule(index, open, depth, scope)? {
+                        self.block(open + 1, end - 1, depth + 1, &inner)?;
                     }
                 }
                 index = end;
@@ -472,32 +549,185 @@ impl Context<'_> {
                 _ => return Err(invalid(&clean, index)),
             };
             let end = closing(&clean, open)?;
-            let body = Rc::new(Body {
-                source: clean.clone(),
-                range: open + 1..end - 1,
-                parsed: OnceCell::new(),
-            });
-            let at = format!(" at {}", position(&clean, index));
-            let selectors = split(&clean[index..open]);
+            self.style(&clean[index..open], index, open, end, depth, scope)?;
             index = end;
-            for raw in selectors {
-                let text = raw.trim();
-                let at = format!(" in selector {}{at}", json_string(text));
-                let Some(compiled) = selector(text, &at, &mut self.sheet.compounds)? else {
-                    continue;
-                };
-                self.sheet.rules.push(Rule {
-                    specificity: specificity(&compiled),
-                    selector: compiled,
-                    order: self.sheet.rules.len(),
-                    at,
-                    blocked: blocked.clone(),
-                    body: body.clone(),
-                });
+        }
+        Ok(())
+    }
+
+    /// A style rule: `selectors` at `index`, its body `open..end`. Nested rules (`&:hover { }`,
+    /// `.b { }`) and nested `@media`, `@supports`, and `@layer` blocks come after the rule's own
+    /// declarations, as CSS nesting orders them.
+    fn style(
+        &mut self,
+        selectors: &str,
+        index: usize,
+        open: usize,
+        end: usize,
+        depth: usize,
+        scope: &Scope,
+    ) -> Result<(), Message> {
+        let clean = self.clean.clone();
+        if !clean[open + 1..end - 1].contains('{') {
+            return self.rules(selectors, index, clean.clone(), open + 1..end - 1, scope);
+        }
+        let mut own = String::new();
+        let mut nested = Vec::new();
+        let mut at = open + 1;
+        while at < end - 1 {
+            match prelude_end(&clean, at).ok().filter(|stop| *stop < end - 1) {
+                Some(brace) if clean.as_bytes()[brace] == b'{' => {
+                    let close = closing(&clean, brace)?;
+                    let start = at + clean[at..brace].len() - clean[at..brace].trim_start().len();
+                    nested.push((start, brace, close));
+                    at = close;
+                }
+                Some(semicolon) => {
+                    own.push_str(&clean[at..=semicolon]);
+                    at = semicolon + 1;
+                }
+                None => {
+                    own.push_str(&clean[at..end - 1]);
+                    at = end - 1;
+                }
+            }
+        }
+        let length = own.len();
+        self.rules(selectors, index, own.into(), 0..length, scope)?;
+        for (start, brace, close) in nested {
+            if clean.as_bytes()[start] == b'@' {
+                if let Some(inner) = self.at_rule(start, brace, depth, scope)? {
+                    self.style(selectors, start, brace, close, depth + 1, &inner)?;
+                }
+            } else if depth >= MAX_MEDIA_DEPTH {
+                return Err(format!(
+                    "nested rules go deeper than {MAX_MEDIA_DEPTH} levels at {}",
+                    position(&clean, start)
+                )
+                .into());
+            } else {
+                let inner = nest(selectors, clean[start..brace].trim());
+                self.style(&inner, start, brace, close, depth + 1, scope)?;
             }
         }
         Ok(())
     }
+
+    /// Adds a rule per selector in `selectors`, all sharing the body `source[range]`.
+    fn rules(
+        &mut self,
+        selectors: &str,
+        index: usize,
+        source: Rc<str>,
+        range: Range<usize>,
+        scope: &Scope,
+    ) -> Result<(), Message> {
+        let body = Rc::new(Body {
+            source,
+            range,
+            parsed: OnceCell::new(),
+        });
+        let at = format!(" at {}", position(&self.clean, index));
+        let layer = self.rank(scope);
+        for raw in split(selectors) {
+            let text = raw.trim();
+            let at = format!(" in selector {}{at}", json_string(text));
+            let Some(compiled) = selector(text, &at, &mut self.sheet.compounds)? else {
+                continue;
+            };
+            self.sheet.rules.push(Rule {
+                specificity: specificity(&compiled),
+                selector: compiled,
+                order: self.sheet.rules.len(),
+                at,
+                blocked: scope.blocked.clone(),
+                layer,
+                body: body.clone(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// A nested selector list resolved against its parent's: `&` stands for the parent, and a
+/// selector without one is its descendant.
+fn nest(parent: &str, nested: &str) -> String {
+    let parent = parent.trim();
+    let single = split(parent).len() == 1;
+    let is = format!(":is({parent})");
+    split(nested)
+        .iter()
+        .map(|item| {
+            let item = item.trim();
+            match item.strip_prefix('&') {
+                // A leading `&` before a compound may stand for one complex parent as written.
+                Some(rest) if single => format!("{parent}{}", rest.replace('&', &is)),
+                _ if item.contains('&') => item.replace('&', &is),
+                _ => format!("{is} {item}"),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Whether FlashPDF renders what an `@supports` condition tests: a declaration holds when its
+/// property is supported and its value renders, `not`, `and`, `or`, and parentheses combine
+/// them, and any other test, such as `selector()`, does not hold.
+fn supports(condition: &str) -> bool {
+    let condition = condition.trim();
+    if let Some(rest) = condition.strip_prefix("not") {
+        if rest.starts_with(|c: char| c.is_whitespace() || c == '(') {
+            return !supports(rest);
+        }
+    }
+    let bytes = condition.as_bytes();
+    let mut depth = 0usize;
+    let mut terms = Vec::new();
+    let mut operator = None;
+    let mut start = 0;
+    for (index, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 && whitespace(byte) => {
+                let after = condition[index + 1..].trim_start();
+                for word in ["and", "or"] {
+                    let joined = after.strip_prefix(word).is_some_and(|rest| {
+                        rest.starts_with(|c: char| c.is_whitespace() || c == '(')
+                    });
+                    if joined && index >= start {
+                        if operator.is_some_and(|own| own != word) {
+                            return false;
+                        }
+                        operator = Some(word);
+                        terms.push(&condition[start..index]);
+                        start = condition.len() - after.len() + word.len();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(operator) = operator {
+        terms.push(&condition[start..]);
+        return match operator {
+            "and" => terms.iter().all(|term| supports(term)),
+            _ => terms.iter().any(|term| supports(term)),
+        };
+    }
+    let Some(inner) = condition
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .map(str::trim)
+    else {
+        return false;
+    };
+    if inner.starts_with('(') || inner.starts_with("not") {
+        return supports(inner);
+    }
+    inner
+        .split_once(':')
+        .is_some_and(|(name, value)| super::renders(name.trim(), value.trim()))
 }
 
 /// Adds the rules, `@page` declarations, and `@property` registrations of `source` to `sheet`.
@@ -510,5 +740,5 @@ pub fn parse(source: &str, width: Option<f64>, sheet: &mut Stylesheet) -> Result
         sheet,
         width,
     }
-    .block(0, length, 0, None)
+    .block(0, length, 0, &Scope::default())
 }
